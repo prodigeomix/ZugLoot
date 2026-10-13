@@ -112,9 +112,10 @@ function M.OnSystemRoll(player, roll, minR, maxR)
     end
   end
   table.insert(sess.rolls, { name = player, roll = roll, type = rtype })
-  -- Flag already-won rollers so the live list shows them as excluded.
+  -- Already-won flag is SR-only info (MS/OS/TMOG stay contestable); the
+  -- live list shows it, the resolver enforces it per kind.
   local excluded = false
-  if Z.DB.sheet and Z.SRData.HasWon then
+  if rtype == "SR" and Z.DB.sheet and Z.SRData.HasWon then
     excluded = Z.SRData.HasWon(Z.DB.sheet, sess.itemID, player)
   end
   if Z.RaiderLootUI then

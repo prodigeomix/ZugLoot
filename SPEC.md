@@ -117,8 +117,10 @@ Sheet = {
 - Miss-rolls = SR-range rolls from players WITHOUT the reserve (fake SR
   claims): recorded but ignored. MS/OS rolls are valid kind contests from
   anyone (the sheet only holds SR rollers); TMOG never misses.
-- Eligible = not already in `won[itemID]` (one-win-per-item; excluded rolls
-  stay visible with `[already won]`, never silently dropped).
+- Eligible = not already in `won[itemID]` — for the SR contest ONLY
+  (one-win-per-item; excluded SR rolls stay visible with `[already won]`,
+  never silently dropped). MS/OS/TMOG stay contestable after a win (e.g.
+  rolling transmog after winning mainspec).
 - Open rolls (`arf`, off-sheet): every kind is a fair contest — highest
   effective wins regardless of type letter (TMOG still excluded from the
   overall slot).

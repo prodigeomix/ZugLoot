@@ -269,6 +269,24 @@ ok(drain(), "drain simtmog award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "tmog roller awarded")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "no spillover mark")
 
+-- 7b2. Won flag is SR-only at feed: already-won TMOG roll is NOT
+-- flagged excluded (regression: the TMOG button vanished for won players).
+resetHarness()
+SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Me")
+table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Me", rolls = 1 })
+ML.BeginSession(1001, "item:1001", "SR", false)
+ML.OnSystemRoll("Aaa", 58, 1, 100)
+ML.OnSystemRoll("Me", 15, 1, 98)
+local meRoll = nil
+for i = 1, #ML.session.rolls do
+  if ML.session.rolls[i].name == "Me" then meRoll = ML.session.rolls[i] end
+end
+eq(meRoll.type, "TMOG", "won player TMOG kind kept")
+local resW4 = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
+  ML.session.rolls, { cap = 100, requireSR = true })
+eq(resW4.perType.TMOG.entry.name, "Me", "won player TMOG contestable")
+ML.Cancel()
+
 -- 7b. Roll kind: 1-100 is SR only with the reserve, else MS (regression:
 -- the roll window + award showed SR for every 1-100 roll). 1-99 is OS,
 -- 1-98 is TMOG, regardless of the sheet.

@@ -58,6 +58,8 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
   end
   local wonMap = {}
   if sheetLike and sheetLike.won and sheetLike.won[itemID] then wonMap = sheetLike.won[itemID] end
+  -- One-win-per-item blocks the SR contest ONLY: an already-won player
+  -- may still roll MS/OS/TMOG (e.g. rolling transmog after winning mainspec).
   -- Normalize a raw roll type to the four known kinds.
   local function normType(t)
     if t == "SR" or t == "MS" or t == "OS" or t == "TMOG" then return t end
@@ -73,7 +75,10 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
     if base >= 1 and base <= cap then
       local info = srMap[rv.name]
       local isSR = info ~= nil
-      local excluded = wonMap[rv.name] == true
+      -- One-win-per-item blocks SR only: already-won flags the SR-kind
+      -- entry as excluded; MS/OS/TMOG entries from the same player stay
+      -- fully contestable (e.g. transmog after a mainspec win).
+      local excluded = wonMap[rv.name] == true and rtype == "SR"
       -- Over-cap: above the TYPE range (e.g. 99 on a 1-98 TMOG roll).
       local over = base > typeCap
       -- Miss: only legacy/test input still carries an SR tag for someone
@@ -106,7 +111,8 @@ end
 
 -- Per-type contest: best eligible roll of each kind, ties kept per kind.
 -- TMOG crowns its own kind winner (directly awardable); it never takes
--- an overall `winner` slot.
+-- an overall `winner` slot. Already-won blocks SR only (excludedWon is
+-- set on SR-kind entries alone — MS/OS/TMOG stay contestable).
 -- Returns { SR={entry,tied={}}, MS=..., OS=..., TMOG=... } (empty kinds
 -- are empty tables).
 function M.TypeWinners(entries)

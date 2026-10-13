@@ -171,6 +171,31 @@ local resTie = R.ResolveItem(sTie, 80, {
 eq(#resTie.tied, 2, "sr tie needs reroll despite ms 99")
 eq(resTie.perType.SR.tied[1].name, "B", "tie recorded in kind")
 
+-- 8g. One-win blocks SR ONLY: already-won player still contests
+-- MS/OS/TMOG (e.g. transmog after a mainspec win).
+local sW = sheetWith(81, { { name = "A", rolls = 1 }, { name = "Me", rolls = 1 } })
+SRData.MarkWon(sW, 81, "Me")
+local resW = R.ResolveItem(sW, 81, {
+  { name = "A", roll = 58, type = "SR" },
+  { name = "Me", roll = 90, type = "SR" },
+  { name = "Me2", roll = 15, type = "TMOG" },
+}, { cap = 100, requireSR = true })
+eq(resW.winners[1].name, "A", "sr winner unaffected")
+eq(resW.perType.TMOG.entry.name, "Me2", "tmog contest stands")
+-- same player, won, rolls TMOG: still contestable.
+local resW2 = R.ResolveItem(sW, 81, {
+  { name = "A", roll = 58, type = "SR" },
+  { name = "Me", roll = 15, type = "TMOG" },
+}, { cap = 100, requireSR = true })
+eq(resW2.perType.TMOG.entry.name, "Me", "won player contests TMOG")
+eq(resW2.winners[1].name, "A", "overall still SR")
+-- ...but their SR roll stays excluded.
+local resW3 = R.ResolveItem(sW, 81, {
+  { name = "Me", roll = 99, type = "SR" },
+  { name = "A", roll = 10, type = "SR" },
+}, { cap = 100, requireSR = true })
+eq(resW3.winners[1].name, "A", "won SR roll excluded")
+
 -- 8. FakeRolls + full SR resolution path incl. fillers as missrolls.
 math.randomseed(1234)
 local rolls = R.FakeRolls(s, 17063, { cap = 100, fillers = 2 })
