@@ -41,14 +41,16 @@ eq(P.EntryIdByName("Test Boss", nil), nil, "no db nil")
 eq(P.NameOf(101, fakeDb), "Test Boss", "display name")
 eq(P.NameOf(999, fakeDb), "Unknown", "unknown entry fallback")
 
--- 2. Index: direct + refloot merged, noise floored, other mobs excluded.
+-- 2. Index: direct + refloot merged, ALL chances indexed (no noise floor
+-- in the index — the floor is a weight in PickDrops), other mobs excluded.
 local drops = P.DropsFor(101, fakeDb, true)
 local byId = {}
 for i = 1, #drops do byId[drops[i].item] = drops[i].chance end
 for id, want in pairs({ [5001] = 20, [5003] = 50, [5002] = 2 }) do
   eq(byId[id], want, "drop chance " .. id)
 end
-ok(byId[5004] == nil and byId[5005] == nil, "other mob + sub-floor excluded")
+eq(byId[5005], 0.1, "sub-floor chance indexed (floor lives in PickDrops)")
+ok(byId[5004] == nil, "other mob excluded")
 eq(drops[1].item, 5003, "sorted best first")
 ok(#P.DropsFor(999, fakeDb, true) == 0, "unknown entry empty")
 
@@ -56,53 +58,69 @@ ok(#P.DropsFor(999, fakeDb, true) == 0, "unknown entry empty")
 -- Quality stub: 5003/5001 epic, 5002 blue (filtered even on a hit).
 local function rigged(values)
   local i = 0
-  return function(lo, hi) i = i + 1 return values[((i - 1) % #values) + 1] end
+  return function(lo, hi)
+    i = i + 1
+    local v = values[((i - 1) % #values) + 1]
+    if v < lo then v = lo elseif v > hi then v = hi end
+    return v
+  end
 end
-local qualities = { [5003] = 4, [5001] = 4, [5002] = 3 }
+local qualities = { [5003] = 4, [5001] = 4, [5002] = 3, [5005] = 3 }
 local function qual(id) return qualities[id] end
--- distinct first: r=100 -> 5003; r=600 over the live total (200, 5003
--- picked) is unmapped -> only 5003 distinct. Double draw over {5003}:
--- r=10 hits -> dupe. Sorted: 5003,5003.
-local picks = P.PickDrops(drops, 4, rigged({ 100, 600, 10 }), qual)
-eq(#picks, 2, "distinct pick plus one double")
+-- Random distinct count + coin-gated double (NOT "fill to cap": that was
+-- the deterministic same-list bug for small epic pools).
+-- Pool after epic filter: {5003 w=500, 5001 w=200} (m=2).
+-- A: k=2 distinct, no double.
+local picks = P.PickDrops(drops, 4, rigged({ 2, 100, 200, 2 }), qual)
+eq(#picks, 2, "two distinct, no double")
 eq(picks[1], 5003, "sorted best first")
-eq(picks[2], 5003, "dupe adjacent")
--- full house: r=100 -> 5003; r=150 -> 5001; pool exhausted; double draw
--- r=10 over both -> 5003 dupes (5003's weight first).
-local full = P.PickDrops(drops, 4, rigged({ 100, 150, 10 }), qual)
+eq(picks[2], 5001, "second kind present")
+-- B: k=2 distinct + one double of the best item.
+local full = P.PickDrops(drops, 4, rigged({ 2, 100, 200, 1, 100 }), qual)
 eq(#full, 3, "two distinct plus one double")
 eq(full[1], 5003, "best first")
 eq(full[3], 5001, "second kind present")
--- count cap respected.
-local many = P.PickDrops(drops, 1, rigged({ 1 }), qual)
+-- C: count cap respected (k clamped to 1).
+local many = P.PickDrops(drops, 1, rigged({ 1, 100 }), qual)
 eq(#many, 1, "count cap")
--- blues never picked even when their roll hits.
+eq(many[1], 5003, "best single")
+-- D: blues never picked even when their roll hits.
 local blueOnly = P.PickDrops(
   { { item = 5002, chance = 100 } }, 4, rigged({ 1 }), qual)
 eq(#blueOnly, 0, "non-epic filtered")
--- duplicates: single-item pool -> one distinct + one double, never more.
+-- E: single-item pool -> at most one distinct + one double (MAX_DUPES).
 local dupes = P.PickDrops(
-  { { item = 5001, chance = 100 } }, 4,
-  rigged({ 1, 1, 1, 1, 1, 1, 1, 1 }), qual)
+  { { item = 5001, chance = 100 } }, 4, rigged({ 1, 1, 1, 1 }), qual)
 eq(#dupes, 2, "up to two of the same item")
--- double-draw miss: distinct only, run still varies.
-local nodup = P.PickDrops(
-  { { item = 5001, chance = 50 }, { item = 5003, chance = 50 } }, 4,
-  rigged({ 100, 100, 99999 }), qual)
-eq(#nodup, 2, "distinct pair, double missed")
+local solo = P.PickDrops(
+  { { item = 5001, chance = 100 } }, 4, rigged({ 1, 1, 2 }), qual)
+eq(#solo, 1, "coin gate can skip the double")
+-- F: a 3-epic pool now VARIES: k=2 vs k=3 pick different subsets.
+local pool3 = { { item = 7001, chance = 50 }, { item = 7002, chance = 40 }, { item = 7003, chance = 30 } }
+local function epicQual() return 4 end
+local sub2 = P.PickDrops(pool3, 4, rigged({ 2, 100, 600, 2 }), epicQual)
+eq(#sub2, 2, "3-epic pool rolls 2 this run")
+local sub3 = P.PickDrops(pool3, 4, rigged({ 3, 100, 500, 200, 2 }), epicQual)
+eq(#sub3, 3, "3-epic pool rolls 3 next run")
+-- G: chance-0 real boss drops are pickable (floor weight), and unknown
+-- (nil) quality is treated as loot-worthy (Turtle custom epics).
+local zeroDrops = { { item = 7001, chance = 0 } }
+local z1 = P.PickDrops(zeroDrops, 4, rigged({ 1, 1, 2 }), epicQual)
+eq(#z1, 1, "chance-0 epic pickable")
+eq(z1[1], 7001, "chance-0 epic included")
+local z2 = P.PickDrops(zeroDrops, 4, rigged({ 1, 1, 2 }), function() return nil end)
+eq(#z2, 1, "nil quality kept")
 
 -- 4. BossDrops end-to-end (fake db injected, no pfDB global needed).
-local boss = P.BossDrops("Test Boss", 4, rigged({ 100, 150, 10 }), fakeDb, qual)
+local boss = P.BossDrops("Test Boss", 4, rigged({ 2, 100, 200, 1, 100 }), fakeDb, qual)
 eq(#boss, 3, "boss epic drops picked (incl. double)")
 eq(boss[1], 5003, "best drop first")
--- fresh loot every call: r=600 -> 5001 (600<=700); r=150 over {5003} ->
--- 5003; double draw r=900 over {5001,5003} total 700: unmapped, no double.
--- Result 5003,5001: varies run to run.
-local boss2 = P.BossDrops("Test Boss", 4,
-  rigged({ 600, 150, 900 }), fakeDb, qual)
-eq(#boss2, 2, "re-rolled loot differs")
+-- fresh loot every call: same pool, but the coin gate skips the double this
+-- run -> 2 items, not 3 (count varies run to run).
+local boss2 = P.BossDrops("Test Boss", 4, rigged({ 2, 600, 500, 2 }), fakeDb, qual)
+eq(#boss2, 2, "re-rolled loot count differs")
 eq(boss2[1], 5003, "sorted best first")
-eq(boss2[2], 5001, "second kind, no forced double")
+eq(boss2[2], 5001, "second kind, no double")
 ok(#P.BossDrops("Nobody", 4, rigged({ 1 }), fakeDb) == 0, "unknown boss empty")
 
 -- 5. No pfQuest at all: everything degrades to nil/empty (simboss falls
@@ -112,5 +130,48 @@ P.index = nil
 ok(P.EntryIdByName("Test Boss") == nil, "no pfDB: no entry")
 ok(#P.DropsFor(101) == 0, "no pfDB: no drops")
 ok(#P.BossDrops("Test Boss") == 0, "no pfDB: no boss drops")
+
+-- 6. Static fallback: random re-rolled subsets so every simboss run varies
+-- even without pfQuest (a fixed table would repeat the same list).
+local static3 = { 17063, 17076, 17102 }
+local function srigged(values)
+  local i = 0
+  return function(lo, hi)
+    i = i + 1
+    local v = values[((i - 1) % #values) + 1]
+    -- clamp like a real rng would (contract: honor [lo,hi])
+    if v < lo then v = lo elseif v > hi then v = hi end
+    return v
+  end
+end
+-- j=1,1 shuffle of {1,2,3}: i=3: swap(3,1) -> {3,2,1}; i=2: swap(2,1)
+-- -> {2,3,1}; order list[2],list[3],list[1] = 17076,17102,17063.
+-- k=3 -> all three shuffled; coin=2 -> no double.
+local s1 = P.PickStaticDrops(static3, 4, srigged({ 1, 1, 3, 2, 99 }))
+eq(#s1, 3, "full shuffled set")
+eq(s1[1], 17076, "shuffled first")
+eq(s1[2], 17102, "shuffled second")
+eq(s1[3], 17063, "shuffled third")
+-- j=3,3: identity; k=2 -> partial pair; coin=2 -> no double.
+local s2 = P.PickStaticDrops(static3, 4, srigged({ 3, 3, 2, 2 }))
+eq(#s2, 2, "random partial count")
+eq(s2[1], 17063, "identity order kept")
+eq(s2[2], 17076, "identity order kept")
+-- j=3,3: identity; k=2 -> pair; coin=1 -> one double of pick 2.
+local s3p = P.PickStaticDrops(static3, 4, srigged({ 3, 3, 2, 1, 2 }))
+eq(#s3p, 3, "pair plus one double")
+eq(s3p[1], 17063, "pair first")
+eq(s3p[2], 17076, "pair second")
+eq(s3p[3], 17076, "doubled item")
+-- count cap + edges: singleton never dupes past room, empties are safe.
+local s4 = P.PickStaticDrops({ 17063 }, 4, srigged({ 1, 1, 1 }))
+ok(#s4 >= 1 and #s4 <= 2, "singleton run")
+eq(s4[1], 17063, "singleton item kept")
+eq(#P.PickStaticDrops({}, 4, srigged({ 1 })), 0, "empty static empty")
+eq(#P.PickStaticDrops(static3, 0, srigged({ 1 })), 0, "zero count empty")
+-- input untouched: the static table must not be reordered in place.
+eq(static3[1], 17063, "input table untouched")
+-- two calls with live rng over 3+ epics vary (statistical, not rigged).
+-- skipped: covered deterministically above; live variance is by design.
 
 return T

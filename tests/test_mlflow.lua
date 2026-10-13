@@ -93,7 +93,9 @@ local function rigged(values)
   local i = 0
   return function(lo, hi)
     i = i + 1
-    return values[((i - 1) % #values) + 1]
+    local v = values[((i - 1) % #values) + 1]
+    if v < lo then v = lo elseif v > hi then v = hi end
+    return v
   end
 end
 local realRandom = math.random
@@ -202,7 +204,7 @@ ZugLoot.SRSecurity.AmML = function() return true end
 -- 3. SimBoss queues only; ML initiates each from the shared loot window.
 resetHarness()
 CreateFrame = nil -- headless: data only, no frame
-math.random = rigged({ 90, 80, 99, 50 })
+math.random = rigged({ 2, 2, 2, 90, 80, 99, 50 }) -- drop shuffle: identity, no double
 Sim.SimBoss("TestBoss")
 ok(ML.session == nil, "simboss queues without starting")
 eq(#ZugLoot.LootWindow.items, 2, "loot window lists the queue")

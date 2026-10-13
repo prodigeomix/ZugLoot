@@ -341,13 +341,21 @@ actual roll flow, not a separate code path:
   item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
 - `/zl simboss <boss>` — rolls the boss's OWN drops: with pfQuest loaded,
   the name resolves to its pfDB unit entry and the queue is filled with
-  weighted roulette draws over its real epic loot table (direct `U` +
-  refloot `R` entries, Rarescanner pattern, 0.4% noise floor). EPICS ONLY
-  (client `GetItemInfo` quality check): distinct items first like a real
-  kill, then one extra draw may double a single item (double drops happen
+  weighted roulette draws over its real loot table (direct `U` +
+  refloot `R` entries). The index keeps EVERY drop — including the many
+  real boss drops listed in refloot tables with chance 0 (unknown), which
+  are floored to a small weight so they stay pickable but rarer than
+  measured chances (a 0.4% noise floor here would shrink e.g. Ragnaros
+  from 100+ drops to a handful). The final pool is epic+ (`GetItemInfo`
+  quality ≥ 4; unknown/uncached quality is kept, not dropped, so Turtle
+  custom epics survive): a RANDOM distinct count first (2–4 items, like a
+  real kill — not "fill to the cap", which would repeat the same set),
+  then one coin-flip draw may double a single item (double drops happen
   but never dominate). Nothing is guaranteed per run, so consecutive runs
-  vary. Re-rolled fresh every run (up to 4 drops). Without pfQuest (or for
-  an unknown name) it falls back to the static `BossData[boss]` table.
+  vary. Re-rolled fresh every run. Without pfQuest it falls
+  back to the static `BossData[boss]` table — but ALSO re-rolled fresh per
+  run (shuffled random-count subset of the table, sometimes a double), so
+  no two manual-test runs show the same list.
   Either way the drops land
   **same loot window** (title `Simulated loot: <boss>`, source `sim`) and
   stops: the ML — you — initiates every roll from the list (Roll button or

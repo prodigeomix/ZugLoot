@@ -484,6 +484,32 @@ function M.SimItem(argText)
   M.RequestRoll(entry.itemID)
 end
 
+-- Random re-rolled subset of a static boss table (BossData fallback).
+-- Self-contained in Sim.lua so the fallback NEVER depends on pfLoot
+-- having loaded: shuffled distinct items, random count, one possible
+-- double. Re-rolled every call, so consecutive runs vary.
+local function RollStaticDrops(list, count)
+  count = count or 4
+  local n = Z.Util.ArrayCount(list or {})
+  if n == 0 then return {} end
+  local idx = {}
+  for i = 1, n do idx[i] = i end
+  for i = n, 2, -1 do
+    local j = math.random(1, i)
+    idx[i], idx[j] = idx[j], idx[i]
+  end
+  local maxk = math.min(count, n)
+  local mink = math.min(2, maxk)
+  local k = math.random(mink, maxk)
+  if k < mink then k = mink elseif k > maxk then k = maxk end
+  local out = {}
+  for i = 1, k do table.insert(out, list[idx[i]]) end
+  if k < count and math.random(1, 2) == 1 then
+    table.insert(out, out[math.random(1, k)])
+  end
+  return out
+end
+
 function M.SimBoss(name)
   local sheet = M.RequireSheet()
   if not sheet then return end
@@ -493,7 +519,8 @@ function M.SimBoss(name)
   end
   name = Z.Util.Trim(name or "")
   -- Drop source, in order: live pfQuest loot table (random weighted picks
-  -- from the boss's own drops, Rarescanner pattern) -> static BossData.
+  -- from the boss's own drops, Rarescanner pattern) -> static BossData
+  -- (random re-rolled subset, so every run varies even without pfQuest).
   local table_ = nil
   local source = "BossData"
   if Z.pfLoot then
@@ -503,7 +530,15 @@ function M.SimBoss(name)
       source = "pfQuest (" .. Z.Util.ArrayCount(picks) .. " rolled drops)"
     end
   end
-  table_ = table_ or Z.BossData[name]
+  if not table_ then
+    local static = Z.BossData[name]
+    if static then
+      -- Always re-rolled fresh: the BossData table is a candidate pool,
+      -- not a fixed drop list (no pfQuest needed for variance).
+      table_ = RollStaticDrops(static)
+      source = "BossData (" .. Z.Util.ArrayCount(table_) .. " rolled drops)"
+    end
+  end
   if not table_ then
     local avail = {}
     for b in pairs(Z.BossData) do table.insert(avail, b) end
@@ -516,7 +551,12 @@ function M.SimBoss(name)
     local entry = Z.pfLoot.EntryIdByName(name)
     if entry then disp = Z.pfLoot.NameOf(entry) .. " [" .. name .. "]" end
   end
-  Z.Print("SIM boss " .. disp .. " drops (" .. source .. "), one item at a time (sheet players, one-win applies across drops):")
+  -- Show the actual rolled drops so the source and variance are visible.
+  local ids = {}
+  for i = 1, Z.Util.ArrayCount(table_) do table.insert(ids, tostring(table_[i])) end
+  local idTxt = table.concat(ids, ", ")
+  if idTxt == "" then idTxt = "(none rolled)" end
+  Z.Print("SIM boss " .. disp .. " drops (" .. source .. "): " .. idTxt)
   M.ResetFresh() -- fresh loot session: no done rows / queue / detail from a previous run
   for i = 1, Z.Util.ArrayCount(table_) do
     local itemID = table_[i]

@@ -82,7 +82,11 @@ local function rigged(values)
   local i = 0
   return function(lo, hi)
     i = i + 1
-    return values[((i - 1) % #values) + 1]
+    local v = values[((i - 1) % #values) + 1]
+    -- clamp like a real rng (contract: honor [lo,hi]) so the simboss
+    -- static-drop shuffle indexes stay valid.
+    if v < lo then v = lo elseif v > hi then v = hi end
+    return v
   end
 end
 
@@ -243,7 +247,7 @@ ok(simCards[#simCards].unsr, "stub card flagged")
 resetHarness()
 -- 1001: Aaa 90(+10=100) beats Bbb 80 -> Aaa wins, marked won.
 -- 1002: Aaa 99(excluded), Ccc 50(+50=100) -> Ccc wins.
-math.random = rigged({ 90, 80, 99, 50 })
+math.random = rigged({ 2, 2, 2, 90, 80, 99, 50 }) -- drop shuffle: identity, no double
 Sim.SimBoss("TestBoss")
 math.random = realRandom
 -- Queued, nothing rolling: ML must initiate.
@@ -414,7 +418,7 @@ StaticPopup_Show = nil
 -- queue, detail, menu, raider rolls or trailing timers from the first run.
 -- (Ragnaros regression: the second run showed stale done/rolling rows.)
 resetHarness()
-math.random = rigged({ 90, 80 })
+math.random = rigged({ 2, 2, 2, 90, 80, 50, 50 }) -- identity shuffle, no double
 Sim.SimBoss("TestBoss")
 Sim.RequestRoll(1001)
 ok(drain(), "drain fresh-run item 1")
@@ -435,7 +439,9 @@ ok(ZugLoot.Timer.Pending() >= 1, "stray timer present")
 -- Sheet history/won marks persist (raid-night state); session state resets.
 local histBefore = SRData.RollCount(ZugLoot.DB.sheet, 1001)
 ok(histBefore >= 1, "history recorded by first run")
+math.random = rigged({ 2, 2, 2, 1, 1, 1, 1 }) -- identity shuffle, no double
 Sim.SimBoss("TestBoss")
+math.random = realRandom
 eq(Sim.doneRows[1001], nil, "done rows forgotten")
 eq(#Sim.pending, 2, "queue rebuilt fresh (no leftovers)")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), histBefore, "history kept")
@@ -485,7 +491,7 @@ eq(doneRow and doneRow.status, "done", "awarded row marked done")
 -- (instead of finishing with zero rolls and no winner).
 resetHarness()
 ZugLoot.DB.sheet.items[1001].rollers = {}
-math.random = rigged({ 42, 43, 44 })
+math.random = rigged({ 2, 2, 2, 42, 43, 44, 1, 1 }) -- identity shuffle + 3 open rolls
 Sim.SimBoss("TestBoss")
 Sim.RequestRoll(1001)
 ok(drain(), "drain roller-less item")
