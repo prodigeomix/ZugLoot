@@ -8,6 +8,7 @@
 
 Constants.lua
 Util.lua
+Timer.lua
 Core.lua
 FileIO.lua
 SRData.lua

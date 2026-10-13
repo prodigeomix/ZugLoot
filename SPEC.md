@@ -236,24 +236,39 @@ Sheet = {
   on, ML resolves immediately from `ROLL_ANS` messages (no chat-roll wait), with a
   5s fallback to normal rolling if answers are missing.
 
-### 4.6 Simulation (`Sim.lua` + `BossData.lua`)
+### 4.6 Simulation (`Sim.lua` + `BossData.lua` + `Timer.lua`)
 
 In-game, no raid needed. **Requires the loaded sheet** — without one both
 commands refuse with a pointer to `/zl import`. Every roller is a player from
 the sheet; there are no fake Filler/Missroller names unless you pass N > 0.
 
+Sim **replays the real live pipeline** (`MasterLootUI` session + timers +
+routed chat + both windows), one item at a time — it is a rehearsal of the
+actual roll flow, not a separate code path:
+
 - `/zl sim <itemLink> [N]` — fake session for the item. On-sheet item: mode
   `SIM`, all its SR rollers roll (plus N optional MS fillers, flagged as
   miss-rolls). Off-sheet item: mode `SIM-OPEN`, every player on the sheet
-  rolls (plus N fillers). Prints each roll, effective values, winner/tie.
-- `/zl simboss <boss>` — walks the `BossData[boss]` loot table in order,
-  simulating each drop. Winners are won-marked immediately, so the one-win
-  rule chains across drops exactly like a real raid night.
+  rolls (plus N fillers). The session opens the sheet window (ML view) and
+  the raider roller window, announces in group chat, feeds each fake roll on
+  short timers so the roller list fills live, then finishes on the normal
+  roll timer. Ties auto re-roll the tied subset (up to 3 rounds).
+- `/zl simboss <boss>` — queues the `BossData[boss]` loot table and plays it
+  drop by drop: the next item starts only after the previous session closes.
+  Winners are won-marked immediately, so the one-win rule chains across drops
+  exactly like a real raid night. `/zl simstop` clears the queue.
+- Chat routing matches live rolls: raid → `RAID` + `RAID_WARNING`, party →
+  `PARTY` (warnings have no party channel, so plain party text), solo → local
+  chat frame. Sim sessions are silent on the addon channel (no
+  `ROLL_REQ` broadcast), so other clients' windows and auto-rolls never fire.
 - Every sim session is **written back into the sheet**: roll history
   (`sheet.rolls`, mode `SIM`/`SIM-OPEN`, same shape as live via
-  `Resolver.ToHistoryEntry`), won marks (skipped on ties — ties need a
-  re-roll, like live), and drop-log entries (source `sim`). Visible in the
-  Sheet tab right away. `/zl reset` clears sim history + won marks.
+  `Resolver.ToHistoryEntry`), won marks (skipped on ties), and drop-log
+  entries (source `sim`). Visible in the Sheet tab right away. `/zl reset`
+  clears sim history + won marks.
+- `RunSimSession()` remains as the synchronous core (instant resolve, no
+  timers/windows/chat) for tests. `Timer.lua` is the vanilla-safe scheduler
+  (hidden-frame `OnUpdate` driver; hand-pumped in tests).
 - Uses the **same** `Resolver` pure module as real sessions and as `tests/`, so
   sim output matches tested logic. Randomness via `math.random`, seeded by time.
 
@@ -318,8 +333,9 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl time N           roll window seconds       /zl autoclose on|off
 /zl auto on|off      auto-roll SR items (per char)
 /zl ver | /zl verlist version grid | text list
-/zl sim <link> [N]   simulate rolls for item
-/zl simboss <boss>   simulate boss drops (BossData)
+/zl sim <link> [N]   simulate rolls for item (live replay, timers+windows)
+/zl simboss <boss>   simulate boss drops one at a time (BossData)
+/zl simstop          stop a running sim (clears queue)
 /zl log | /zl logclear drop log
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)

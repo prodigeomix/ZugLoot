@@ -87,6 +87,12 @@ function Z.Init()
   SLASH_ZUGLOOT1 = "/zl"
   SLASH_ZUGLOOT2 = "/zugloot"
   SlashCmdList["ZUGLOOT"] = function(msg) Z.Slash(msg) end
+  -- Timer driver: advances ZugLoot.Timer on every frame (vanilla 1.12 has
+  -- no C_Timer). Guarded so Core loads even if Timer.lua is absent.
+  if Z.Timer then
+    local tf = CreateFrame("Frame", "ZugLootTimerFrame")
+    tf:SetScript("OnUpdate", function() Z.Timer.Update(arg1) end)
+  end
 end
 
 function Z.Slash(msg)
@@ -95,7 +101,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|log|logclear|reset|help")
+    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simstop|log|logclear|reset|help")
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
   elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
   elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
@@ -116,6 +122,7 @@ function Z.Slash(msg)
   elseif cmd == "verlist" then Z.VersionGrid.PrintList()
   elseif cmd == "sim" then Z.Sim.SimItem(rest)
   elseif cmd == "simboss" then Z.Sim.SimBoss(rest)
+  elseif cmd == "simstop" then Z.Sim.Stop()
   elseif cmd == "log" then Z.MainWindow.Toggle("rolls")
   elseif cmd == "logclear" then Z.DropLog.Clear()
   elseif cmd == "reset" then Z.SRImport.ResetWon()

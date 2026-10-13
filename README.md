@@ -25,8 +25,10 @@ No dependencies. Interface 11200.
   `[rolled xN]` badges, WON marks, and every roll session this raid one line
   per player.
 - ML: `/zl rf <itemlink>` starts an SR roll. `/zl sim <itemlink>` / `/zl simboss <boss>`
-  practice against the loaded sheet (sheet required) and write results back into
-  it — check the Sheet tab afterwards. The **Reset rolls** button at the top of
+  rehearse against the loaded sheet (sheet required): full live replay with timers,
+  both windows, and group-routed chat (raid→RAID, party→PARTY, solo→local) — boss
+  drops play one item at a time, results written back; `/zl simstop` stops the queue.
+  The **Reset rolls** button at the top of
   the window (confirmation window first) or `/zl reset` clears sessions + won marks.
 - Raider: frame pops on ML warning / ROLL_REQ / group-loot drops. `/zl auto on` to auto-roll SRs.
 - `/zl ver` shows the addon-version squares grid. `/zl help` lists commands.
@@ -55,4 +57,4 @@ lua tests/run_tests.lua
 
 ## Commands
 
-`/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|log|logclear|reset|help`
+`/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simstop|log|logclear|reset|help`

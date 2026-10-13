@@ -30,6 +30,7 @@ run("test_sim.lua")
 run("test_reset.lua")
 run("test_raids.lua")
 run("test_window_size.lua")
+run("test_timer.lua")
 run("test_settings_reset.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
@@ -48,7 +49,7 @@ else
 end
 
 -- 5.0-syntax sanity: all shipped lua files must parse (loadfile without running).
-local files = { "Constants.lua", "Util.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "SRView.lua",
+local files = { "Constants.lua", "Util.lua", "Timer.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "SRView.lua",
   "SRSecurity.lua", "SRImport.lua", "BossData.lua", "MainWindow.lua", "Sim.lua", "MasterLootUI.lua",
   "RaidArchive.lua", "Comm.lua", "Core.lua" }
 for _, f in ipairs(files) do

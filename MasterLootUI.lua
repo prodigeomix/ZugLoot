@@ -17,25 +17,39 @@ function M.RequireML()
   return true
 end
 
+-- Shared session start for live rolls and sim. silent=true skips the
+-- addon-message broadcast (sim must not pop other clients' roller windows
+-- or trigger their auto-rolls); the local raider window still shows.
+function M.BeginSession(itemID, itemLink, mode, silent)
+  sessionSeq = sessionSeq + 1
+  local itemCount = 1
+  if mode == "TWO" then itemCount = 2 end
+  M.session = { id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
+  local label = itemLink
+  if mode == "OPEN" then label = label .. " (open roll)"
+  elseif mode == "RAID" then label = label .. " (raid roll)"
+  elseif mode == "TWO" then label = label .. " (2 top win)" end
+  if Z.Comm and Z.Comm.WarnGroup then
+    Z.Comm.WarnGroup("ZugLoot rolling: " .. label .. " — /roll (" .. Z.DB.rollTime .. "s)")
+  end
+  if not silent and Z.Comm then
+    Z.Comm.SendRollReq(sessionSeq, itemLink, mode)
+  end
+  if Z.RaiderLootUI then
+    Z.RaiderLootUI.ShowItem(itemLink, Z.DB.rollTime)
+  end
+  Z.Print("Roll started (" .. mode .. ") session #" .. sessionSeq)
+  if not silent and Z.AutoRoll and Z.AutoRoll.AllGreenAndAuto() then
+    Z.Print("All SR rollers on auto — will auto-resolve on ROLL_ANS.")
+  end
+  return M.session
+end
+
 function M.StartRoll(linkText, mode)
   if not M.RequireML() then return end
   local itemID = Z.Util.ItemID(linkText)
   if not itemID then Z.Print("Usage: /zl rf <itemlink>") return end
-  sessionSeq = sessionSeq + 1
-  local itemCount = 1
-  if mode == "TWO" then itemCount = 2 end
-  M.session = { id = sessionSeq, itemID = itemID, itemLink = linkText, mode = mode, rolls = {}, t = 0, itemCount = itemCount }
-  local label = linkText
-  if mode == "OPEN" then label = label .. " (open roll)"
-  elseif mode == "RAID" then label = label .. " (raid roll)"
-  elseif mode == "TWO" then label = label .. " (2 top win)" end
-  SendChatMessage("ZugLoot rolling: " .. label .. " — /roll (" .. Z.DB.rollTime .. "s)", "RAID_WARNING")
-  Z.Comm.SendRollReq(sessionSeq, linkText, mode)
-  Z.RaiderLootUI.ShowItem(linkText, Z.DB.rollTime)
-  Z.Print("Roll started (" .. mode .. ") session #" .. sessionSeq)
-  if Z.AutoRoll.AllGreenAndAuto() then
-    Z.Print("All SR rollers on auto — will auto-resolve on ROLL_ANS.")
-  end
+  M.BeginSession(itemID, linkText, mode, false)
 end
 
 function M.OnRollAns(msg, sender)
@@ -66,7 +80,9 @@ function M.OnSystemRoll(player, roll, minR, maxR)
   if Z.DB.sheet and Z.SRData.HasWon then
     excluded = Z.SRData.HasWon(Z.DB.sheet, sess.itemID, player)
   end
-  Z.RaiderLootUI.OnRoll(player, roll, rtype, excluded)
+  if Z.RaiderLootUI then
+    Z.RaiderLootUI.OnRoll(player, roll, rtype, excluded)
+  end
 end
 
 function M.FinishEarly() M.Finish(true) end
@@ -74,14 +90,14 @@ function M.Cancel()
   if not M.session then Z.Print("No active session.") return end
   M.session = nil
   Z.Print("Roll cancelled.")
-  Z.RaiderLootUI.Hide()
+  if Z.RaiderLootUI then Z.RaiderLootUI.Hide() end
 end
 
 function M.Finish(manual)
   local sess = M.session
   if not sess then Z.Print("No active session.") return end
   local sheet = Z.DB.sheet
-  local openRoll = sess.mode == "OPEN" or sess.mode == "RAID"
+  local openRoll = sess.mode == "OPEN" or sess.mode == "RAID" or sess.mode == "SIM-OPEN"
   local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} }, sess.itemID, sess.rolls,
     { cap = Z.Caps.SR, requireSR = (not openRoll and sheet ~= nil), itemCount = sess.itemCount })
   M.AnnounceResult(sess, res)
@@ -130,11 +146,20 @@ function M.AnnounceResult(sess, res)
     end
     table.insert(parts, "excluded: " .. table.concat(xm, ", "))
   end
-  SendChatMessage("ZugLoot result [" .. sess.itemLink .. "]: " .. table.concat(parts, " | "), "RAID")
+  local resultText = "ZugLoot result [" .. sess.itemLink .. "]: " .. table.concat(parts, " | ")
+  if Z.Comm and Z.Comm.SayGroup then
+    Z.Comm.SayGroup(resultText)
+  else
+    Z.Print(resultText)
+  end
   if Z.Util.ArrayCount(res.winners) > 0 then
     local w = {}
     for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(w, res.winners[i].name .. " (" .. res.winners[i].effective .. ")") end
-    SendChatMessage("Winner: " .. table.concat(w, ", "), "RAID_WARNING")
+    if Z.Comm and Z.Comm.WarnGroup then
+      Z.Comm.WarnGroup("Winner: " .. table.concat(w, ", "))
+    else
+      Z.Print("Winner: " .. table.concat(w, ", "))
+    end
   end
   -- Persist the session into per-item roll history (survives the session).
   -- Same shape the sim writes (Resolver.ToHistoryEntry).
@@ -158,18 +183,25 @@ function M.AnnounceResult(sess, res)
 end
 
 function M.Award(itemID, itemLink, winnerEntry)
-  -- Confirmation popup (1.12 StaticPopup).
-  StaticPopupDialogs["ZUGLOOT_AWARD"] = StaticPopupDialogs["ZUGLOOT_AWARD"] or {
-    text = "Award %s to %s?",
-    button1 = "Award", button2 = "Cancel",
-    OnAccept = function() end, timeout = 0, whileDead = 1,
-  }
-  local dlg = StaticPopup_Show("ZUGLOOT_AWARD")
+  -- Confirmation popup (1.12 StaticPopup). Skipped outside the client.
+  if StaticPopupDialogs and StaticPopup_Show then
+    StaticPopupDialogs["ZUGLOOT_AWARD"] = StaticPopupDialogs["ZUGLOOT_AWARD"] or {
+      text = "Award %s to %s?",
+      button1 = "Award", button2 = "Cancel",
+      OnAccept = function() end, timeout = 0, whileDead = 1,
+    }
+    StaticPopup_Show("ZUGLOOT_AWARD")
+  end
   -- Skeleton: award immediately + confirm text (full popup wiring is UI polish).
   if not Z.DB.sheet then Z.DB.sheet = Z.SRData.NewSheet() end
+  -- Sim sessions log their own source; live rolls log "raid".
+  local source = "raid"
+  if M.session and (M.session.mode == "SIM" or M.session.mode == "SIM-OPEN") then
+    source = "sim"
+  end
   Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerEntry.name)
-  Z.Comm.BroadcastAward(itemID, winnerEntry.name)
-  Z.DropLog.Add(itemID, itemLink, "raid", "award", winnerEntry.name)
+  if Z.Comm then Z.Comm.BroadcastAward(itemID, winnerEntry.name) end
+  if Z.DropLog then Z.DropLog.Add(itemID, itemLink, source, "award", winnerEntry.name) end
   Z.Print("Awarded " .. tostring(itemLink) .. " to " .. winnerEntry.name)
   if Z.SRView then Z.SRView.Refresh() end
 end

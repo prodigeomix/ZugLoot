@@ -53,6 +53,30 @@ function M.BroadcastAward(itemID, winner)
   send("AWARD:" .. tostring(itemID) .. ":" .. tostring(winner), c)
 end
 
+-- Group-aware chat for roll traffic. Raid -> RAID / RAID_WARNING,
+-- party -> PARTY, solo -> local chat frame (Z.Print). Used by live rolls
+-- and sim alike so both behave identically in every grouping.
+function M.SayGroup(msg)
+  if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
+    if SendChatMessage then SendChatMessage(tostring(msg), "RAID") end
+  elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
+    if SendChatMessage then SendChatMessage(tostring(msg), "PARTY") end
+  else
+    Z.Print(msg)
+  end
+end
+
+function M.WarnGroup(msg)
+  if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
+    if SendChatMessage then SendChatMessage(tostring(msg), "RAID_WARNING") end
+  elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
+    -- No raid warnings in a party: plain party message instead.
+    if SendChatMessage then SendChatMessage(tostring(msg), "PARTY") end
+  else
+    Z.Print(msg)
+  end
+end
+
 function M.OnEvent(event, a1, a2, a3, a4)
   if event == "CHAT_MSG_ADDON" then
     local prefix, msg, channel, sender = a1, a2, a3, a4
