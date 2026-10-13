@@ -362,8 +362,11 @@ actual roll flow, not a separate code path:
   `/zl simroll <item>`), in any order. After each finish the award menu
   decides the winner (headless: `/zl award <name>`); won marks apply
   immediately, so the one-win rule chains across drops exactly like a real
-  raid night. `/zl simstop` clears the queue; `/zl cr` mid-sim returns the
-  item to the queue head for a re-roll.
+  raid night. `/zl simstop` is a full stop: kills the live session and
+  all sim timers, drops the queue, clears the award menu, and closes the
+  loot window (+ detail) and raider window — a fresh `/zl sim` can start
+  immediately. `/zl cr` mid-sim returns the item to the queue head for
+  a re-roll.
 - Nothing auto-awards, ever: the sim replays the live menu too. After the ML
   picks, the confirm popup fires and the queue continues (in-client: as you
   accept; headless: the harness's `AwardChosen`).
@@ -454,7 +457,7 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl simboss <boss>   queue boss drops in the loot window (ML rolls each)
 /zl simtmog <link>   transmog demo (TMOG kind winner awardable)
 /zl simroll <item>   roll one queued sim item (ML)
-/zl simstop          stop a running sim (clears queue)
+/zl simstop          full stop: session, timers, queue, menus, windows reset
 /zl log | /zl logclear drop log
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)

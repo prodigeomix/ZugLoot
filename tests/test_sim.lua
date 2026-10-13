@@ -341,11 +341,20 @@ Sim.SimBoss("TestBoss")
 ok(string.find(printed[#printed], "already running"), "second sim refused while running")
 Sim.Stop()
 eq(#Sim.pending, 0, "simstop clears queue")
-ok(drain(), "drain after stop")
+-- Hard stop: the session is dead, timers are dead, windows are closed.
+ok(ML.session == nil, "simstop kills the live session")
+ok(ML.pendingAwardMenu == nil, "simstop clears the award menu")
+eq(ZugLoot.Timer.Pending(), 0, "simstop kills sim timers")
+ok(ZugLoot.LootWindow.detail == nil, "simstop closes the detail")
+ok(ZugLoot.LootWindow.frame == nil or ZugLoot.LootWindow.frame.hidden ~= false,
+  "simstop hides the loot window")
+-- A new sim starts clean immediately; the stopped item cannot be awarded.
+Sim.SimItem("1001")
+ok(ML.session ~= nil, "new sim starts right after stop")
+ML.Cancel() -- tidy: requeues per Cancel semantics, then stop everything
+Sim.Stop()
+ok(ML.session == nil, "stop after cancel stays stopped")
 math.random = realRandom
-ML.AwardChosen({ name = "Aaa", via = "winner" })
-ok(drain(), "drain stop award")
-ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "stopped item still awarded by ML")
 
 -- 12. ToHistoryEntry shape shared with live: winners/entries/missrolls/t sorted.
 local r = ZugLoot.Resolver.ResolveItem(makeSheet(), 1001,

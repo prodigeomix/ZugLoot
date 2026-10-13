@@ -86,16 +86,33 @@ function M.ResetFresh()
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
 end
 
+-- Stop a running sim: a FULL stop. Cancels the live session, drops the
+-- queue, kills all sim timers (feed/tie/finish/continuation), clears the
+-- award menu, hides the loot window (+detail) and the raider window — so
+-- nothing from this sim can fire or linger into the next run. The sheet
+-- (history/won marks already written) is untouched.
 function M.Stop()
-  M.pending = {}
-  M.auto = false
-  if M.running then
-    M.running = false
-    Z.Print("Sim stopped (queue cleared; current item plays out).")
+  local wasRunning = M.running
+      or M.live ~= nil
+      or (Z.MasterLootUI and (Z.MasterLootUI.session ~= nil
+        or Z.MasterLootUI.pendingAwardMenu ~= nil))
+      or (M.pending and Z.Util.ArrayCount(M.pending) > 0)
+  M.ResetFresh() -- cancels timers, session, menu; clears queue + loot rows
+  if Z.LootWindow then
+    if Z.LootWindow.Hide then
+      Z.LootWindow.Hide() -- hides frame AND closes the detail
+    else
+      if Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+    end
+  end
+  if Z.AwardMenuUI and Z.AwardMenuUI.Hide then
+    Z.AwardMenuUI.Hide()
+  end
+  if wasRunning then
+    Z.Print("Sim stopped (windows closed, everything reset).")
   else
     Z.Print("No sim running.")
   end
-  M.SyncLootWindow()
 end
 
 -- Print one simulated session (same lines the Sheet tab shows per player).
