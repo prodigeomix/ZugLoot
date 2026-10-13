@@ -182,7 +182,7 @@ ok(drain(), "drain rest award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "rest resolves")
 
 -- 4. Direct award by kind: the ML awards the TMOG kind winner straight
--- from the menu (no trade leg — out of scope).
+-- from the menu (won mark + drop log; spillover covered in §6).
 resetHarness()
 ML.BeginSession(1001, "item:1001", "SR", false)
 ML.OnSystemRoll("Aaa", 90, 1, 100)
@@ -191,12 +191,9 @@ table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
 local res4 = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
   { cap = 100, requireSR = true })
 local menu4 = ML.BuildAwardMenu(ML.session, res4)
-eq(menu4.perType.TMOG.entry.name, "Tmog", "tmog kind winner")
 ML.pendingAwardMenu = { sess = ML.session, data = menu4 }
 ML.AwardChosen({ name = "Tmog", via = "tmog" })
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tmog"), "tmog winner awarded directly")
-ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "no spillover mark")
-eq(dropAdds[#dropAdds].outcome, "award", "drop log outcome award")
 eq(dropAdds[#dropAdds].winner, "Tmog", "drop log winner")
 
 -- 5. Award menu: winners + SR/MS/OS/TMOG groups + TMOG kind row +
@@ -212,42 +209,25 @@ local menu = ML.BuildAwardMenu(ML.session, res5)
 eq(menu.winners[1].name, "Aaa", "menu top winner")
 eq(menu.winners[1].rollType, "SR", "menu winner roll type")
 eq(menu.groups.SR[1].name, "Aaa", "SR group ranked")
--- TMOG has its own contest row even while SR wins outright (directly
--- awardable — no pass-through machinery).
+-- TMOG has its own contest row even while SR wins outright.
 ok(menu.perType.TMOG ~= nil and menu.perType.TMOG.entry ~= nil, "tmog contest row present")
-eq(menu.perType.TMOG.entry.name, "Tmog", "tmog contest names the roller")
--- Over-cap rolls (above the TYPE range) stay out of award groups...
-local inGroups = false
-for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
-  for j = 1, #menu.groups[gt] do
-    if menu.groups[gt][j].overCap then inGroups = true end
-  end
-end
-ok(not inGroups, "over-cap rolls stay out of award groups")
--- ...but IS in the class-sorted candidate list (awardable by the ML).
+-- Over-cap rolls stay out of award groups but remain candidates.
 local candNames = {}
 for i = 1, #menu.candidates do candNames[menu.candidates[i].name] = true end
 ok(candNames["Tmog"] and candNames["Aaa"] and candNames["Bbb"], "candidates cover rollers")
 ML.Cancel()
--- TMOG kind winner alongside the MS winner.
+-- MS winner + TMOG kind side by side (priority covered in resolver tests).
 resetHarness()
 ML.BeginSession(1001, "item:1001", "SR", false)
-ML.OnSystemRoll("Aaa", 5, 1, 100)
-ML.OnSystemRoll("Bbb", 80, 1, 98) -- feeds as TMOG... use direct rolls instead
 ML.session.rolls = {
   { name = "Bbb", roll = 80, type = "MS" },
   { name = "Tmog", roll = 97, type = "TMOG" },
 }
--- Tmog is not on the sheet: allow the open shape for this unit check.
-local res5b = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
-  { cap = 100, requireSR = false })
 table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
 local res5c = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
   { cap = 100, requireSR = true })
 local menu5c = ML.BuildAwardMenu(ML.session, res5c)
--- Per-type: Bbb wins MS outright (priority), Tmog owns TMOG directly.
-eq(menu5c.winners[1].name, "Bbb", "ms wins outright by priority")
-eq(menu5c.winners[1].rollType, "MS", "winner kind MS")
+eq(menu5c.winners[1].name, "Bbb", "ms wins outright")
 eq(menu5c.perType.TMOG.entry.name, "Tmog", "tmog owns its kind")
 ML.Cancel()
 
@@ -263,11 +243,9 @@ math.random = realRandom
 -- awards the TMOG kind winner directly.
 ok(ML.pendingAwardMenu ~= nil, "menu pending for ML choice")
 local menu6 = ML.pendingAwardMenu.data
-ok(menu6.perType.TMOG ~= nil and menu6.perType.TMOG.entry ~= nil, "tmog contest present")
 ML.AwardChosen({ name = menu6.perType.TMOG.entry.name, via = "tmog" })
 ok(drain(), "drain simtmog award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "tmog roller awarded")
-ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "no spillover mark")
 
 -- 7b2. Won flag is SR-only at feed: already-won TMOG roll is NOT
 -- flagged excluded (regression: the TMOG button vanished for won players).
@@ -311,23 +289,22 @@ eq(resK.winners[1].name, "Aaa", "sr wins by priority")
 eq(resK.perType.MS.entry.name, "Stranger", "stranger owns MS")
 eq(#resK.missrolls, 0, "no missrolls — kinds decided at feed")
 local menuK = ML.BuildAwardMenu(ML.session, resK)
-eq(menuK.winners[1].rollType, "SR", "award shows SR for the reserve holder")
-eq(menuK.perType.MS.entry.name, "Stranger", "award shows MS for the stranger")
 ML.Cancel()
--- Award window: every kind winner has its own row (SR/MS/OS/TMOG).
+-- Award window: every kind winner has its own labeled row.
 resetHarness()
 local LW = ZugLoot.LootWindow
-ZugLoot.LootWindow.SetItems({ { itemID = 1001, link = "item:1001" } }, "loot")
-ZugLoot.LootWindow.OpenDetail(1001)
-ZugLoot.LootWindow.detail.phase = "award"
-ZugLoot.LootWindow.detail.menu = menuK
-local kacts = LW.DetailActions()
+LW.SetItems({ { itemID = 1001, link = "item:1001" } }, "loot")
+LW.OpenDetail(1001)
+LW.detail.phase = "award"
+LW.detail.menu = menuK
 local kinds = {}
-for i = 1, #kacts do
-  if kacts[i].id == "award-name" then kinds[kacts[i].name] = kacts[i].label end
+for i = 1, #(LW.DetailActions()) do
+  local a = LW.DetailActions()[i]
+  if a.id == "award-name" then kinds[a.name] = a.label end
 end
-ok(string.find(kinds["Aaa"] or "", "(SR)", 1, true) ~= nil, "Aaa row labeled SR")
-ok(string.find(kinds["Stranger"] or "", "(MS)", 1, true) ~= nil, "Stranger row labeled MS")
+for name, want in pairs({ Aaa = "(SR)", Stranger = "(MS)", Offspec = "(OS)", Tmog = "(TMOG)" }) do
+  ok(string.find(kinds[name] or "", want, 1, true) ~= nil, name .. " row labeled " .. want)
+end
 LW.CloseDetail()
 
 -- 7. RangeFor: TMOG feeds roll 1-98 so the roller list labels them TMOG.

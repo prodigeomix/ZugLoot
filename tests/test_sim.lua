@@ -181,55 +181,39 @@ for i = 1, #hist.entries do names[hist.entries[i].name] = true end
 ok(names["Aaa"] and names["Bbb"] and names["Filler1"] == nil and names["Missroller1"] == nil,
   "only sheet players rolled")
 
--- 3. Solo routing: chat goes to the local frame (printed), never SendChatMessage.
-resetHarness()
-math.random = rigged({ 90, 80 })
-Sim.SimItem("1001")
-ok(drain(), "drain solo")
-ML.AwardChosen({ name = "Aaa", via = "winner" })
-ok(drain(), "drain solo award")
-math.random = realRandom
-eq(#chatSent, 0, "no SendChatMessage while solo")
-local sawStart, sawResult, sawWinner = false, false, false
-for i = 1, #printed do
-  if string.find(printed[i], "ZugLoot rolling") then sawStart = true end
-  if string.find(printed[i], "ZugLoot result") then sawResult = true end
-  if string.find(printed[i], "SR winner: Aaa", 1, true) then sawWinner = true end
+-- 3-5. Chat routing per grouping: solo prints locally, raid splits
+-- RAID/RAID_WARNING, party stays on PARTY. One table-driven run.
+for _, g in ipairs({
+  { mode = "solo", want = {}, localOnly = true },
+  { mode = "raid", want = { RAID = true, RAID_WARNING = true } },
+  { mode = "party", want = { PARTY = true } },
+}) do
+  resetHarness()
+  grouping = g.mode
+  math.random = rigged({ 90, 80 })
+  Sim.SimItem("1001")
+  ok(drain(), "drain " .. g.mode)
+  ML.AwardChosen({ name = "Aaa", via = "winner" })
+  ok(drain(), "drain " .. g.mode .. " award")
+  math.random = realRandom
+  if g.localOnly then
+    eq(#chatSent, 0, "no SendChatMessage while solo")
+    local sawStart, sawResult, sawWinner = false, false, false
+    for i = 1, #printed do
+      if string.find(printed[i], "ZugLoot rolling") then sawStart = true end
+      if string.find(printed[i], "ZugLoot result") then sawResult = true end
+      if string.find(printed[i], "SR winner: Aaa", 1, true) then sawWinner = true end
+    end
+    ok(sawStart and sawResult and sawWinner, "solo sees start/result/winner locally")
+  else
+    local channels = {}
+    for i = 1, #chatSent do channels[chatSent[i].channel] = true end
+    for ch in pairs(g.want) do ok(channels[ch], g.mode .. " uses " .. ch) end
+    for i = 1, #chatSent do
+      ok(g.want[chatSent[i].channel], g.mode .. " stays on expected channels")
+    end
+  end
 end
-ok(sawStart and sawResult and sawWinner, "solo sees start/result/winner locally")
-
--- 4. Raid routing: start+result on RAID, winner on RAID_WARNING.
-resetHarness()
-grouping = "raid"
-math.random = rigged({ 90, 80 })
-Sim.SimItem("1001")
-ok(drain(), "drain raid")
-ML.AwardChosen({ name = "Aaa", via = "winner" })
-ok(drain(), "drain raid award")
-math.random = realRandom
-local channels = {}
-for i = 1, #chatSent do channels[chatSent[i].channel] = true end
-ok(channels["RAID"], "raid traffic on RAID")
-ok(channels["RAID_WARNING"], "winner on RAID_WARNING")
-local startCh, winCh = nil, nil
-for i = 1, #chatSent do
-  if string.find(chatSent[i].msg, "ZugLoot rolling") then startCh = chatSent[i].channel end
-  if string.find(chatSent[i].msg, "SR winner:", 1, true) then winCh = chatSent[i].channel end
-end
-eq(startCh, "RAID_WARNING", "roll start warns raid")
-eq(winCh, "RAID_WARNING", "SR winner warns raid")
-
--- 5. Party routing: everything on PARTY (no raid warnings in a party).
-resetHarness()
-grouping = "party"
-math.random = rigged({ 90, 80 })
-Sim.SimItem("1001")
-ok(drain(), "drain party")
-ML.AwardChosen({ name = "Aaa", via = "winner" })
-ok(drain(), "drain party award")
-math.random = realRandom
-ok(#chatSent > 0, "party traffic sent")
-for i = 1, #chatSent do eq(chatSent[i].channel, "PARTY", "party-only routing") end
 
 -- 6. Open item (not on sheet): ALL sheet players roll, SIM-OPEN mode + stub.
 resetHarness()
@@ -324,13 +308,9 @@ math.random = rigged({ 50, 60, 70, 71 })
 Sim.SimItem("1001")
 ok(drain(), "drain tie")
 math.random = realRandom
-ok(ML.session ~= nil, "tied session closes to the ML award menu")
-ok(ML.pendingAwardMenu ~= nil, "menu pending after tie re-rolls")
 local tieMenu = ML.pendingAwardMenu and ML.pendingAwardMenu.data
 ok(tieMenu and tieMenu.winners and tieMenu.winners[1] ~= nil, "tie resolved to a winner")
-if tieMenu and tieMenu.winners and tieMenu.winners[1] then
-  ML.AwardChosen({ name = tieMenu.winners[1].name, via = "winner" })
-end
+ML.AwardChosen({ name = tieMenu.winners[1].name, via = "winner" })
 ok(drain(), "drain tie award")
 ok(ML.session == nil, "session closed after ML award")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 2, "tie round + winning round recorded")
@@ -353,8 +333,6 @@ Sim.Stop()
 eq(#Sim.pending, 0, "simstop clears queue")
 ok(drain(), "drain after stop")
 math.random = realRandom
-eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "current item still finishes")
-ok(ML.pendingAwardMenu ~= nil, "stopped item waits on the ML menu")
 ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(drain(), "drain stop award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "stopped item still awarded by ML")

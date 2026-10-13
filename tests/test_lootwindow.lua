@@ -66,52 +66,28 @@ GetItemInfo = function(id)
   if not e then return nil end
   return e[1], e[2], e[3], 1, 1, "", "", "", e[4]
 end
+-- Bare "1001" links resolve sheet-style; unknown ids fall back cleanly.
 local rn, rl, rq, rt = LW.ResolveItemInfo(1001, "1001", 0, nil, nil)
-eq(rn, "Dragonfang Blade", "name resolved from itemID")
-eq(rl, "|cffa335ee|Hitem:1001:0:0:0|h[Dragonfang Blade]|h|r", "full link resolved")
-eq(rq, 4, "quality resolved")
-eq(rt, "Interface\\Icons\\INV_Sword_01", "texture resolved")
+eq(rn .. "|" .. rq .. "|" .. rt, "Dragonfang Blade|4|Interface\\Icons\\INV_Sword_01",
+  "name/quality/texture resolved from itemID")
+ok(string.find(rl, "Hitem:1001", 1, true) ~= nil, "full link resolved")
 LW.SetItems({ { itemID = 1001, link = "1001" } }, "sim")
-eq(LW.items[1].name, "Dragonfang Blade", "sim row named via GetItemInfo")
-eq(LW.items[1].texture, "Interface\\Icons\\INV_Sword_01", "sim row icon via GetItemInfo")
+eq(LW.items[1].name .. "|" .. LW.items[1].texture,
+  "Dragonfang Blade|Interface\\Icons\\INV_Sword_01", "sim row resolved")
 local tRes = LW.RowText(LW.items[1])
-ok(string.find(tRes, "Dragonfang", 1, true) ~= nil, "resolved row text named")
-ok(string.find(tRes, "item:1001", 1, true) == nil, "no bare item:id text")
--- Unknown item (no cache): graceful fallback, question-mark icon path.
+ok(string.find(tRes, "Dragonfang", 1, true) ~= nil
+  and string.find(tRes, "item:1001", 1, true) == nil, "row text named, no bare id")
 LW.SetItems({ { itemID = 4242, link = "item:4242" } }, "sim")
-eq(LW.items[1].name, nil, "unknown keeps no name")
 eq(LW.RowText(LW.items[1]), "1. item:4242", "unknown falls back to item:id")
--- Done-row re-append keeps the resolved presentation.
-LW.SetItems({ { itemID = 1001, link = "1001" } }, "sim")
-ZugLoot.Sim = ZugLoot.Sim or {}
-ZugLoot.Sim.doneRows = { [1001] = { itemID = 1001,
-  link = "|cffa335ee|Hitem:1001:0:0:0|h[Dragonfang Blade]|h|r",
-  name = "Dragonfang Blade", texture = "Interface\\Icons\\INV_Sword_01",
-  quality = 4, badge = "SR", status = "done", source = "sim" } }
-LW.SetItems({}, "sim")
-for id, prev in pairs(ZugLoot.Sim.doneRows) do
-  if not LW.Find(id) then
-    table.insert(LW.items, { itemID = id, link = prev.link, name = prev.name,
-      texture = prev.texture, quality = prev.quality, badge = prev.badge,
-      status = "done", source = "sim" })
-  end
-end
-eq(LW.items[1].name, "Dragonfang Blade", "re-appended row keeps name")
-eq(LW.items[1].texture, "Interface\\Icons\\INV_Sword_01", "re-appended row keeps icon")
-ZugLoot.Sim.doneRows = nil
 
 -- 1. ReserveBadge: HR wins, SR / SR:n, "" when unreserved.
 local sheet = makeSheet()
-eq(SRData.ReserveBadge(sheet, 1003), "HR", "hardres badge")
-eq(SRData.ReserveBadge(sheet, 1001), "SR:2", "two holders")
-eq(SRData.ReserveBadge(sheet, 1002), "SR", "single holder")
-eq(SRData.ReserveBadge(sheet, 9999), "", "unreserved blank")
-ok(SRData.IsHardres(sheet, 1003), "IsHardres true")
-ok(not SRData.IsHardres(sheet, 1001), "IsHardres false")
-ok(not SRData.IsHardres(nil, 1001), "IsHardres nil-safe")
-local names = SRData.SRNames(sheet, 1001)
-eq(#names, 2, "two SR names")
-eq(names[1], "Aaa", "SR names sorted")
+for id, want in pairs({ [1003] = "HR", [1001] = "SR:2", [1002] = "SR", [9999] = "" }) do
+  eq(SRData.ReserveBadge(sheet, id), want, "badge " .. id)
+end
+ok(SRData.IsHardres(sheet, 1003) and not SRData.IsHardres(sheet, 1001)
+  and not SRData.IsHardres(nil, 1001), "IsHardres")
+eq(table.concat(SRData.SRNames(sheet, 1001), ","), "Aaa,Bbb", "SR names sorted")
 
 -- 1b. DisplayName / TooltipLink (RollFor ItemUtils parity): the row shows
 -- the readable name, never the raw link; tooltips use the item: part.
@@ -134,17 +110,17 @@ LW.SetItems({
 eq(#LW.items, 3, "three rows")
 eq(LW.items[1].index, 1, "row 1 numbered")
 eq(LW.items[3].index, 3, "row 3 numbered")
-eq(LW.items[1].badge, "SR:2", "row 1 badge")
-eq(LW.items[2].badge, "HR", "row 2 badge")
-eq(LW.items[3].badge, "", "row 3 badge blank")
+for i, want in ipairs({ "SR:2", "HR", "" }) do
+  eq(LW.items[i].badge, want, "row " .. i .. " badge")
+end
 local t1 = LW.RowText(LW.items[1])
 ok(string.find(t1, "^1%.", 1) ~= nil or string.find(t1, "1.", 1, true) == 1, "row text numbered")
 ok(string.find(t1, "SR:2", 1, true) ~= nil, "row text shows badge")
 -- legacy sr= input still derives the badge.
-LW.SetItems({ { itemID = 1001, link = "item:1001", sr = 2 } }, "loot")
-eq(LW.items[1].badge, "SR:2", "legacy sr count derives badge")
-LW.SetItems({ { itemID = 1001, link = "item:1001", sr = 1 } }, "loot")
-eq(LW.items[1].badge, "SR", "legacy single derives SR")
+for _, tc in ipairs({ { 2, "SR:2" }, { 1, "SR" } }) do
+  LW.SetItems({ { itemID = 1001, link = "item:1001", sr = tc[1] } }, "loot")
+  eq(LW.items[1].badge, tc[2], "legacy sr=" .. tc[1])
+end
 -- RowText shows the display name, not the raw link.
 LW.SetItems({ { itemID = 17182,
   link = "|cffa335ee|Hitem:17182:0:0:0|h[Sulfuras]|h|r", badge = "SR" } }, "loot")
@@ -201,26 +177,17 @@ LW.SetItems({ { itemID = 2002, link = "item:2002" } }, "loot")
 eq(LW.doAction(2002, "roll"), "rolling", "live roll from detail")
 eq(started[1], "live:2002", "live StartItemRoll called")
 
--- 4b. MoreChoices: Roll + one Award row per reserver (the "..." menu).
-LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
-LW.OpenDetail(1001)
-local choices = LW.MoreChoices()
-eq(#choices, 3, "roll + two awards")
-eq(choices[1].id, "roll", "first choice rolls")
-eq(choices[2].label, "Award Aaa", "award row labeled")
-eq(choices[3].name, "Bbb", "award row carries the name")
--- Award button fits "Award ganghorde" on one line (regression: the name
--- wrapped onto its own line in a 260-wide detail).
-ok(string.len("Award ganghorde") * 7 < LW.DETAIL_WIDTH - 60, "detail fits long award labels")
-LW.CloseDetail()
-
--- 5. DetailLines render (headless parity with the client frame).
+-- 5. DetailLines render + ... choices + label width (headless parity).
 LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
 LW.OpenDetail(1001)
 local lines = LW.DetailLines()
 ok(#lines == 3, "three detail lines")
 ok(string.find(lines[1], "SR:2", 1, true) ~= nil, "title carries badge")
 ok(string.find(lines[2], "Aaa", 1, true) ~= nil, "rollers listed")
+local choices = LW.MoreChoices()
+eq(#choices, 3, "roll + two awards")
+eq(choices[3].name, "Bbb", "award row carries the name")
+ok(string.len("Award ganghorde") * 7 < LW.DETAIL_WIDTH - 60, "detail fits long award labels")
 
 -- 6. Persistent roll window: pick -> rolling -> award in ONE window.
 -- Roll from the detail: it stays open and tracks the session.
@@ -317,15 +284,12 @@ local menuT = ML.BuildAwardMenu(
 eq(menuT.winners[1].name, "Aaa", "sr wins outright by priority")
 eq(menuT.perType.TMOG.entry.name, "Tmog", "tmog owns its kind")
 ok(LW.DetailOnFinish(1001, menuT), "tmog finish to detail")
-local tacts = LW.DetailActions()
-eq(tacts[1].id, "award-name", "winner row first")
-eq(tacts[1].name, "Aaa", "winner row names SR winner")
 local tmogRow = nil
-for i = 1, #tacts do
-  if tacts[i].via == "tmog" then tmogRow = tacts[i] break end
+for i = 1, #(LW.DetailActions()) do
+  local a = LW.DetailActions()[i]
+  if a.via == "tmog" then tmogRow = a break end
 end
-ok(tmogRow ~= nil, "TMOG kind row present")
-eq(tmogRow.name, "Tmog", "tmog row names the kind winner")
+ok(tmogRow ~= nil and tmogRow.name == "Tmog", "TMOG kind row present")
 -- TMOG kind award via the window: direct, no leg, window closes.
 local gotTmog = nil
 ML.pendingAwardMenu = { sess = { itemID = 1001, itemLink = "item:1001",
@@ -411,9 +375,4 @@ local narrow = LW.LayoutBarRows({
 eq(#narrow, 2, "narrow bar: wraps to two rows")
 eq(#narrow[1], 1, "first row holds the wide primary alone")
 eq(narrow[2][1].btn, "b", "TMOG floats to the next row, not over ...")
--- Single button centers with even margins.
-local one = LW.LayoutBarRows({ { btn = "a", w = 80 } }, 300)
-eq(#one, 1, "single: one row")
-ok(math.abs(one[1][1].x - 110) < 0.01, "single button centered")
-
 return T

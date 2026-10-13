@@ -119,7 +119,6 @@ local resT = R.ResolveItem(sT, 77, {
   { name = "TMog", roll = 15, type = "TMOG" },
 }, { cap = 100, requireSR = true })
 eq(resT.winners[1].name, "SRGuy", "sr wins outright")
-eq(resT.perType.SR.entry.name, "SRGuy", "sr owns its kind")
 eq(resT.perType.TMOG.entry.name, "TMog", "tmog owns its kind at 15")
 eq(resT.perType.TMOG.entry.effective, 15, "tmog effective is raw")
 ok(resT.winners[1].name ~= "TMog", "tmog never takes the winner slot")

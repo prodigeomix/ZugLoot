@@ -44,11 +44,10 @@ eq(P.NameOf(999, fakeDb), "Unknown", "unknown entry fallback")
 local drops = P.DropsFor(101, fakeDb, true)
 local byId = {}
 for i = 1, #drops do byId[drops[i].item] = drops[i].chance end
-eq(byId[5001], 20, "direct drop chance")
-eq(byId[5003], 50, "refloot drop chance")
-eq(byId[5002], 2, "low drop kept above floor")
-ok(byId[5004] == nil, "other mob's drop excluded")
-ok(byId[5005] == nil, "sub-floor drop excluded")
+for id, want in pairs({ [5001] = 20, [5003] = 50, [5002] = 2 }) do
+  eq(byId[id], want, "drop chance " .. id)
+end
+ok(byId[5004] == nil and byId[5005] == nil, "other mob + sub-floor excluded")
 eq(drops[1].item, 5003, "sorted best first")
 ok(#P.DropsFor(999, fakeDb, true) == 0, "unknown entry empty")
 
