@@ -116,6 +116,27 @@ local function drain(step)
   return guard < 500
 end
 
+-- Regression: cancelling the last item with the roll window open must
+-- not leave a "rolling" detail behind, and a stale feed timer firing
+-- afterwards must be a silent no-op — not "attempt to index nil
+-- (Sim.lua:198 sess.itemID)".
+resetHarness()
+math.random = rigged({ 90, 80 })
+Sim.SimItem("1001")
+math.random = realRandom
+ZugLoot.LootWindow.SetItems({ { itemID = 1001, link = "1001" } }, "sim")
+ZugLoot.LootWindow.OpenDetail(1001)
+ZugLoot.LootWindow.detail.phase = "rolling"
+ZugLoot.LootWindow.detail.sessionID = ML.session and ML.session.id
+ML.Cancel()
+ok(ML.session == nil, "cancelled session nil")
+ok(ZugLoot.LootWindow.detail == nil, "orphaned rolling detail closed")
+-- A late feed for the dead session: must not error, must not record.
+local okFeed, errFeed = pcall(ZugLoot.Timer.Update, 0.5)
+ok(okFeed, "stale feed after cancel does not error: " .. tostring(errFeed))
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "stale feed records nothing")
+ok(drain(), "drain after stale feed")
+
 -- 1. No sheet -> refuses, no crash, tells user to import.
 ZugLoot.DB = {}
 printed = {}

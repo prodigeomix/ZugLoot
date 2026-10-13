@@ -148,16 +148,21 @@ function M.Cancel()
   M.session = nil
   Z.Print("Roll cancelled.")
   if Z.LootWindow and itemID then Z.LootWindow.MarkOpen(itemID) end
-  -- An open rolling detail drops back to pick (re-roll / choose / close).
+  -- A rolling detail whose session just died can never receive rolls
+  -- or a finish: close it outright (stale feed timers then find nothing).
+  -- A same-item detail that is NOT rolling (award menu etc.) is untouched.
   if Z.LootWindow and Z.LootWindow.detail
-      and Z.LootWindow.detail.itemID == itemID
-      and Z.LootWindow.detail.sessionID == sessionID then
-    Z.LootWindow.detail.phase = "pick"
-    Z.LootWindow.detail.sessionID = nil
-    Z.LootWindow.detail.rolls = {}
-    Z.LootWindow.detail.menu = nil
-    Z.LootWindow.detail.status = "open"
-    Z.LootWindow.RefreshDetail()
+      and Z.LootWindow.detail.itemID == itemID then
+    if (Z.LootWindow.detail.phase or "pick") == "rolling" then
+      Z.LootWindow.CloseDetail()
+    elseif Z.LootWindow.detail.sessionID == sessionID then
+      Z.LootWindow.detail.phase = "pick"
+      Z.LootWindow.detail.sessionID = nil
+      Z.LootWindow.detail.rolls = {}
+      Z.LootWindow.detail.menu = nil
+      Z.LootWindow.detail.status = "open"
+      Z.LootWindow.RefreshDetail()
+    end
   end
   if Z.RaiderLootUI then Z.RaiderLootUI.Hide() end
   -- A cancelled sim item returns to the queue head for a re-roll.

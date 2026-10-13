@@ -182,6 +182,10 @@ end
 -- range, then stamp the intended kind — OnSystemRoll would otherwise read
 -- every sheet roller at 1-100 back as SR.
 local function feedRoll(sess, rv)
+  -- A nil sess (re-read ML.session after a cancel/stop) is never the live
+  -- session — and the nil==nil guard below would otherwise let it through
+  -- to sess.itemID. No session, no feed.
+  if not sess then return end
   if not Z.MasterLootUI or Z.MasterLootUI.session ~= sess then return end
   local minR, maxR = M.RangeFor(rv.type)
   Z.MasterLootUI.OnSystemRoll(rv.name, rv.roll, minR, maxR)
@@ -251,9 +255,14 @@ local function finishSim(entry, round)
     local tmin, tmax = 1, Z.Caps.SR
     if tieKind then tmin, tmax = M.RangeFor(tieKind) end
     local cap = tmax
+    -- Capture the live session NOW: re-reading ML.session at fire time
+    -- yields nil after a cancel/stop, and feedRoll(nil) used to slip past
+    -- the guard (nil == nil) into sess.itemID. A cancelled tie simply
+    -- stops feeding (guard: session no longer matches).
+    local tieSess = ML.session
     for i = 1, Z.Util.ArrayCount(names) do
       local nm = names[i]
-      Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, { name = nm, type = tieKind or "SR", roll = math.random(tmin, cap) }) end)
+      Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(tieSess, { name = nm, type = tieKind or "SR", roll = math.random(tmin, cap) }) end)
     end
     Z.Timer.After((Z.Util.ArrayCount(names) + 1) * M.ROLL_GAP + 0.2, function() finishSim(entry, round + 1) end)
     return
@@ -286,9 +295,12 @@ function M.playOne(entry)
   if Z.LootWindow then Z.LootWindow.MarkRolling(entry.itemID) end
   -- No forced sheet window: the sim plays in the loot + roll windows, and
   -- the sheet opens only on player request (/zl sheet).
+  -- Capture the session (see tie re-rolls above): a cancel/stop before
+  -- the feeds fire must silence them, not crash on a nil session.
+  local playSess = ML.session
   for i = 1, Z.Util.ArrayCount(entry.rolls) do
     local rv = entry.rolls[i]
-    Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, rv) end)
+    Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(playSess, rv) end)
   end
   Z.Timer.After(rollTime, function() finishSim(entry, 1) end)
 end
