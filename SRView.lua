@@ -28,9 +28,10 @@ function M.RenderText(sheet)
   local out = {}
   if not sheet then return { "(no sheet imported)" } end
   table.insert(out, "raidID=" .. tostring(sheet.meta and sheet.meta.raidID) .. " by=" .. tostring(sheet.meta and sheet.meta.importedBy))
-  for _, id in ipairs(Z.SRData.SortedItemIDs(sheet)) do
+  for _, id in ipairs(Z.SRData.SortedCardIDs(sheet)) do
     local rollers = Z.SRData.GetRollers(sheet, id)
-    table.insert(out, "item " .. id .. ":")
+    local unsr = Z.SRData.IsUnreserved and Z.SRData.IsUnreserved(sheet, id)
+    table.insert(out, "item " .. id .. ":" .. (unsr and " [not SR'd]" or ""))
     for i = 1, Z.Util.ArrayCount(rollers) do
       local r = rollers[i]
       local won = Z.SRData.HasWon(sheet, id, r.name)

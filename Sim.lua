@@ -53,6 +53,10 @@ function M.RunSimSession(sheet, itemID, mode, rolls, itemLink)
     { cap = Z.Caps.SR, requireSR = (mode == "SIM"), itemCount = 1 })
   printSession(itemID, res, sheet)
   if Z.Util.ArrayCount(res.entries or {}) > 0 then
+    -- Simulated off-sheet item: same unreserved stub as live rolls.
+    if Z.SRData.EnsureUnreserved then
+      Z.SRData.EnsureUnreserved(sheet, itemID, nil)
+    end
     Z.SRData.RecordRolls(sheet, itemID, Z.Resolver.ToHistoryEntry(res, mode, now()))
   end
   local tied = Z.Util.ArrayCount(res.tied or {})

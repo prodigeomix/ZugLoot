@@ -100,19 +100,83 @@ function M.LoadFromFile()
   M.ApplySheet(sheet, "file")
 end
 
+-- Permission for clearing the roll log (rolls history + won marks).
+-- Solo: always allowed (local preview data only). In party/raid: only the
+-- master looter or raid leader/assistant. Testable: no WoW UI calls.
+function M.CanResetRollLog()
+  if not Z.SRSecurity then return false end
+  if Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return true end
+  return Z.SRSecurity.CanBroadcast and Z.SRSecurity.CanBroadcast()
+end
+
+-- Perform the clear. No permission check, no UI — testable core.
+-- Returns counts for feedback. Safe with no sheet loaded.
+function M.DoResetRollLog()
+  local sheet = Z.DB and Z.DB.sheet
+  if not sheet then return { rolls = 0, won = 0 } end
+  -- Count sessions before clearing (won entries counted per item).
+  local nRolls, nWon = 0, 0
+  if sheet.rolls then
+    for _, hist in pairs(sheet.rolls) do
+      nRolls = nRolls + Z.Util.ArrayCount(hist)
+    end
+  end
+  if sheet.won then
+    for _, w in pairs(sheet.won) do
+      nWon = nWon + Z.Util.TableCount(w)
+    end
+  end
+  -- Sim sessions write into the same history/won marks, so a fresh raid
+  -- clears both. Unreserved stubs are roll-session artifacts too: prune them
+  -- so the sheet returns to its imported state.
+  Z.SRData.ClearWon(sheet)
+  if Z.SRData.ClearRolls then Z.SRData.ClearRolls(sheet) end
+  if Z.SRData.PruneUnreserved then Z.SRData.PruneUnreserved(sheet) end
+  return { rolls = nRolls, won = nWon }
+end
+
+local function refreshViews()
+  if Z.MainWindow then Z.MainWindow.Refresh() end
+  if Z.SRView then Z.SRView.Refresh() end
+end
+
+-- Button/slash entry point: permission gate + confirmation window.
+-- Outside the client (no StaticPopup API) the confirm is skipped so tests
+-- can exercise the full path.
+function M.RequestResetRollLog()
+  if not M.CanResetRollLog() then
+    Z.Print("Only the master looter or raid leader can reset the roll log.")
+    return
+  end
+  if not (StaticPopupDialogs and StaticPopup_Show) then
+    local c = M.DoResetRollLog()
+    Z.Print("Roll log cleared (" .. c.rolls .. " sessions, " .. c.won .. " won marks).")
+    refreshViews()
+    return
+  end
+  StaticPopupDialogs["ZUGLOOT_RESET_ROLLS"] = StaticPopupDialogs["ZUGLOOT_RESET_ROLLS"] or {
+    text = "Clear the roll log?\nAll recorded rolls and won marks for this raid will be removed. The SR sheet itself is kept.",
+    button1 = "Reset", button2 = "Cancel",
+    OnAccept = function()
+      local c = M.DoResetRollLog()
+      Z.Print("Roll log cleared (" .. c.rolls .. " sessions, " .. c.won .. " won marks).")
+      refreshViews()
+    end,
+    timeout = 0, whileDead = 1,
+  }
+  StaticPopup_Show("ZUGLOOT_RESET_ROLLS")
+end
+
 function M.ResetWon()
-  if not Z.SRSecurity.CanImport() then
+  -- /zl reset keeps its direct behavior (slash, no popup) but shares the
+  -- permission gate and clearing core with the button path.
+  if not M.CanResetRollLog() then
     Z.Print("Only the master looter or raid leader can reset won marks.")
     return
   end
-  -- Sim sessions write into the same history/won marks, so a fresh raid
-  -- clears both.
-  if Z.DB.sheet then
-    Z.SRData.ClearWon(Z.DB.sheet)
-    if Z.SRData.ClearRolls then Z.SRData.ClearRolls(Z.DB.sheet) end
-  end
-  Z.Print("Won marks and roll history cleared (new raid).")
-  if Z.SRView then Z.SRView.Refresh() end
+  local c = M.DoResetRollLog()
+  Z.Print("Won marks and roll history cleared (new raid): " .. c.rolls .. " sessions, " .. c.won .. " won marks.")
+  refreshViews()
 end
 
 function M.ShowPaste()

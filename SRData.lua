@@ -237,11 +237,55 @@ function M.ClearRolls(sheet)
   sheet.rolls = {}
 end
 
+-- Ensure an item dropped/rolled but never SR'd has a stub entry so it shows
+-- on the sheet (at the bottom, flagged `unsr`). Never touches an existing
+-- entry: real SR data is never clobbered. Returns true if a stub was added.
+function M.EnsureUnreserved(sheet, itemID, quality)
+  if not sheet or not itemID then return false end
+  if sheet.items[itemID] then return false end
+  sheet.items[itemID] = { quality = quality or 4, rollers = {}, unsr = true }
+  return true
+end
+
+function M.IsUnreserved(sheet, itemID)
+  return sheet and sheet.items[itemID] and sheet.items[itemID].unsr == true
+end
+
+-- Remove unreserved stubs (roll-session artifacts). Used by roll-log reset
+-- so the sheet returns to its imported state. Returns count removed.
+function M.PruneUnreserved(sheet)
+  if not sheet or not sheet.items then return 0 end
+  local n = 0
+  for id, item in pairs(sheet.items) do
+    if type(item) == "table" and item.unsr == true then
+      sheet.items[id] = nil
+      n = n + 1
+    end
+  end
+  return n
+end
+
 function M.SortedItemIDs(sheet)
   local ids = {}
   for id in pairs(sheet.items) do table.insert(ids, id) end
   table.sort(ids)
   return ids
+end
+
+-- Card order: SR'd items numeric first, unreserved stubs at the bottom.
+function M.SortedCardIDs(sheet)
+  local sr, un = {}, {}
+  for id, item in pairs(sheet.items) do
+    if type(item) == "table" and item.unsr == true then
+      table.insert(un, id)
+    else
+      table.insert(sr, id)
+    end
+  end
+  table.sort(sr)
+  table.sort(un)
+  for i = 1, Util.ArrayCount(un) do table.insert(sr, un[i]) end
+  return sr
 end
 
 function M.GetRollers(sheet, itemID)

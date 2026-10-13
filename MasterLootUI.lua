@@ -139,6 +139,18 @@ function M.AnnounceResult(sess, res)
   -- Persist the session into per-item roll history (survives the session).
   -- Same shape the sim writes (Resolver.ToHistoryEntry).
   if Z.DB.sheet and Z.SRData.RecordRolls then
+    -- Item rolled but never SR'd: stub it onto the sheet so it shows at the
+    -- bottom, flagged as not SR'd. Only when rolls actually happened.
+    if Z.Util.ArrayCount(res.entries or {}) > 0 and Z.SRData.EnsureUnreserved then
+      local q = nil
+      if GetItemInfo then
+        local _, _, qq = GetItemInfo(tonumber(sess.itemID))
+        q = qq
+      end
+      if Z.SRData.EnsureUnreserved(Z.DB.sheet, sess.itemID, q) then
+        Z.Print("Note: " .. tostring(sess.itemLink or sess.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
+      end
+    end
     Z.SRData.RecordRolls(Z.DB.sheet, sess.itemID,
       Z.Resolver.ToHistoryEntry(res, sess.mode, (time and time()) or 0))
     if Z.MainWindow then Z.MainWindow.Refresh() end

@@ -117,6 +117,20 @@ Sheet = {
   Sheet tab history lines (`Resolver.ToHistoryEntry` carries them into
   `sheet.rolls`).
 
+### 3.3 Unreserved drops (not on the sheet)
+
+- When a finished roll session (live or sim) had rolls for an itemID absent
+  from `sheet.items`, a stub `{ quality, rollers = {}, unsr = true }` is added
+  via `SRData.EnsureUnreserved` — never touching existing entries, so real SR
+  data can't be clobbered. Empty sessions (no rolls) add nothing.
+- Cards: unreserved items render at the **bottom** of the Sheet tab
+  (`SRData.SortedCardIDs`: SR'd numeric first, stubs last), with a grey
+  `[not SR'd]` title badge and a `(not on SR sheet — open roll)` body line.
+  `CardSummary` / `SRView.RenderText` tag them `[not SR'd]` too.
+- Stubs are local roll-session artifacts: `SerializeSheet` emits no lines for
+  them (empty rollers), so they never pollute broadcasts; roll-log reset
+  prunes them (`PruneUnreserved`) and the sheet returns to imported state.
+
 ## 4. UI
 
 ### 4.1 Main window (`MainWindow.lua`) — both roles, Aegis-SBR-skinned
@@ -127,12 +141,14 @@ Sheet = {
   **Rolls** | **Versions** | **Setup**. `/zl log` opens Rolls, `/zl ver` opens
   Versions. (`SRView`/`DropLog`/`VersionGrid` standalone frames retired into
   tabs; their modules keep pure logic + slash commands.)
-- **Sheet tab**, one card per item, sorted by itemID ascending:
+- **Sheet tab**, one card per item: SR'd items sorted by itemID ascending,
+  unreserved items (rolled but never SR'd — auto-added at the bottom, see §3.3):
   - icon button (texture via `GetItemInfo(tonumber(id))` numeric-ID trick, cf.
     LootBlare fix #8; quality-color bottom border). **Hover = full GameTooltip
     item details** (`SetHyperlink` when the client knows the item, fallback
     text otherwise). Click inserts the link into an open chat box.
-  - title: quality-colored name + `[HR]` tag + green `[rolled xN]` badge.
+  - title: quality-colored name + `[HR]` tag + green `[rolled xN]` badge +
+    grey `[not SR'd]` badge for unreserved items.
   - SR list: `Name xN (+SR+)` (SR+ in gold), `[WON]` marks for already-won.
   - roll history: every finished session this raid as its own block
     (`— rolls #k (mode) => winners`), **one line per player**:
@@ -273,7 +289,7 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl sim <link> [N]   simulate rolls for item
 /zl simboss <boss>   simulate boss drops (BossData)
 /zl log | /zl logclear drop log
-/zl reset            clear won marks (ML/RL, new raid)
+/zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
 /zl help
 ```
 

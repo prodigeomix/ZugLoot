@@ -260,6 +260,7 @@ function M.RenderSheet()
     local nice = ItemName(card.itemID, card.quality)
     local badges = ""
     if card.hardres then badges = badges .. "  |cFFFF8000[HR]|r" end
+    if card.unsr then badges = badges .. "  |cff888888[not SR'd]|r" end
     local nRolls = Z.Util.ArrayCount(card.rollSessions)
     if nRolls > 0 then
       badges = badges .. "  |cFF00FF00[rolled x" .. nRolls .. "]|r"
@@ -272,7 +273,11 @@ function M.RenderSheet()
         table.insert(lines, RollerLine(card.rollers[i]))
       end
     else
-      table.insert(lines, "|cff888888(no SRs — open roll)|r")
+      if card.unsr then
+        table.insert(lines, "|cff888888(not on SR sheet — open roll)|r")
+      else
+        table.insert(lines, "|cff888888(no SRs — open roll)|r")
+      end
     end
     for s = 1, Z.Util.ArrayCount(card.rollSessions) do
       local sess = card.rollSessions[s]
@@ -448,7 +453,8 @@ function M.RenderSetup()
   b4:SetWidth(150) b4:SetHeight(24)
   b4:SetPoint("LEFT", b3, "RIGHT", 8, 0)
   b4:SetText("Clear won marks")
-  b4:SetScript("OnClick", function() Z.SRImport.ResetWon() M.Refresh() end)
+  b4:SetScript("OnClick", function() Z.SRImport.RequestResetRollLog() end)
+  Tip(b4, "Clear won marks", "Same as Reset rolls: confirmation window first.")
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (see Rolls tab)\n" ..
@@ -533,6 +539,17 @@ function M.Build()
   local xb = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   xb:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
   xb:SetScript("OnClick", function() f:Hide() end)
+  -- Reset-rolls button, top of the window next to the close button.
+  -- Opens a confirmation window; in party/raid only ML / raid leader may use it.
+  local resetB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  resetB:SetWidth(96) resetB:SetHeight(20)
+  resetB:SetPoint("TOPRIGHT", f, "TOPRIGHT", -34, -32)
+  resetB:SetText("Reset rolls")
+  resetB:SetScript("OnClick", function() Z.SRImport.RequestResetRollLog() end)
+  Tip(resetB, "Reset rolls",
+    "Clear all recorded rolls and won marks for this raid. The SR sheet itself is kept.",
+    "Solo: always allowed. In party/raid: master looter or raid leader only.")
+  M.resetBtn = resetB
   hairline(f, -56, 14, -14)
   -- tab rail (Aegis BuildSpecTabs pattern: buttons + gold underline)
   local n = Z.Util.ArrayCount(TABS)

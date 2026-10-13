@@ -18,15 +18,16 @@ else
   if ok then SRData = s end
 end
 
--- Build card list for a sheet, sorted by itemID ascending.
--- card = { itemID, quality, hardres=bool,
+-- Build card list for a sheet: SR'd items numeric first, unreserved stubs
+-- (items rolled but never SR'd) at the bottom.
+-- card = { itemID, quality, hardres=bool, unsr=bool,
 --          rollers = { {name, rolls, sr_plus, won} }, -- sheet order
 --          rollSessions = { {t, mode, winners={names}, lines={ {name, base, sr_plus, effective, missroll, excludedWon} }} },
 --          rolled = bool (any session this raid), winnerNames = {latest winners} }
 function M.BuildCards(sheet)
   local cards = {}
   if not sheet then return cards end
-  local ids = SRData.SortedItemIDs(sheet)
+  local ids = SRData.SortedCardIDs(sheet)
   for i = 1, Util.ArrayCount(ids) do
     local id = ids[i]
     local item = sheet.items[id] or {}
@@ -68,6 +69,7 @@ function M.BuildCards(sheet)
       itemID = id,
       quality = item.quality or 4,
       hardres = sheet.hardres and sheet.hardres[id] ~= nil,
+      unsr = item.unsr == true,
       rollers = rollers,
       rollSessions = sessions,
       rolled = rolled,
@@ -83,6 +85,7 @@ function M.CardSummary(card)
   local parts = {}
   table.insert(parts, "item " .. tostring(card.itemID))
   if card.hardres then table.insert(parts, "[HR]") end
+  if card.unsr then table.insert(parts, "[not SR'd]") end
   local rl = {}
   for i = 1, Util.ArrayCount(card.rollers) do
     local r = card.rollers[i]

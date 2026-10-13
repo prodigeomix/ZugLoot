@@ -100,6 +100,11 @@ math.random = realRandom
 eq(#res3.entries, 3, "open sim rolls all sheet players")
 eq(res3.winners[1].name, "Ccc", "open sim highest base wins")
 eq(SRData.GetRolls(ZugLoot.DB.sheet, 9999)[1].mode, "SIM-OPEN", "open mode tagged")
+-- Off-sheet sim stubs the item at the bottom, flagged not SR'd:
+ok(SRData.IsUnreserved(ZugLoot.DB.sheet, 9999), "sim stubs off-sheet item")
+local simCards = ZugLoot.ItemCards.BuildCards(ZugLoot.DB.sheet)
+eq(simCards[#simCards].itemID, 9999, "stub card at the bottom")
+ok(simCards[#simCards].unsr, "stub card flagged")
 
 -- 4. SimBoss chains one-win: Aaa wins 1001, can't win 1002 -> Ccc takes it.
 ZugLoot.DB = { sheet = makeSheet() }

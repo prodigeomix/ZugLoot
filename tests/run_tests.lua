@@ -26,6 +26,7 @@ run("test_resolver.lua")
 run("test_security.lua")
 run("test_itemcards.lua")
 run("test_sim.lua")
+run("test_reset.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
 -- fake 1.12 frame API to catch typos/nil-globals outside the client.

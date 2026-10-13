@@ -23,7 +23,8 @@ No dependencies. Interface 11200.
   per player.
 - ML: `/zl rf <itemlink>` starts an SR roll. `/zl sim <itemlink>` / `/zl simboss <boss>`
   practice against the loaded sheet (sheet required) and write results back into
-  it — check the Sheet tab afterwards. `/zl reset` clears sim history.
+  it — check the Sheet tab afterwards. The **Reset rolls** button at the top of
+  the window (confirmation window first) or `/zl reset` clears sessions + won marks.
 - Raider: frame pops on ML warning / ROLL_REQ / group-loot drops. `/zl auto on` to auto-roll SRs.
 - `/zl ver` shows the addon-version squares grid. `/zl help` lists commands.
 

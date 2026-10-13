@@ -110,4 +110,26 @@ for i = 1, 30 do
 end
 eq(SRData.RollCount(sheet, 555), SRData.ROLLS_PER_ITEM_MAX, "history capped")
 
+-- 8. Unreserved stub: added at the bottom, flagged, never clobbers SR data.
+local unSheet = SRData.NewSheet()
+unSheet.items[200] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+ok(SRData.EnsureUnreserved(unSheet, 50, 3), "stub added for missing item")
+eq(unSheet.items[50].quality, 3, "stub keeps quality")
+eq(unSheet.items[50].unsr, true, "stub flagged unsr")
+ok(not SRData.EnsureUnreserved(unSheet, 200, 3), "existing SR item untouched")
+eq(#unSheet.items[200].rollers, 1, "SR rollers not clobbered")
+ok(SRData.IsUnreserved(unSheet, 50), "IsUnreserved true for stub")
+ok(not SRData.IsUnreserved(unSheet, 200), "IsUnreserved false for SR item")
+local unCards = Cards.BuildCards(unSheet)
+eq(#unCards, 2, "stub becomes a card")
+eq(unCards[1].itemID, 200, "SR item first")
+eq(unCards[2].itemID, 50, "unreserved card at the bottom")
+eq(unCards[2].unsr, true, "card carries unsr flag")
+local unSum = Cards.CardSummary(unCards[2])
+ok(string.find(unSum, "not SR'd") ~= nil, "summary flags not SR'd")
+-- prune removes stubs only:
+eq(SRData.PruneUnreserved(unSheet), 1, "one stub pruned")
+ok(unSheet.items[50] == nil, "stub gone")
+ok(unSheet.items[200] ~= nil, "SR item kept")
+
 return T
