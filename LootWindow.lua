@@ -794,7 +794,7 @@ function M.BuildDetailFrame()
     return nil
   end
   f:SetWidth(M.DETAIL_WIDTH) f:SetHeight(120)
-  f:SetPoint("CENTER", parent, "CENTER", 200, 40)
+  f:SetPoint("CENTER", parent, "CENTER", 350, 40)
   f:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 16,
