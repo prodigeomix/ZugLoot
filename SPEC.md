@@ -138,9 +138,10 @@ Sheet = {
 - `/zl sheet` opens the big tabbed window (660×540, movable, flat dark palette,
   gold accent strip, tab rail with gold underline on the active tab, per-tab
   scroll bodies with scrollbar + mouse wheel). Tabs: **Sheet** (default) |
-  **Rolls** | **Versions** | **Setup**. `/zl log` opens Rolls, `/zl ver` opens
-  Versions. (`SRView`/`DropLog`/`VersionGrid` standalone frames retired into
-  tabs; their modules keep pure logic + slash commands.)
+  **Raids** | **Rolls** | **Versions** | **Setup**. `/zl log` opens Rolls,
+  `/zl ver` opens Versions, `/zl raids` opens Raids. (`SRView`/`DropLog`/
+  `VersionGrid` standalone frames retired into tabs; their modules keep pure
+  logic + slash commands.)
 - **Sheet tab**, one card per item: SR'd items sorted by itemID ascending,
   unreserved items (rolled but never SR'd — auto-added at the bottom, see §3.3):
   - icon button (texture via `GetItemInfo(tonumber(id))` numeric-ID trick, cf.
@@ -160,6 +161,16 @@ Sheet = {
   `MasterLootUI.AnnounceResult` for every finished session.
 - Header: raidID, item count, rolled-item count. Setup tab: Import (paste),
   Load from File, auto-roll toggle, clear won marks, roll-time/log stats.
+- **Raids tab**: imported raids, newest first — the live sheet is always
+  listed too (synced on load and on every render, so a just-loaded raid shows
+  up even though it was never unloaded). Each row shows raidID (+ green
+  `[ACTIVE]` on the live one), importer, source, archive date, and counts
+  (items / players / sessions / won). **Activate** makes a raid the live
+  sheet and continues it — won marks + roll history come along, and the
+  outgoing sheet is archived first so no progress is lost (`/zl raid <raidID>`
+  does the same from chat). History lives in `ZugLootDB.raidArchive` (capped
+  at 20, deduped by raidID); every import, incoming broadcast, and activation
+  archives the outgoing sheet first (pure `RaidArchive` module, tested).
 
 ### 4.2 Master-looter console (`MasterLootUI.lua`) — RollFor-like
 
@@ -257,6 +268,7 @@ ZugLoot/
   AutoRoll.lua       auto-roll + auto-resolve eligibility
   VersionGrid.lua    squares grid + version request handling
   BossData.lua       tiny boss→items tables for simboss
+  RaidArchive.lua    raid history snapshots: view / continue past raids
   Sim.lua            /zl sim, /zl simboss (uses Resolver)
   DropLog.lua        drop log store + window
   tests/
@@ -277,6 +289,8 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 
 ```
 /zl sheet            open sheet view
+/zl raids            open raid history
+/zl raid <raidID>   activate an archived raid (continue it)
 /zl import           open import frame (ML/RL only for broadcast)
 /zl loadfile         import from CustomData/ZugLoot_SR.txt (ML/RL only)
 /zl rf <link>        start SR roll (ML)        /zl arf <link>  open roll

@@ -13,6 +13,7 @@ FileIO.lua
 SRData.lua
 Resolver.lua
 ItemCards.lua
+RaidArchive.lua
 SRSecurity.lua
 Comm.lua
 SRImport.lua

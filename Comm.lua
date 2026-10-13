@@ -84,6 +84,7 @@ function M.OnMessage(msg, sender)
     local itemID, winner = string.match(msg, "AWARD:(%d+):(.+)$")
     if itemID and Z.DB and Z.DB.sheet and Z.SRData then
       Z.SRData.MarkWon(Z.DB.sheet, tonumber(itemID), winner)
+      if Z.MainWindow then Z.MainWindow.Refresh() end
       if Z.SRView then Z.SRView.Refresh() end
     end
     return
@@ -105,8 +106,15 @@ function M.OnMessage(msg, sender)
       Z.Print("Ignored stale sheet " .. tostring(raidID))
       return
     end
+    if Z.RaidArchive then
+      Z.RaidArchive.ArchiveActive(Z.DB, (time and time()) or 0)
+    end
     Z.DB.sheet = sheet
+    if Z.RaidArchive then
+      Z.RaidArchive.SyncActive(Z.DB, (time and time()) or 0)
+    end
     Z.Print("Sheet received from " .. tostring(sender) .. " (" .. tostring(raidID) .. ")")
+    if Z.MainWindow then Z.MainWindow.Refresh() end
     if Z.SRView then Z.SRView.Refresh() end
     return
   end

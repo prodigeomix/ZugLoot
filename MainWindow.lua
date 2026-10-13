@@ -1,7 +1,7 @@
 -- ZugLoot/MainWindow.lua
 -- Big tabbed window, Aegis-SBR-inspired skin (flat dark palette, 1px hairlines,
 -- tab rail with gold underline, scroll body). In-game only.
--- Tabs: Sheet (default) | Rolls | Versions | Setup.
+-- Tabs: Sheet (default) | Raids | Rolls | Versions | Setup.
 --
 -- Sheet tab: one card per item (sorted by itemID). Each card has:
 --   - icon button (hover = full GameTooltip item details, click = link in chat)
@@ -41,6 +41,7 @@ local QUALITY_RGB = {
 
 local TABS = {
   { key = "sheet",    label = "SHEET" },
+  { key = "raids",    label = "RAIDS" },
   { key = "rolls",    label = "ROLLS" },
   { key = "versions", label = "VERSIONS" },
   { key = "setup",    label = "SETUP" },
@@ -324,6 +325,65 @@ function M.RenderSheet()
 end
 
 -------------------------------------------------------------------------------
+-- Raids tab: imported raids (live sheet included). Activate switches the
+-- active sheet to continue one (won marks + history come along).
+-------------------------------------------------------------------------------
+function M.RenderRaids()
+  local key = "raids"
+  ClearBody(key)
+  local b = bodies[key]
+  local now = (time and time()) or 0
+  local rows = (Z.RaidArchive and Z.RaidArchive.ListSummaries(Z.DB, now)) or {}
+  if Z.Util.ArrayCount(rows) == 0 then
+    local row = CreateFrame("Frame", nil, b.child)
+    row:SetWidth(BODY_WIDTH) row:SetHeight(40)
+    local fs = FS(row, "GameFontHighlight", "(no past raids yet — import a sheet to start the history)")
+    fs:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -8)
+    TrackRow(key, row, 40)
+    return
+  end
+  for i = 1, Z.Util.ArrayCount(rows) do
+    local r = rows[i]
+    local row = CreateFrame("Frame", nil, b.child)
+    row:SetWidth(BODY_WIDTH) row:SetHeight(52)
+    local title = FS(row, "GameFontNormal", "")
+    title:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
+    title:SetWidth(BODY_WIDTH - 110) title:SetJustifyH("LEFT")
+    local activeTag = r.active and "  |cFF00FF00[ACTIVE]|r" or ""
+    title:SetText(tostring(r.raidID) .. activeTag)
+    local sub = FS(row, "GameFontHighlightSmall", "")
+    sub:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -22)
+    sub:SetWidth(BODY_WIDTH - 110) sub:SetJustifyH("LEFT")
+    local when = "?"
+    if r.archivedAt and r.archivedAt > 0 then
+      if date then when = date("%Y-%m-%d %H:%M", r.archivedAt)
+      elseif os and os.date then when = os.date("%Y-%m-%d %H:%M", r.archivedAt) end
+    end
+    sub:SetText("by " .. tostring(r.importedBy) .. " · " .. tostring(r.source or "?") .. " · " .. when
+      .. "\n" .. tostring(r.nItems or 0) .. " items · " .. tostring(r.nRollers or 0) .. " players · "
+      .. tostring(r.nSessions or 0) .. " sessions · " .. tostring(r.nWon or 0) .. " won")
+    sub:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3])
+    local rid = r.raidID
+    if not r.active then
+      local actB = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+      actB:SetWidth(80) actB:SetHeight(20)
+      actB:SetPoint("TOPRIGHT", row, "TOPRIGHT", -8, -4)
+      actB:SetText("Activate")
+      actB:SetScript("OnClick", function() Z.SRImport.ActivateArchivedRaid(rid) end)
+      Tip(actB, "Activate", "Make this raid the active sheet and continue it.",
+        "Won marks + roll history come along. The current sheet is archived first.")
+    end
+    -- zebra
+    if math.mod(i, 2) == 0 then
+      local z = row:CreateTexture(nil, "BACKGROUND")
+      z:SetTexture(1, 1, 1, 0.03)
+      z:SetAllPoints(row)
+    end
+    TrackRow(key, row, 52)
+  end
+end
+
+-------------------------------------------------------------------------------
 -- Rolls tab: flat session log (newest first), each drop on its own block
 -------------------------------------------------------------------------------
 function M.RenderRolls()
@@ -469,6 +529,7 @@ end
 -------------------------------------------------------------------------------
 local RENDER = {
   sheet = M.RenderSheet,
+  raids = M.RenderRaids,
   rolls = M.RenderRolls,
   versions = M.RenderVersions,
   setup = M.RenderSetup,

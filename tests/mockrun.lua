@@ -49,6 +49,7 @@ ZugLoot.Print = function() end
 ZugLoot.DB = { sheet=nil, drops={}, rollTime=15 };
 ZugLoot.CharDB = { autoRoll=false };
 dofile("SRData.lua"); dofile("Resolver.lua"); dofile("ItemCards.lua");
+dofile("RaidArchive.lua");
 dofile("SRSecurity.lua");
 ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
 ZugLoot.AutoRoll = { Set=function() end };
@@ -65,7 +66,8 @@ Z.SRData.RecordRolls(s, 9999, { t=2, mode="OPEN", winners={"SoloPlayer"}, entrie
 Z.SRData.MarkWon(s, 17063, "Carbon");
 Z.DB.sheet = s;
 Z.DB.drops = { { t=1, itemID=17063, link="[Test Sword]", source="raid", outcome="award", winner="Carbon" } };
-for _,tab in ipairs({"sheet","rolls","versions","setup"}) do
+Z.RaidArchive.ArchiveActive(Z.DB, 2000);
+for _,tab in ipairs({"sheet","raids","rolls","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end

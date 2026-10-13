@@ -17,6 +17,7 @@ function Z.InitDB()
   ZugLootDB = ZugLootDB or {}
   ZugLootCharDB = ZugLootCharDB or {}
   ZugLootDB.sheet = ZugLootDB.sheet or nil
+  ZugLootDB.raidArchive = ZugLootDB.raidArchive or {}
   ZugLootDB.drops = ZugLootDB.drops or {}
   ZugLootDB.rollTime = ZugLootDB.rollTime or Z.Limits.ROLL_TIMEOUT_DEFAULT
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
@@ -60,8 +61,10 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|log|logclear|reset|help")
+    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|log|logclear|reset|help")
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
+  elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
+  elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
   elseif cmd == "import" then Z.SRImport.ShowPaste()
   elseif cmd == "loadfile" then Z.SRImport.LoadFromFile()
   elseif cmd == "rf" then Z.MasterLootUI.StartRoll(rest, "SR")

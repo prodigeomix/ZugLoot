@@ -17,7 +17,10 @@ No dependencies. Interface 11200.
   `<WoW>/CustomData/ZugLoot_SR.txt` (see `CustomData_example/ZugLoot_SR.txt`)
   and press **Load from File**. Solo (no group) you can still load a sheet
   the same way to preview/sim — it just isn't broadcast until you group up.
-- Everyone: `/zl sheet` opens the big tabbed window (Sheet | Rolls | Versions | Setup).
+- Everyone: `/zl sheet` opens the big tabbed window (Sheet | Raids | Rolls | Versions | Setup).
+  The Raids tab lists all raids including the live one — **Activate**
+  (or `/zl raid <id>`) switches the active sheet and continues it with won
+  marks + history intact.
   Sheet tab shows one card per item: hoverable icon, `Name xN (+SR+)`, `[HR]` /
   `[rolled xN]` badges, WON marks, and every roll session this raid one line
   per player.
@@ -52,4 +55,4 @@ lua tests/run_tests.lua
 
 ## Commands
 
-`/zl sheet|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|log|logclear|reset|help`
+`/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|log|logclear|reset|help`

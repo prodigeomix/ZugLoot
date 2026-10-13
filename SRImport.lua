@@ -49,7 +49,15 @@ function M.ApplySheet(sheet, source, importer)
   sheet.meta.importedAt = (time and time()) or 0
   sheet.meta.importedBy = importer or (UnitName and UnitName("player")) or "?"
   sheet.meta.raidID = sheet.meta.raidID or (sheet.meta.importedBy .. "-" .. tostring(sheet.meta.importedAt))
+  -- Keep the outgoing raid around: archive it before replacing.
+  if Z.RaidArchive then
+    Z.RaidArchive.ArchiveActive(Z.DB, (time and time()) or 0)
+  end
   Z.DB.sheet = sheet
+  -- List the new raid immediately, even though it was never unloaded.
+  if Z.RaidArchive then
+    Z.RaidArchive.SyncActive(Z.DB, (time and time()) or 0)
+  end
   if Z.SRView then Z.SRView.Refresh() end
   local nItems = Z.Util.TableCount(sheet.items)
   local canBC = Z.SRSecurity and Z.SRSecurity.CanBroadcast and Z.SRSecurity.CanBroadcast()
@@ -165,6 +173,33 @@ function M.RequestResetRollLog()
     timeout = 0, whileDead = 1,
   }
   StaticPopup_Show("ZUGLOOT_RESET_ROLLS")
+end
+
+-- Switch the live sheet to an archived raid (view its details or continue
+-- where it left off: won marks + roll history come along). The outgoing
+-- sheet is archived first so no progress is lost. No import permission
+-- needed: this only rearranges local snapshots, never pulls in new data.
+function M.ActivateArchivedRaid(raidID)
+  if not Z.RaidArchive then return end
+  if not raidID then Z.Print("Usage: /zl raid <raidID> (see the Raids tab)") return end
+  local cur = Z.DB and Z.DB.sheet and Z.DB.sheet.meta and Z.DB.sheet.meta.raidID
+  if cur == raidID then
+    Z.Print(tostring(raidID) .. " is already the active sheet.")
+    if Z.MainWindow then Z.MainWindow.Refresh() end
+    return
+  end
+  Z.RaidArchive.ArchiveActive(Z.DB, (time and time()) or 0)
+  local sheet, err = Z.RaidArchive.RestoreSheet(Z.DB, raidID)
+  if not sheet then
+    Z.Print("Activate failed: " .. tostring(err))
+    return
+  end
+  local nItems = Z.Util.TableCount(sheet.items)
+  local nSess = Z.RaidArchive.CountSessions(sheet)
+  Z.Print("Active sheet: " .. tostring(raidID) .. " (" .. nItems .. " items, " .. nSess .. " past sessions). Previous sheet archived.")
+  if Z.MainWindow then Z.MainWindow.Refresh() end
+  if Z.SRView then Z.SRView.Refresh() end
+  if Z.DropLog then Z.DropLog.Add(nil, nil, "raid", "activate", tostring(raidID)) end
 end
 
 function M.ResetWon()
