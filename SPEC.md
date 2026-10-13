@@ -211,9 +211,14 @@ Sheet = {
   or (b) `ROLL_REQ` received, or (c) **group-loot mode**: loot method is group and
   a roll-worthy item (quality ≥ threshold) is announced — same frame, so group
   loot looks identical to master loot from the raider's side (per requirement).
-- Contents: item icon + link, countdown bar (duration synced from ML), roll-type
-  buttons **SR / MS / OS / TMOG** with caps 100/100/99/98, sorted live roll list
-  (SR red, MS yellow, OS green, TM cyan — LootBlare colors), winner banner.
+- Contents (LootBlare layout, 220×250): green countdown **status bar floating
+  above the frame** with seconds text (green→orange→red, pulsing under 5s),
+  big 40px item icon (hover = item tooltip, click = chat-link/dress-up) +
+  quality-colored truncated name, quality-colored frame border, big countdown
+  digits, **two-column roll list** — class-colored names left, `roll (min-max)`
+  in roll-type color right, grouped **SR > MS > OS > TMOG**, best-first, max 8
+  rows — four **dice buttons** (SR/MS/OS/TM) with colored borders, hover glow
+  and tooltips, plus a top-screen huge-text **winner banner** (5s fade).
 - First-roll-only; extra rolls ignored with notice. Auto-close timer configurable
   (`/zl time N`, `/zl autoclose on|off`).
 - Draggable; `/zl show|hide`.

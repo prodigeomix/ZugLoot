@@ -16,9 +16,15 @@ local function newObj(kind)
   function o:SetBackdropBorderColor() end
   function o:Hide() self.hidden=true end
   function o:Show() self.hidden=false end
+  function o:SetAlpha(a) self.alpha=a end
+  function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
   function o:CreateTexture(...) local t={}; function t:SetTexture() end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight() end; function t:SetWidth() end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; return t end
-  function o:CreateFontString(...) local fs={txt=""}; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint() end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; return fs end
+  function o:CreateFontString(...) local fs={txt=""}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint() end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
+  function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
+  function o:SetStatusBarTexture() end
+  function o:SetStatusBarColor() end
+  function o:SetValue(v) self.sbval=v end
   function o:SetText(s) self.label=s end
   function o:SetThumbTexture() end
   function o:GetThumbTexture() local t={}; function t:SetWidth() end; function t:SetHeight() end; function t:SetVertexColor() end; return t end
@@ -44,6 +50,12 @@ UnitName = function() return "SoloPlayer" end
 GetNumRaidMembers = function() return 0 end
 GetNumPartyMembers = function() return 0 end
 ChatFrameEditBox = { IsVisible=function() return false end };
+UIFrameFadeIn = function(f) if f then f:SetAlpha(1) end end
+GetItemQualityColor = function(q) return 0.64, 0.21, 0.93, "|cffa335ee" end
+GetTime = function() return 100 end
+UnitClass = function() return "Warrior", "WARRIOR" end
+IsControlKeyDown = function() return false end
+IsShiftKeyDown = function() return false end
 math.mod = math.mod or function(a,b) return a % b end;
 ZugLoot = {}; dofile("Util.lua"); dofile("Constants.lua");
 ZugLoot.Print = function() end
@@ -56,6 +68,7 @@ ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, Rese
 ZugLoot.AutoRoll = { Set=function() end };
 ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, ColorFor=function() return "GREEN" end, Request=function() end };
 dofile("MainWindow.lua");
+dofile("RaiderLootUI.lua");
 local Z = ZugLoot;
 Z.MainWindow.Build();
 Z.MainWindow.Show("sheet");
@@ -106,4 +119,14 @@ assert(string.find(act, "Molten Core", 1, true), "active raid name, got: " .. to
 assert(string.find(act, "started 2024", 1, true), "active raid start, got: " .. tostring(act));
 assert(not string.find(act, "MOCK-RAID-1", 1, true), "ID stays on sub-line, got: " .. tostring(act));
 print("header invariant OK");
+-- LootBlare-style roll window: build, show item, feed grouped rolls.
+Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
+Z.RaiderLootUI.OnRoll("Thrall", 40, "SR");
+Z.RaiderLootUI.OnRoll("Jaina", 50, "MS");
+Z.RaiderLootUI.OnRoll("Varian", 45, "OS");
+Z.RaiderLootUI.OnRoll("Anduin", 98, "TMOG");
+Z.RaiderLootUI.OnRoll("Guldan", 35, "SR");
+assert(#Z.RaiderLootUI.rolls == 5, "roll window collected 5 rolls");
+Z.RaiderLootUI.ShowResult("The winner is Jaina (50) !");
+print("roll window OK");
 print("MOCK UI RUN OK");

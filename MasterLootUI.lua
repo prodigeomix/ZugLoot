@@ -160,6 +160,14 @@ function M.AnnounceResult(sess, res)
     else
       Z.Print("Winner: " .. table.concat(w, ", "))
     end
+    -- LootBlare-style top-screen banner for the local player.
+    if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
+      Z.RaiderLootUI.ShowResult("The winner is " .. table.concat(w, ", ") .. " !")
+    end
+  else
+    if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
+      Z.RaiderLootUI.ShowResult("No winner this time.")
+    end
   end
   -- Persist the session into per-item roll history (survives the session).
   -- Same shape the sim writes (Resolver.ToHistoryEntry).
