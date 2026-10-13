@@ -93,9 +93,11 @@ dofile("LootWindow.lua")
 local function resetHarness(rollTime)
   ZugLoot.Timer.CancelAll()
   Sim.pending = {}
+  Sim.live = nil
   Sim.running = false
   Sim.auto = false
   Sim.lastEntries = {}
+  Sim.doneRows = {}
   Sim.pendingAward = nil
   ML.session = nil
   ML.pendingAwardMenu = nil
@@ -403,5 +405,94 @@ ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "winner marked after confirm")
 ZugLoot.AwardMenuUI = nil
 StaticPopupDialogs = nil
 StaticPopup_Show = nil
+
+-- 16. Fresh loot session: a second simboss starts clean — no done rows,
+-- queue, detail, menu, raider rolls or trailing timers from the first run.
+-- (Ragnaros regression: the second run showed stale done/rolling rows.)
+resetHarness()
+math.random = rigged({ 90, 80 })
+Sim.SimBoss("TestBoss")
+Sim.RequestRoll(1001)
+ok(drain(), "drain fresh-run item 1")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain fresh-run award")
+math.random = realRandom
+eq(#Sim.pending, 1, "first run leaves one item queued")
+ok(Sim.doneRows[1001] ~= nil, "first run records a done row")
+-- Leftover detail + raider rolls + a stray timer, as a live client has.
+ZugLoot.LootWindow.OpenDetail(1001)
+ZugLoot.RaiderLootUI = ZugLoot.RaiderLootUI or {}
+ZugLoot.RaiderLootUI.rolls = { { player = "Aaa" } }
+local hideCalls2 = 0
+local origHide = ZugLoot.RaiderLootUI.Hide
+ZugLoot.RaiderLootUI.Hide = function() hideCalls2 = hideCalls2 + 1 end
+ZugLoot.Timer.After(99, function() end)
+ok(ZugLoot.Timer.Pending() >= 1, "stray timer present")
+-- Sheet history/won marks persist (raid-night state); session state resets.
+local histBefore = SRData.RollCount(ZugLoot.DB.sheet, 1001)
+ok(histBefore >= 1, "history recorded by first run")
+Sim.SimBoss("TestBoss")
+eq(Sim.doneRows[1001], nil, "done rows forgotten")
+eq(#Sim.pending, 2, "queue rebuilt fresh (no leftovers)")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), histBefore, "history kept")
+ok(ML.session == nil, "no live session carried over")
+ok(ML.pendingAwardMenu == nil, "no pending menu carried over")
+ok(ZugLoot.LootWindow.detail == nil, "open detail closed")
+ok(ZugLoot.Timer.Pending() == 0, "trailing timers cancelled")
+ok(hideCalls2 >= 1, "raider window hidden (rolls cleared)")
+eq(#ZugLoot.LootWindow.items, 2, "loot window lists only the new drops")
+ok(not ZugLoot.LootWindow.Find(1001) or ZugLoot.LootWindow.Find(1001).status == "open",
+  "rebuilt row starts open, not done")
+ZugLoot.RaiderLootUI.Hide = origHide
+
+-- 17. No item may vanish: the row stays (rolling) while the roll runs and
+-- after a no-winner finish; only the ML's award (or direct award) marks
+-- it done. Covers: zero-roll sessions (all excluded),roller-less on-sheet
+-- items, and stub items created by earlier runs.
+resetHarness()
+-- Everyone has already won 1001 -> all SR rolls excluded -> no winner.
+SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Aaa")
+SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Bbb")
+math.random = rigged({ 90, 80 })
+Sim.SimItem("1001")
+ok(ML.session ~= nil, "no-winner session still runs")
+eq(Sim.live and Sim.live.itemID, 1001, "item tracked live while rolling")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "row present at roll start")
+eq(ZugLoot.LootWindow.Find(1001).status, "rolling", "row rolling, not removed")
+ok(drain(), "drain no-winner item")
+math.random = realRandom
+-- Nothing auto-closed or auto-skipped: the ML still owns the decision.
+ok(ML.session ~= nil, "session parked on the award menu (no auto-close)")
+ok(ML.pendingAwardMenu ~= nil, "award menu pending even with no winners")
+ok(ML.pendingAwardMenu.data.none, "menu flagged none")
+ok(Sim.live ~= nil and Sim.live.itemID == 1001, "item still live after the roll")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "row still listed after the roll")
+eq(ZugLoot.LootWindow.Find(1001).status, "rolling", "row still rolling until awarded")
+-- ML hands it to someone else: only now does it go done.
+ML.AwardChosen({ name = "Stranger", via = "menu" })
+ok(drain(), "drain no-winner award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Stranger"), "ML pick awarded")
+ok(Sim.live == nil, "item no longer live after award")
+local doneRow = ZugLoot.LootWindow.Find(1001)
+ok(doneRow ~= nil, "awarded row still listed")
+eq(doneRow and doneRow.status, "done", "awarded row marked done")
+
+-- 18. Roller-less on-sheet items fall back to an open roll of the sheet
+-- (instead of finishing with zero rolls and no winner).
+resetHarness()
+ZugLoot.DB.sheet.items[1001].rollers = {}
+math.random = rigged({ 42, 43, 44 })
+Sim.SimBoss("TestBoss")
+Sim.RequestRoll(1001)
+ok(drain(), "drain roller-less item")
+math.random = realRandom
+ok(SRData.RollCount(ZugLoot.DB.sheet, 1001) >= 1, "roller-less item still rolled")
+local hr = SRData.GetRolls(ZugLoot.DB.sheet, 1001)[1]
+ok(#hr.entries > 0, "fallback produced real rolls")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "fallback item still listed")
+ML.AwardChosen({ name = hr.winners[1], via = "winner" })
+ok(drain(), "drain fallback award")
+ok(Sim.live == nil, "fallback item cleared on award")
+eq(ZugLoot.LootWindow.Find(1001).status, "done", "fallback item done on award")
 
 return T

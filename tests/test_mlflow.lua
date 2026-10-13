@@ -100,9 +100,11 @@ local realRandom = math.random
 local function resetHarness(rollTime)
   ZugLoot.Timer.CancelAll()
   Sim.pending = {}
+  Sim.live = nil
   Sim.running = false
   Sim.auto = false
   Sim.lastEntries = {}
+  Sim.doneRows = {}
   Sim.pendingAward = nil
   ML.session = nil
   ML.pendingAwardMenu = nil

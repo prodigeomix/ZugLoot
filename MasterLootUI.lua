@@ -539,6 +539,19 @@ function M.AwardDirect(itemID, winnerName, source)
   end
   M.DoAward(itemID, link, winnerName, source == "sim" and "sim" or "raid")
   if Z.LootWindow then Z.LootWindow.MarkDone(itemID) end
+  -- A directly-awarded sim row leaves the roll queue (the done row
+  -- stays): it must not be rollable after being handed out.
+  if source == "sim" and Z.Sim then
+    if Z.Sim.pending then
+      for i = Z.Util.ArrayCount(Z.Sim.pending), 1, -1 do
+        if Z.Sim.pending[i] and Z.Sim.pending[i].itemID == itemID then
+          table.remove(Z.Sim.pending, i)
+        end
+      end
+    end
+    if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
+    if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
+  end
 end
 
 -- Award core: marks won, broadcasts, logs, prints. No UI.
@@ -556,17 +569,16 @@ end
 
 -- Sim award flow: the ML picks one row of the award menu for each winner
 -- slot. Headless (tests): the menu stays pending and the harness plays
--- the ML via AwardChosen.
+-- the ML via AwardChosen. A no-winner finish is NOT auto-closed: the ML
+-- awards the item to anyone (or re-rolls); the row stays until awarded.
 M.pendingAwardMenu = nil -- { sess, data } while the ML decides
 
 function M.HandleSimAward(sess, data)
   M.pendingAwardMenu = { sess = sess, data = data }
   local winners = data.winners or {}
   if Z.Util.ArrayCount(winners) == 0 then
-    -- Nobody eligible: record the empty round and move on.
-    M.pendingAwardMenu = nil
-    M.session = nil
-    if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
+    -- Nobody eligible: the item stays open for the ML to award anyone
+    -- or re-roll (/zl cr). Session stays parked on the award menu.
     return
   end
   if not (StaticPopupDialogs and StaticPopup_Show) then
@@ -633,6 +645,8 @@ function M.AwardChosen(choice)
     M.pendingAwardMenu = nil
     M.session = nil
     if sess.silent then
+      -- Awarded = done: only now does the row leave the rolling state.
+      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
       if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
     elseif Z.RaiderLootUI and Z.RaiderLootUI.Hide then
       Z.RaiderLootUI.Hide()
@@ -662,6 +676,8 @@ function M.AwardChosen(choice)
     M.pendingAwardMenu = nil
     M.session = nil
     if sess.silent then
+      -- Awarded = done: only now does the row leave the rolling state.
+      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
       if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
     end
   end
@@ -690,6 +706,7 @@ end
 function M.OnLootOpened()
   if not Z.SRSecurity or not M.RequireML() then return end
   if M.session then return end -- already rolling
+  if M.pendingAwardMenu then return end -- ML still deciding the award
   if not GetNumLootItems or not GetLootSlotLink then return end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
   local found = {}
@@ -727,6 +744,9 @@ function M.OnLootOpened()
     Z.Comm.WarnGroup("ZugLoot loot: " .. f.link)
     if Z.DropLog then Z.DropLog.Add(Z.Util.ItemID(f.link), f.link, "loot", "seen", nil) end
   end
+  -- Fresh loot session: a new corpse must not inherit rows, done marks,
+  -- open detail, sim queue or raider rolls from a previous loot/sim.
+  if Z.Sim and Z.Sim.ResetFresh then Z.Sim.ResetFresh() end
   -- RollFor-style loot window: the ML works each row from the list.
   if Z.LootWindow then
     local rows = {}
