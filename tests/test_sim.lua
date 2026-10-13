@@ -95,7 +95,6 @@ local function resetHarness(rollTime)
   Sim.pending = {}
   Sim.running = false
   Sim.auto = false
-  Sim.tmogPassAlong = false
   Sim.lastEntries = {}
   Sim.pendingAward = nil
   ML.session = nil
@@ -174,7 +173,7 @@ local sawStart, sawResult, sawWinner = false, false, false
 for i = 1, #printed do
   if string.find(printed[i], "ZugLoot rolling") then sawStart = true end
   if string.find(printed[i], "ZugLoot result") then sawResult = true end
-  if string.find(printed[i], "Winner: Aaa") then sawWinner = true end
+  if string.find(printed[i], "SR winner: Aaa", 1, true) then sawWinner = true end
 end
 ok(sawStart and sawResult and sawWinner, "solo sees start/result/winner locally")
 
@@ -194,10 +193,10 @@ ok(channels["RAID_WARNING"], "winner on RAID_WARNING")
 local startCh, winCh = nil, nil
 for i = 1, #chatSent do
   if string.find(chatSent[i].msg, "ZugLoot rolling") then startCh = chatSent[i].channel end
-  if string.find(chatSent[i].msg, "Winner:") then winCh = chatSent[i].channel end
+  if string.find(chatSent[i].msg, "SR winner:", 1, true) then winCh = chatSent[i].channel end
 end
 eq(startCh, "RAID_WARNING", "roll start warns raid")
-eq(winCh, "RAID_WARNING", "winner warns raid")
+eq(winCh, "RAID_WARNING", "SR winner warns raid")
 
 -- 5. Party routing: everything on PARTY (no raid warnings in a party).
 resetHarness()
@@ -394,6 +393,9 @@ for i = 1, #printed do
   if string.find(printed[i], "POPUP: Award", 1, true) then sawPopup = true end
 end
 ok(sawPopup, "award confirm shown with item + winner filled in")
+local confirmText = StaticPopupDialogs["ZUGLOOT_AWARD"].text
+ok(not string.find(confirmText, "item:1001", 1, true),
+  "confirm names the item, got: " .. tostring(confirmText))
 -- ML clicks Award in the popup: award lands, session closes.
 StaticPopupDialogs["ZUGLOOT_AWARD"].OnAccept()
 ok(drain(), "drain after confirm")

@@ -2,9 +2,11 @@
 -- RollFor-LootFrame-style (modern skin) loot list for the master looter:
 -- a numbered list; each row shows the item icon, the item name
 -- (quality-colored), and the SR/HR badge on the right. Clicking a row opens
--- the row detail: direct Award when there is exactly one SR/HR holder,
--- "..." (More) for the full choice list (award anyone / initiate roll),
--- Close to dismiss the detail and keep working the overview.
+-- the row detail, which STAYS OPEN as the roll window (RollFor preview ->
+-- rolling -> winners flow): choose SR (direct award on a single holder) /
+-- Roll / Close; while rolling it lists every valid roll with its kind
+-- (SR/MS/OS/TMOG); when the roll finishes it becomes the award window
+-- (winner rows + ... for anyone else). Close returns to the overview.
 --
 -- Data layer (M.items, M.detail) is plain tables so tests drive it
 -- headless; frames are client-only (nil-guarded, mock-safe).
@@ -12,6 +14,9 @@
 --         source, index }
 --   badge: "HR" | "SR" | "SR:n" | ""; status: "open"|"rolling"|"done";
 --   source: "loot"|"sim"; index: 1-based row number (RollFor modern skin).
+-- Detail: BuildDetail fields + phase ("pick"|"rolling"|"award"),
+--   sessionID (roll it tracks), rolls ({name, roll, rollType, effective}),
+--   menu (award data once finished), countdown (seconds left, client paint).
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
@@ -29,6 +34,12 @@ M.detailFrame = nil
 
 M.ROW_HEIGHT = 24
 M.ICON_SIZE = 20
+-- Button bar: floating flow layout (justify each row, wrap when narrow).
+M.BTN_HEIGHT = 22
+M.BTN_GAP = 8
+M.BTN_MARGIN = 10
+M.BTN_MORE_W = 44
+M.BTN_CLOSE_W = 60
 -- Wide enough for "Award <name>" on ONE line (RollFor sizes rows to the
 -- widest content). 320 fits ~35-char names next to the ... / Close buttons.
 M.DETAIL_WIDTH = 320
@@ -246,6 +257,79 @@ function M.HideTip()
   if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
 end
 
+-- Button width estimator (mock-safe: GetStringWidth when available).
+function M.ButtonWidth(btn, text)
+  local fs = btn.GetFontString and btn:GetFontString()
+  local w = 0
+  if fs and fs.GetStringWidth then w = fs:GetStringWidth() or 0 end
+  if w == 0 then w = string.len(tostring(text)) * 7 end
+  w = w + 24
+  if w < 80 then w = 80 end
+  return w
+end
+
+-- Flow layout (pure, headless-testable): pack visible buttons into rows
+-- inside `barW`, then justify each row (even side margins, even gaps).
+-- Input: { {btn=ref, w=width}... } in bar order. Returns rows of
+-- { {btn, x, w}... } with x relative to the bar's left edge, plus the
+-- row count. Rows stack upward from the bar bottom (row 1 = bottom).
+function M.LayoutBarRows(slots, barW)
+  local rows, cur, used = {}, {}, 0
+  local gap = M.BTN_GAP
+  for i = 1, Z.Util.ArrayCount(slots or {}) do
+    local s = slots[i]
+    local need = s.w + (Z.Util.ArrayCount(cur) > 0 and gap or 0)
+    if Z.Util.ArrayCount(cur) > 0 and used + need > barW then
+      table.insert(rows, cur)
+      cur, used = {}, 0
+      need = s.w
+    end
+    table.insert(cur, s)
+    used = used + need
+  end
+  if Z.Util.ArrayCount(cur) > 0 then table.insert(rows, cur) end
+  -- Justify: even margins + even gaps per row.
+  local out = {}
+  for r = 1, Z.Util.ArrayCount(rows) do
+    local row = rows[r]
+    local total = 0
+    for i = 1, Z.Util.ArrayCount(row) do total = total + row[i].w end
+    local gaps = Z.Util.ArrayCount(row) + 1
+    local space = (barW - total) / gaps
+    if space < 0 then space = 0 end
+    local placed, x = {}, space
+    for i = 1, Z.Util.ArrayCount(row) do
+      table.insert(placed, { btn = row[i].btn, x = x, w = row[i].w })
+      x = x + row[i].w + space
+    end
+    table.insert(out, placed)
+  end
+  return out
+end
+
+-- Apply a LayoutBarRows result to live buttons: row 1 sits on the bar
+-- bottom (BOTTOM + margin), higher rows stack above it.
+function M.PlaceBarRows(f, rows, barW)
+  if not (f and rows) then return 0 end
+  local bh = M.BTN_HEIGHT
+  for r = 1, Z.Util.ArrayCount(rows) do
+    local y = M.BTN_MARGIN + (r - 1) * (bh + M.BTN_GAP)
+    for i = 1, Z.Util.ArrayCount(rows[r]) do
+      local cell = rows[r][i]
+      local btn = cell.btn
+      if btn then
+        if btn.SetWidth then btn:SetWidth(cell.w) end
+        if btn.ClearAllPoints then btn:ClearAllPoints() end
+        if btn.SetPoint then
+          btn:SetPoint("BOTTOMLEFT", f, "BOTTOMLEFT", M.BTN_MARGIN + cell.x, y)
+        end
+        if btn.Show then btn:Show() end
+      end
+    end
+  end
+  return Z.Util.ArrayCount(rows)
+end
+
 -- Quality color helper: client GetItemQualityColor when present, else the
 -- Z.Colors hex fallback (keeps headless RowText deterministic).
 function M.QualityHex(q)
@@ -392,7 +476,62 @@ function M.BuildDetail(itemID)
     source = it.source,
     rollers = rollers,
     single = Z.Util.ArrayCount(rollers) == 1,
+    phase = "pick", -- pick -> rolling -> award
+    sessionID = nil,
+    rolls = {},
+    menu = nil,
+    countdown = nil,
   }
+end
+
+-- Feed a roll into the open detail (called from OnSystemRoll): only rolls
+-- for the tracked session, first-roll-only, exactly the live list rule.
+-- Returns true when the roll landed on the detail.
+function M.DetailOnRoll(itemID, sessionID, player, roll, rollType, effective)
+  local d = M.detail
+  if not d or d.itemID ~= itemID then return false end
+  if d.phase ~= "rolling" then return false end
+  if sessionID and d.sessionID and sessionID ~= d.sessionID then return false end
+  d.rolls = d.rolls or {}
+  for i = 1, Z.Util.ArrayCount(d.rolls) do
+    if d.rolls[i].name == player then return false end
+  end
+  table.insert(d.rolls, { name = player, roll = roll, rollType = rollType,
+    effective = effective })
+  M.RefreshDetail()
+  return true
+end
+
+-- The roll finished: hand the award menu to the open detail, which becomes
+-- the award window (winner rows + ... for anyone else). Keeps sessionID so
+-- late rolls for the same session still land (harmless).
+function M.DetailOnFinish(itemID, menu)
+  local d = M.detail
+  if not d or d.itemID ~= itemID then return false end
+  d.menu = menu
+  d.phase = "award"
+  d.countdown = nil
+  M.RefreshDetail()
+  return true
+end
+
+-- Sorted roll rows for paint/text: SR > MS > OS > TMOG, best first.
+function M.SortedDetailRolls(d)
+  d = d or M.detail
+  local order = { SR = 1, MS = 2, OS = 3, TMOG = 4 }
+  local out = {}
+  for i = 1, Z.Util.ArrayCount((d and d.rolls) or {}) do
+    table.insert(out, d.rolls[i])
+  end
+  table.sort(out, function(a, b)
+    local oa, ob = order[a.rollType] or 9, order[b.rollType] or 9
+    if oa ~= ob then return oa < ob end
+    if (a.effective or a.roll or 0) ~= (b.effective or b.roll or 0) then
+      return (a.effective or a.roll or 0) > (b.effective or b.roll or 0)
+    end
+    return (a.name or "") < (b.name or "")
+  end)
+  return out
 end
 
 function M.OpenDetail(itemID)
@@ -410,18 +549,48 @@ function M.CloseDetail()
   M.detailFrame = nil
 end
 
--- Detail display lines (headless/text): title, roller list, actions.
+-- Detail display lines (headless/text): title, phase body, actions.
 function M.DetailLines(d)
   d = d or M.detail
   local lines = {}
   if not d then return lines end
   local head = tostring(d.name or d.link or ("item:" .. d.itemID))
   if d.badge and d.badge ~= "" then head = head .. " [" .. d.badge .. "]" end
+  if d.phase == "rolling" then head = head .. " [rolling]" end
   table.insert(lines, head)
-  if Z.Util.ArrayCount(d.rollers) > 0 then
-    table.insert(lines, "  reserved by: " .. table.concat(d.rollers, ", "))
+  if d.phase == "rolling" then
+    -- Live roll list: every valid roll with its kind (RollFor roll view).
+    local rows = M.SortedDetailRolls(d)
+    if Z.Util.ArrayCount(rows) == 0 then
+      table.insert(lines, "  waiting for rolls...")
+    else
+      for i = 1, Z.Util.ArrayCount(rows) do
+        local r = rows[i]
+        local eff = ""
+        if r.effective and r.effective ~= r.roll then
+          eff = " (=" .. tostring(r.effective) .. ")"
+        end
+        table.insert(lines, "  " .. tostring(r.rollType) .. ": "
+          .. tostring(r.name) .. " " .. tostring(r.roll) .. eff)
+      end
+    end
+  elseif d.phase == "award" and d.menu then
+    -- Award window: winner rows first, then the ... choices.
+    local winners = d.menu.winners or {}
+    for i = 1, Z.Util.ArrayCount(winners) do
+      local w = winners[i]
+      table.insert(lines, "  winner: " .. tostring(w.name)
+        .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
+    end
+    if Z.Util.ArrayCount(winners) == 0 then
+      table.insert(lines, "  (no eligible rolls — pick anyone or cancel)")
+    end
   else
-    table.insert(lines, "  no reserves — open roll")
+    if Z.Util.ArrayCount(d.rollers) > 0 then
+      table.insert(lines, "  reserved by: " .. table.concat(d.rollers, ", "))
+    else
+      table.insert(lines, "  no reserves — open roll")
+    end
   end
   local actions = M.DetailActions(d)
   local names = {}
@@ -430,11 +599,45 @@ function M.DetailLines(d)
   return lines
 end
 
--- Detail actions (data): Award (single holder only), ... (More), Close.
+-- Detail actions (data) per phase.
+-- pick:    Award (single holder only), ... (More), Close.
+-- rolling: Finish early (fr), Cancel (cr), Close (window only, roll runs on).
+-- award:   Award <winner> per winner row, ... (anyone else), Close.
 function M.DetailActions(d)
   d = d or M.detail
   local actions = {}
   if not d then return actions end
+  if (d.phase or "pick") == "rolling" then
+    table.insert(actions, { id = "finish", label = "Finish" })
+    table.insert(actions, { id = "cancel", label = "Cancel" })
+    table.insert(actions, { id = "close", label = "Close" })
+    return actions
+  end
+  if (d.phase or "pick") == "award" and d.menu then
+    for i = 1, Z.Util.ArrayCount(d.menu.winners or {}) do
+      local w = d.menu.winners[i]
+      table.insert(actions, { id = "award-name", label = "Award " .. w.name
+        .. " (" .. tostring(w.rollType) .. ")", name = w.name })
+    end
+    -- TMOG kind winner: its own row whenever the kind was contested. The
+    -- ML awards the SR, MS, OS or TMOG winner directly; anything after
+    -- the award (e.g. a trade) is outside the addon.
+    local trow = (d.menu.perType or {}).TMOG
+    if trow and trow.entry then
+      local dup = false
+      for i = 1, Z.Util.ArrayCount(actions) do
+        if actions[i].name == trow.entry.name then dup = true break end
+      end
+      if not dup then
+        table.insert(actions, { id = "award-name",
+          label = "Award " .. trow.entry.name .. " (TMOG)",
+          name = trow.entry.name, via = "tmog" })
+      end
+    end
+    table.insert(actions, { id = "more", label = "..." })
+    table.insert(actions, { id = "close", label = "Close" })
+    return actions
+  end
   if d.single then
     table.insert(actions, { id = "award", label = "Award " .. d.rollers[1] })
   end
@@ -467,24 +670,85 @@ function M.doAction(itemID, actionID, extra)
     return M.MoreLines(d)
   end
   if actionID == "roll" then
-    -- Initiate the roll from the detail (RollFor: roll button in preview).
+    -- Initiate the roll from the detail. The detail STAYS OPEN and becomes
+    -- the roll window (RollFor: preview flips to the rolling view); the
+    -- session hooks below flip it to the award window on finish.
+    -- Refuse while another roll is live (matches StartItemRoll).
+    local live = Z.MasterLootUI and Z.MasterLootUI.session
+    if live then return "roll failed" end
+    local ok = false
     if d.source == "sim" then
-      if Z.Sim and Z.Sim.RequestRoll then Z.Sim.RequestRoll(d.itemID) end
+      if Z.Sim and Z.Sim.RequestRoll then
+        Z.Sim.RequestRoll(d.itemID)
+        ok = true
+      end
     else
       if Z.MasterLootUI and Z.MasterLootUI.StartItemRoll then
         Z.MasterLootUI.StartItemRoll(d.itemID)
+        ok = true -- invocation is success (stub or real session)
       end
     end
-    M.CloseDetail()
-    return "rolling"
+    if ok then
+      local sess = Z.MasterLootUI and Z.MasterLootUI.session
+      d.phase = "rolling"
+      d.sessionID = sess and sess.id or nil
+      d.rolls = {}
+      d.menu = nil
+      d.status = "rolling"
+      M.RefreshDetail()
+      return "rolling"
+    end
+    return "roll failed"
   end
   if actionID == "award-name" then
-    -- Award a named raider from the More list (candidate award).
+    -- Award a named raider: from the award phase this is the ROLLED award
+    -- (menu confirm, history, sim continuation via AwardChosen); pre-roll
+    -- (More list) it is the direct no-roll shortcut via AwardDirect.
+    -- Stays open on failure, closes on success.
+    if (d.phase or "pick") == "award" and d.menu then
+      if Z.MasterLootUI and Z.MasterLootUI.AwardChosen then
+        -- extra may be a plain name (More list) or {name, via}
+        -- (award row). Default via="menu".
+        local nm, via = extra, "menu"
+        if type(extra) == "table" then nm, via = extra.name, extra.via or "menu" end
+        Z.MasterLootUI.AwardChosen({ name = nm, via = via })
+        return "awarded " .. tostring(nm)
+      end
+      return "award failed"
+    end
     if Z.MasterLootUI and Z.MasterLootUI.AwardDirect then
       Z.MasterLootUI.AwardDirect(d.itemID, extra, d.source)
+      M.CloseDetail()
+      return "awarded " .. tostring(extra)
     end
-    M.CloseDetail()
-    return "awarded " .. tostring(extra)
+    return "award failed"
+  end
+  if actionID == "finish" then
+    -- Finish early: the roll resolves and THIS window becomes the award
+    -- window (RollFor: Finish flips the rolling view to winners).
+    if Z.MasterLootUI and Z.MasterLootUI.FinishEarly then
+      Z.MasterLootUI.FinishEarly()
+      return "finishing"
+    end
+    return "finish failed"
+  end
+  if actionID == "cancel" then
+    -- Cancel the ROLL (session back to open); the window stays on the item
+    -- in pick phase so the ML can re-roll or choose differently.
+    if Z.MasterLootUI and Z.MasterLootUI.Cancel then
+      Z.MasterLootUI.Cancel()
+      local dd = M.detail
+      if dd and dd.itemID == itemID then
+        dd.phase = "pick"
+        dd.sessionID = nil
+        dd.rolls = {}
+        dd.menu = nil
+        dd.status = "open"
+        M.RefreshDetail()
+      end
+      return "cancelled"
+    end
+    return "cancel failed"
   end
   return "unknown action"
 end
@@ -548,21 +812,63 @@ function M.BuildDetailFrame()
   sub:SetPoint("TOP", title, "BOTTOM", 0, -4)
   sub:SetWidth(240) sub:SetJustifyH("CENTER")
   f.sub = sub
-  -- Award (only meaningful with a single holder; hidden otherwise).
+  -- Live roll list (RollFor rolling view): one line per valid roll with
+  -- its kind. Hidden in pick phase, shown while rolling / awarding.
+  local rolls = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+  rolls:SetPoint("TOP", sub, "BOTTOM", 0, -6)
+  rolls:SetWidth(290) rolls:SetJustifyH("LEFT")
+  f.rolls = rolls
+  -- Button bar pinned to the BOTTOM (never overlapping the roll list):
+  -- primary left, ... + Close right. The primary is context per phase
+  -- (re-labeled, never rebuilt):
+  -- pick:    "Award <name>" on a single holder, else hidden (use ...).
+  -- rolling: "Finish" (finish early -> this window becomes the award view).
+  -- award:   "Award <top winner>" (further winners via their own rows).
+  -- Width fits the label: measured text + padding, capped to the bar.
+  -- NOTE: no SetPoint here — LayoutBar places all buttons (flow layout).
   local awardB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  awardB:SetWidth(120) awardB:SetHeight(22)
-  awardB:SetPoint("TOP", sub, "BOTTOM", 0, -8)
+  awardB:SetHeight(M.BTN_HEIGHT)
   awardB:SetText("Award")
   awardB:SetScript("OnClick", function()
-    if M.detail then M.doAction(M.detail.itemID, "award") end
+    if not M.detail then return end
+    local ph = M.detail.phase or "pick"
+    if ph == "rolling" then M.doAction(M.detail.itemID, "finish")
+    elseif ph == "award" then
+      -- First award-phase action row (top winner, incl. TMOG via choice).
+      local acts = M.DetailActions(M.detail)
+      local first = acts and acts[1]
+      if first and first.id == "award-name" then
+        M.doAction(M.detail.itemID, "award-name",
+          { name = first.name, via = first.via })
+      end
+    else M.doAction(M.detail.itemID, "award") end
   end)
   f.awardB = awardB
+  -- Second award button: "Award TMOG" (TMOG kind winner). Visible in the
+  -- award phase whenever the TMOG kind was contested. Sits right of the
+  -- primary so both awards are one click, no ... menu needed.
+  local tmogB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  tmogB:SetHeight(M.BTN_HEIGHT)
+  tmogB:SetText("Award TMOG")
+  tmogB:SetScript("OnClick", function()
+    if not M.detail then return end
+    local acts = M.DetailActions(M.detail)
+    for i = 1, Z.Util.ArrayCount(acts or {}) do
+      local a = acts[i]
+      if a.id == "award-name" and a.via == "tmog" then
+        M.doAction(M.detail.itemID, "award-name",
+          { name = a.name, via = a.via })
+        return
+      end
+    end
+  end)
+  f.tmogB = tmogB
   -- "..." More: a real dropdown (RollFor GuiElements.dropdown parity) —
-  -- award anyone on the list, or initiate the roll. Anchored under the
-  -- detail like RollFor's candidate frame under the rolling popup.
+  -- award anyone on the list, or initiate the roll. Anchored above the
+  -- button (drops UP like RollFor's candidate frame) so it never covers
+  -- the bar.
   local moreB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  moreB:SetWidth(60) moreB:SetHeight(22)
-  moreB:SetPoint("TOP", awardB, "BOTTOM", 0, -6)
+  moreB:SetWidth(M.BTN_MORE_W) moreB:SetHeight(M.BTN_HEIGHT)
   moreB:SetText("...")
   moreB:SetScript("OnClick", function()
     if M.detail then M.ToggleMoreDropdown(moreB) end
@@ -570,9 +876,9 @@ function M.BuildDetailFrame()
   f.moreB = moreB
   -- Close: dismiss, keep the overview.
   local closeB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  closeB:SetWidth(60) closeB:SetHeight(22)
-  closeB:SetPoint("LEFT", moreB, "RIGHT", 8, 0)
+  closeB:SetWidth(M.BTN_CLOSE_W) closeB:SetHeight(M.BTN_HEIGHT)
   closeB:SetText("Close")
+  f.closeB = closeB
   closeB:SetScript("OnClick", function() M.CloseDetail() end)
   M.detailFrame = f
   return f
@@ -581,9 +887,11 @@ end
 function M.PaintDetailFrame()
   local f, d = M.detailFrame, M.detail
   if not f or not d then return end
+  local phase = d.phase or "pick"
   if f.title and f.title.SetText then
     local head = tostring(d.name or d.link or ("item:" .. d.itemID))
     if d.badge and d.badge ~= "" then head = head .. " [" .. d.badge .. "]" end
+    if phase == "rolling" then head = head .. " [rolling]" end
     f.title:SetText(head)
   end
   if f.title and f.title.SetScript then
@@ -591,20 +899,114 @@ function M.PaintDetailFrame()
     f.title:SetScript("OnLeave", function() M.HideTip() end)
   end
   if f.sub and f.sub.SetText then
-    if Z.Util.ArrayCount(d.rollers) > 0 then
+    if phase == "rolling" then
+      local n = Z.Util.ArrayCount(d.rolls or {})
+      local cd = d.countdown and (" (" .. tostring(d.countdown) .. "s)") or ""
+      f.sub:SetText("Rolling..." .. cd .. " (" .. n .. " roll" .. (n == 1 and "" or "s") .. ")")
+    elseif phase == "award" and d.menu then
+      local winners = d.menu.winners or {}
+      if Z.Util.ArrayCount(winners) > 0 then
+        local w = {}
+        for i = 1, Z.Util.ArrayCount(winners) do
+          table.insert(w, winners[i].name .. " (" .. tostring(winners[i].rollType)
+            .. " " .. tostring(winners[i].effective) .. ")")
+        end
+        f.sub:SetText("Winner: " .. table.concat(w, ", "))
+      else
+        f.sub:SetText("No eligible rolls — pick anyone (...)")
+      end
+    elseif Z.Util.ArrayCount(d.rollers) > 0 then
       f.sub:SetText("Reserved by: " .. table.concat(d.rollers, ", "))
     else
       f.sub:SetText("No reserves — open roll")
     end
   end
-  if f.awardB then
-    if d.single then
-      if f.awardB.Show then f.awardB:Show() end
-      if f.awardB.SetText then f.awardB:SetText("Award " .. d.rollers[1]) end
-      if f.awardB.Enable then f.awardB:Enable() end
+  -- Live roll list widget (RollFor rolling view).
+  if f.rolls then
+    if phase == "pick" then
+      if f.rolls.SetText then f.rolls:SetText("") end
+      if f.rolls.Hide then f.rolls:Hide() end
     else
-      if f.awardB.Hide then f.awardB:Hide() end -- multi/no holder: use ...
+      if f.rolls.Show then f.rolls:Show() end
+      if f.rolls.SetText then
+        local rows = M.SortedDetailRolls(d)
+        local t = {}
+        for i = 1, Z.Util.ArrayCount(rows) do
+          local r = rows[i]
+          local eff = ""
+          if r.effective and r.effective ~= r.roll then
+            eff = " (=" .. tostring(r.effective) .. ")"
+          end
+          table.insert(t, tostring(r.rollType) .. ": " .. tostring(r.name)
+            .. " " .. tostring(r.roll) .. eff)
+        end
+        if Z.Util.ArrayCount(t) == 0 then
+          f.rolls:SetText("waiting for rolls...")
+        else
+          f.rolls:SetText(table.concat(t, "\n"))
+        end
+      end
     end
+  end
+  -- Button bar: collect the visible buttons, then flow-layout them
+  -- (justify each row, wrap when narrow). Bar order: primary, TMOG,
+  -- ..., Close. A lone row spreads edge to edge; overflow wraps above.
+  local barW = M.DETAIL_WIDTH - M.BTN_MARGIN * 2
+  local slots = {}
+  local function showBtn(btn, text)
+    if btn.SetText then btn:SetText(text) end
+    if btn.Enable then btn:Enable() end
+    table.insert(slots, { btn = btn, w = M.ButtonWidth(btn, text) })
+  end
+  if f.awardB then
+    local show, label = false, "Award"
+    if phase == "rolling" then
+      show, label = true, "Finish"
+    elseif phase == "award" and d.menu then
+      local acts = M.DetailActions(d)
+      local first = acts and acts[1]
+      if first and first.id == "award-name" then
+        show, label = true, first.label
+      end
+      -- no eligible winners: primary hides, ... picks anyone
+    elseif d.single then
+      show, label = true, "Award " .. d.rollers[1]
+    end
+    if show then showBtn(f.awardB, label)
+    elseif f.awardB.Hide then f.awardB:Hide() end
+    -- "Award TMOG": iff the TMOG kind was contested. Label names the
+    -- kind winner; hidden otherwise (pick/rolling, or no TMOG roll).
+    if f.tmogB then
+      local trow = nil
+      if phase == "award" and d.menu then
+        trow = (d.menu.perType or {}).TMOG
+        if not (trow and trow.entry) then trow = nil end
+      end
+      if trow then
+        showBtn(f.tmogB, "Award TMOG (" .. trow.entry.name .. ")")
+      elseif f.tmogB.Hide then f.tmogB:Hide() end
+    end
+  end
+  if f.moreB then showBtn(f.moreB, "...") end
+  if f.closeB then showBtn(f.closeB, "Close") end
+  local barRows = M.PlaceBarRows(f, M.LayoutBarRows(slots, barW), barW)
+  if barRows == 0 then barRows = 1 end -- .../Close always slot in
+  -- Grow the frame with the roll list (RollFor sizes to content), always
+  -- reserving the full button bar (barRows x button + gaps + margin).
+  local barH = (barRows or 1) * M.BTN_HEIGHT
+    + ((barRows or 1) - 1) * M.BTN_GAP + M.BTN_MARGIN + 4
+  if f.SetHeight and f.rolls then
+    local n = (phase == "pick") and 0 or Z.Util.ArrayCount(d.rolls or {})
+    if phase == "award" then
+      n = math.max(n, Z.Util.ArrayCount((d.menu and d.menu.winners) or {}))
+    end
+    f:SetHeight(math.max(120 + barH, 150 + n * 13))
+  end
+  -- Rolls text must end above the bar: anchor its bottom, not just top.
+  if f.rolls and f.rolls.SetPoint and f.rolls.ClearAllPoints then
+    f.rolls:ClearAllPoints()
+    f.rolls:SetPoint("TOPLEFT", f, "TOPLEFT", 15, -64)
+    f.rolls:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -15, barH + 4)
   end
 end
 
@@ -620,12 +1022,24 @@ function M.MoreChoices(d)
   d = d or M.detail
   local out = {}
   if not d then return out end
-  if d.status == "open" then
+  if (d.phase or "pick") == "pick" and d.status == "open" then
     table.insert(out, { id = "roll", label = "Roll" })
   end
-  for i = 1, Z.Util.ArrayCount(d.rollers or {}) do
-    table.insert(out, { id = "award-name", label = "Award " .. d.rollers[i],
-      name = d.rollers[i] })
+  local seen = {}
+  local function addAward(nm)
+    if nm and nm ~= "" and not seen[nm] then
+      seen[nm] = true
+      table.insert(out, { id = "award-name", label = "Award " .. nm, name = nm })
+    end
+  end
+  for i = 1, Z.Util.ArrayCount(d.rollers or {}) do addAward(d.rollers[i]) end
+  -- Award phase: the ... covers everyone the primary button does not —
+  -- winner rows are primary, ... lists the rest of the candidates.
+  if (d.phase or "pick") == "award" and d.menu then
+    local cands = d.menu.candidates or {}
+    for i = 1, Z.Util.ArrayCount(cands) do
+      if cands[i] then addAward(cands[i].name) end
+    end
   end
   return out
 end
@@ -705,10 +1119,11 @@ function M.ToggleMoreDropdown(anchor)
   dd:SetHeight(-y + 5)
   if dd.ClearAllPoints then dd:ClearAllPoints() end
   if anchor and dd.SetPoint then
-    -- Under the ... button, like RollFor's candidate frame under the popup.
-    dd:SetPoint("TOP", anchor, "BOTTOM", 0, -2)
+    -- Above the ... button (bar is at the bottom; drops UP so it never
+    -- covers the buttons).
+    dd:SetPoint("BOTTOM", anchor, "TOP", 0, 2)
   elseif dd.SetPoint and M.detailFrame then
-    dd:SetPoint("TOP", M.detailFrame, "BOTTOM", 0, -2)
+    dd:SetPoint("BOTTOM", M.detailFrame, "BOTTOM", 0, 40)
   end
   if dd.Show then dd:Show() end
   M.moreDropdown = dd

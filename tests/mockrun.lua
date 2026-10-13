@@ -4,7 +4,7 @@ local function newObj(kind)
   function o:SetHeight(h) self.h=h end
   function o:SetPoint(...) table.insert(self.points,{...}) end
   function o:SetAllPoints(...) end
-  function o:ClearAllPoints() end
+  function o:ClearAllPoints() self.points={} end
   function o:SetMovable() end
   function o:EnableMouse() end
   function o:SetClampedToScreen() end
@@ -20,7 +20,7 @@ local function newObj(kind)
   function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
   function o:CreateTexture(...) local t={}; function t:SetTexture() end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight() end; function t:SetWidth() end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; return t end
-  function o:CreateFontString(...) local fs={txt=""}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint() end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
+  function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
   function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
   function o:SetStatusBarTexture() end
   function o:SetStatusBarColor() end
@@ -45,7 +45,12 @@ UIParent = newObj("Frame");
 GameTooltip = newObj("Tooltip");
 function GameTooltip:SetOwner() end; function GameTooltip:SetText() end; function GameTooltip:AddLine() end; function GameTooltip:Show() end; function GameTooltip:Hide() end; function GameTooltip:SetHyperlink() end
 getglobal = function() return nil end
-GetItemInfo = function(id) return "Test Sword "..id, "|cffa335ee|Hitem:"..id.."|h[Test]|h", 4, 0,0,0,0,0, "Interface\\Icons\\INV_Sword_01" end
+-- Emulates the client: stable name/link/texture whether called with the
+-- full link or the bare id (the arg-echoing stub hid link-vs-id bugs).
+GetItemInfo = function(id)
+  local num = tonumber(string.match(tostring(id), "item:(%d+)") or id)
+  return "Test Sword", "|cffa335ee|Hitem:"..tostring(num)..":0:0:0|h[Test Sword]|h|r", 4, 0,0,0,0,0, "Interface\\Icons\\INV_Sword_01"
+end
 UnitName = function() return "SoloPlayer" end
 GetNumRaidMembers = function() return 0 end
 GetRaidRosterInfo = function() return nil end
@@ -109,6 +114,67 @@ assert(#Z.LootWindow.rows == 1, "one overview row painted");
 Z.LootWindow.OpenDetail(19137);
 assert(Z.LootWindow.detail ~= nil, "detail data opened");
 assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
+assert(Z.LootWindow.detailFrame.rolls ~= nil, "roll list widget built");
+-- rolling + award phases repaint under the mock API (persistent window).
+Z.LootWindow.detail.phase = "rolling";
+Z.LootWindow.DetailOnRoll(19137, nil, "Blackfang", 95, "SR", 115);
+Z.LootWindow.detail.countdown = 12;
+Z.LootWindow.RefreshDetail();
+Z.LootWindow.DetailOnFinish(19137, menu);
+assert(Z.LootWindow.detail.phase == "award", "detail flips to award");
+Z.LootWindow.RefreshDetail();
+-- two award buttons: primary (SR winner) + Award TMOG (kind winner).
+Z.LootWindow.detail.menu.perType = Z.LootWindow.detail.menu.perType or {};
+Z.LootWindow.detail.menu.perType.TMOG = { entry = { name = "SoloPlayer",
+  rollType = "TMOG", effective = 15 }, tied = {} };
+Z.LootWindow.RefreshDetail();
+local df2 = Z.LootWindow.detailFrame;
+assert(df2.tmogB ~= nil, "Award TMOG button built");
+assert(df2.tmogB.hidden ~= true, "Award TMOG visible with a TMOG roll");
+assert(string.find(df2.tmogB.label or "", "SoloPlayer", 1, true) ~= nil,
+  "Award TMOG names the kind winner, got: " .. tostring(df2.tmogB.label));
+-- no TMOG roll -> button hides (SR-only award window).
+Z.LootWindow.detail.menu.perType.TMOG = {};
+Z.LootWindow.RefreshDetail();
+assert(df2.tmogB.hidden == true, "Award TMOG hidden without a TMOG roll");
+-- button bar geometry: flow-layout invariants — every VISIBLE button
+-- inside the frame, no two buttons on the same row overlap, rows stack
+-- on the 10 + k*30 grid (wraps when narrow, shares one row when wide).
+local df = Z.LootWindow.detailFrame;
+local function barBox(b)
+  local pts = b.points or {}
+  local last = pts[#pts]
+  if not last or last[1] ~= "BOTTOMLEFT" then return nil end
+  return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
+end
+local vis = {}
+for _, n in ipairs({ "awardB", "tmogB", "moreB", "closeB" }) do
+  local btn = df[n]
+  if btn and btn.hidden ~= true then
+    local box = barBox(btn)
+    assert(box ~= nil, n .. " placed");
+    assert(box.x >= 0 and box.x + box.w <= Z.LootWindow.DETAIL_WIDTH,
+      n .. " inside frame");
+    assert((box.y - 10) % 30 == 0, n .. " on row grid");
+    table.insert(vis, { name = n, box = box })
+  end
+end
+for i = 1, #vis do
+  for j = i + 1, #vis do
+    local a, b = vis[i], vis[j]
+    if a.box.y == b.box.y then
+      local overlap = not (a.box.x + a.box.w <= b.box.x or b.box.x + b.box.w <= a.box.x)
+      assert(not overlap, a.name .. " overlaps " .. b.name);
+    end
+  end
+end
+local function hasAnchor(pts, want)
+  for _, p in ipairs(pts or {}) do
+    for _, v in ipairs(p) do if v == want then return true end end
+  end
+  return false
+end
+assert(hasAnchor(df.rolls.points, "BOTTOMRIGHT"), "rolls text ends above the bar");
 -- ... dropdown builds under the mock API, rows clickable, closes cleanly.
 Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
 assert(Z.LootWindow.moreDropdown ~= nil, "more dropdown opened");
@@ -155,6 +221,13 @@ assert(not string.find(act, "MOCK-RAID-1", 1, true), "ID stays on sub-line, got:
 print("header invariant OK");
 -- LootBlare-style roll window: build, show item, feed grouped rolls.
 Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
+-- icon + name resolve link-first (regression: bare-ID call showed no
+-- icon and fell back to the raw link text).
+assert(Z.RaiderLootUI.iconPath == "Interface\\Icons\\INV_Sword_01",
+  "roll window icon resolved, got: " .. tostring(Z.RaiderLootUI.iconPath));
+assert(Z.RaiderLootUI.itemNameText ~= nil
+  and not string.find(Z.RaiderLootUI.itemNameText, "|Hitem:", 1, true),
+  "roll window name resolved, got: " .. tostring(Z.RaiderLootUI.itemNameText));
 Z.RaiderLootUI.OnRoll("Thrall", 40, "SR");
 Z.RaiderLootUI.OnRoll("Jaina", 50, "MS");
 Z.RaiderLootUI.OnRoll("Varian", 45, "OS");

@@ -109,6 +109,21 @@ function M.OnSystemRoll(player, roll, minR, maxR)
   if Z.RaiderLootUI then
     Z.RaiderLootUI.OnRoll(player, roll, rtype, excluded)
   end
+  -- The open row detail is the ML roll window: show the roll + its kind.
+  -- Effective mirrors the resolver (SR bonus when the sheet knows them).
+  if Z.LootWindow and Z.LootWindow.DetailOnRoll then
+    local eff = roll
+    if Z.DB.sheet and rtype == "SR" then
+      local rollers = Z.SRData.GetRollers(Z.DB.sheet, sess.itemID)
+      for i = 1, Z.Util.ArrayCount(rollers) do
+        if rollers[i].name == player then
+          eff = roll + (rollers[i].sr_plus or 0)
+          break
+        end
+      end
+    end
+    Z.LootWindow.DetailOnRoll(sess.itemID, sess.id, player, roll, rtype, eff)
+  end
 end
 
 function M.FinishEarly() M.Finish(true) end
@@ -116,10 +131,22 @@ function M.Cancel()
   if not M.session then Z.Print("No active session.") return end
   local wasSilent = M.session.silent
   local itemID = M.session.itemID
+  local sessionID = M.session.id
   M.pendingAwardMenu = nil
   M.session = nil
   Z.Print("Roll cancelled.")
   if Z.LootWindow and itemID then Z.LootWindow.MarkOpen(itemID) end
+  -- An open rolling detail drops back to pick (re-roll / choose / close).
+  if Z.LootWindow and Z.LootWindow.detail
+      and Z.LootWindow.detail.itemID == itemID
+      and Z.LootWindow.detail.sessionID == sessionID then
+    Z.LootWindow.detail.phase = "pick"
+    Z.LootWindow.detail.sessionID = nil
+    Z.LootWindow.detail.rolls = {}
+    Z.LootWindow.detail.menu = nil
+    Z.LootWindow.detail.status = "open"
+    Z.LootWindow.RefreshDetail()
+  end
   if Z.RaiderLootUI then Z.RaiderLootUI.Hide() end
   -- A cancelled sim item returns to the queue head for a re-roll.
   if wasSilent and Z.Sim and Z.Sim.Requeue then Z.Sim.Requeue(itemID) end
@@ -140,6 +167,12 @@ function M.Finish(manual)
     return "tie" -- keep session open for tie re-rolls (extra rolls ignored for others)
   end
   local data = M.BuildAwardMenu(sess, res)
+  -- The open row detail becomes the award window (RollFor: rolling view
+  -- flips to winners). Falls back to the standalone menu when the roll
+  -- was started outside the window (/rf etc.).
+  if Z.LootWindow and Z.LootWindow.DetailOnFinish then
+    Z.LootWindow.DetailOnFinish(sess.itemID, data)
+  end
   if sess.silent then
     -- Sim: hand the menu to the ML (headless: auto-pick the top winner,
     -- like the old ConfirmAward chain); the award flow owns continuation.
@@ -190,14 +223,31 @@ function M.AnnounceResult(sess, res)
   else
     Z.Print(resultText)
   end
+  -- Per-kind result lines: each type is judged by itself (SR 100, MS
+  -- 100, OS 99, TMOG 98), priority SR > MS > OS.
+  local pt = res.perType or {}
+  local function kindLine(kind, tag)
+    local row = pt[kind]
+    if row and row.entry then
+      local e = row.entry
+      local s = tag .. " winner: " .. e.name .. " (" .. tostring(e.effective) .. ")"
+      if Z.Comm and Z.Comm.WarnGroup then Z.Comm.WarnGroup(s) else Z.Print(s) end
+      return e
+    end
+    return nil
+  end
+  local srW = kindLine("SR", "SR")
+  local msW = kindLine("MS", "MS")
+  local osW = kindLine("OS", "OS")
+  local tmogRow = pt.TMOG
+  if tmogRow and tmogRow.entry then
+    local e = tmogRow.entry
+    local line = "TMOG winner: " .. e.name .. " (" .. tostring(e.effective) .. ")"
+    if Z.Comm and Z.Comm.WarnGroup then Z.Comm.WarnGroup(line) else Z.Print(line) end
+  end
   if Z.Util.ArrayCount(res.winners) > 0 then
     local w = {}
     for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(w, res.winners[i].name .. " (" .. res.winners[i].effective .. ")") end
-    if Z.Comm and Z.Comm.WarnGroup then
-      Z.Comm.WarnGroup("Winner: " .. table.concat(w, ", "))
-    else
-      Z.Print("Winner: " .. table.concat(w, ", "))
-    end
     -- LootBlare-style top-screen banner for the local player.
     if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
       Z.RaiderLootUI.ShowResult("The winner is " .. table.concat(w, ", ") .. " !")
@@ -230,14 +280,16 @@ end
 
 -- Award menu data (RollFor RollController-finish style, pure data for
 -- tests + text/headless render; a client frame shows the same rows).
--- Returns { winners, groups, candidates, res, tradePlan, none }.
+-- Returns { winners, groups, perType, candidates, res, none }.
 --
--- winners: ranked winner names + roll types + effective rolls.
--- groups: SR>MS>OS>TMOG loser lists {name, rollType, effective} so the ML
---   can award by roll type (SR winner, main spec, offspec, TMOG).
--- candidates: class-sorted full roster the ML can award any raider from.
--- tradePlan: set when the top winner rolled TMOG — the ML either lets the
---   TMOG roller keep it ("they get it") or passes it to the real winner.
+-- winners: overall winner(s) by priority SR > MS > OS (+effective).
+-- perType: each kind judged by itself — { SR={entry,tied}, MS=..., OS=...,
+--   TMOG=... } — so the menu can award each kind's own winner. The ML
+--   awards the SR, MS, OS or TMOG winner directly; what happens to the
+--   item afterwards (e.g. a trade) is outside the addon.
+-- groups: SR>MS>OS>TMOG full lists {name, rollType, effective}.
+-- candidates: class-sorted full roster the ML can award any raider from
+--   when something is wrong with the rolls.
 -- none: true when nobody eligible rolled.
 function M.RosterClasses()
   local map = {}
@@ -323,17 +375,15 @@ end
 
 function M.BuildAwardMenu(sess, res)
   local data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
-    candidates = {}, res = res, tradePlan = nil, none = false,
+    perType = {}, candidates = {}, res = res, none = false,
     itemID = sess.itemID, itemLink = sess.itemLink, sessionID = sess.id }
-  local byType = {}
   local entries = res.entries or {}
   for i = 1, Z.Util.ArrayCount(entries) do
     local e = entries[i]
-    if not e.missroll and not e.excludedWon then
+    if not e.missroll and not e.excludedWon and not e.overCap then
       table.insert(data.groups[entryRollType(e)],
         { name = e.name, rollType = entryRollType(e), effective = e.effective or e.base })
     end
-    byType[e.name] = entryRollType(e)
   end
   -- Rank groups best-first (ties by name).
   for _, g in pairs(data.groups) do
@@ -342,29 +392,15 @@ function M.BuildAwardMenu(sess, res)
       return (a.name or "") < (b.name or "")
     end)
   end
+  -- Per-type contests straight from the resolver (each kind by itself).
+  data.perType = res.perType or {}
   local winners = res.winners or {}
   for i = 1, Z.Util.ArrayCount(winners) do
     local w = winners[i]
-    table.insert(data.winners, { name = w.name, rollType = byType[w.name] or "SR",
+    table.insert(data.winners, { name = w.name, rollType = w.rollType or "SR",
       effective = w.effective })
   end
-  -- TMOG at the top: the ML decides — TMOG roller keeps it ("they get it")
-  -- or it passes to the real winner (top SR/MS loser by effective).
-  if Z.Util.ArrayCount(data.winners) == 1 and data.winners[1].rollType == "TMOG" then
-    local best, bestEff = nil, -1
-    for _, gt in ipairs({ "SR", "MS" }) do
-      local g = data.groups[gt]
-      for j = 1, Z.Util.ArrayCount(g) do
-        if g[j].name ~= data.winners[1].name and (g[j].effective or 0) > bestEff then
-          best, bestEff = g[j].name, g[j].effective
-        end
-      end
-    end
-    if best then
-      data.tradePlan = { from = data.winners[1].name, to = best }
-    end
-  end
-  if Z.Util.ArrayCount(data.winners) == 0 then data.none = true end
+    if Z.Util.ArrayCount(data.winners) == 0 then data.none = true end
   data.candidates = M.BuildCandidates(Z.DB and Z.DB.sheet, sess.rolls)
   return data
 end
@@ -372,18 +408,26 @@ end
 function M.AwardMenuLines(data)
   local lines = {}
   table.insert(lines, "Award " .. tostring(data.itemLink or ("item:" .. tostring(data.itemID))) .. " to?")
+  -- Each kind judged by itself (ranges: SR 100, MS 100, OS 99, TMOG 98).
+  for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
+    local row = (data.perType or {})[gt]
+    if row and row.entry then
+      local e = row.entry
+      table.insert(lines, "  " .. gt .. " winner: " .. e.name .. " (" .. tostring(e.effective) .. ")")
+      for t = 1, Z.Util.ArrayCount(row.tied or {}) do
+        table.insert(lines, "    tied: " .. row.tied[t].name .. " (" .. tostring(row.tied[t].effective) .. ")")
+      end
+    end
+  end
   for i = 1, Z.Util.ArrayCount(data.winners or {}) do
     local w = data.winners[i]
-    table.insert(lines, "  winner: " .. w.name .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
+    table.insert(lines, "  overall: " .. w.name .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
   end
   for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
     local g = (data.groups or {})[gt] or {}
     for j = 1, Z.Util.ArrayCount(g) do
       table.insert(lines, "  " .. gt .. ": " .. g[j].name .. " (" .. tostring(g[j].effective) .. ")")
     end
-  end
-  if data.tradePlan then
-    table.insert(lines, "  trade: " .. data.tradePlan.from .. " -> " .. data.tradePlan.to .. " (transmog pass-along)")
   end
   if data.none then table.insert(lines, "  (no eligible rolls — pick anyone or cancel)") end
   local cands = data.candidates or {}
@@ -413,6 +457,32 @@ function M.ShowAwardMenu(sess, data)
   Z.Print("Pick with /zl award <name> (or /zl cr to cancel).")
 end
 
+-- Display link for award UI: the readable name, never a bare item:id.
+-- Prefers the LootWindow row name (resolved at scan), else the [Name] in a
+-- full link, else the sheet name via GetItemInfo, else the link as-is.
+function M.DisplayItemLink(itemID, itemLink)
+  if Z.LootWindow then
+    local it = Z.LootWindow.Find(itemID)
+    if it and Z.LootWindow.DisplayName then
+      local nm = Z.LootWindow.DisplayName(it)
+      if nm and nm ~= "" and nm ~= ("item:" .. tostring(itemID)) then
+        return nm
+      end
+    elseif it and it.name and it.name ~= "" then
+      return tostring(it.name)
+    end
+  end
+  local link = tostring(itemLink or "")
+  local nm = string.match(link, "%[(.-)%]")
+  if nm and nm ~= "" then return nm end
+  if GetItemInfo and Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+    local rName = Z.LootWindow.ResolveItemInfo(itemID, itemLink, nil, nil, nil)
+    if rName and rName ~= "" then return tostring(rName) end
+  end
+  if link ~= "" then return link end
+  return "item:" .. tostring(itemID)
+end
+
 -- Award popup text helper (pre-formatted: the client must not fill %s).
 local function showAwardPopup(itemLink, winnerName, onAccept)
   if not (StaticPopupDialogs and StaticPopup_Show) then return false end
@@ -421,8 +491,16 @@ local function showAwardPopup(itemLink, winnerName, onAccept)
     button1 = "Award", button2 = "Cancel",
     OnAccept = function() end, timeout = 0, whileDead = 1,
   }
+  -- Confirm shows the ITEM NAME (regression: bare item:id here). The full
+  -- link stays on the dialog for shift-click/insert parity.
+  local display = tostring(itemLink)
+  if Z.MasterLootUI and Z.MasterLootUI.DisplayItemLink then
+    local id = Z.Util.ItemID(itemLink)
+    display = Z.MasterLootUI.DisplayItemLink(id, itemLink)
+  end
   StaticPopupDialogs["ZUGLOOT_AWARD"].text =
-    string.format("Award %s to %s?", tostring(itemLink), tostring(winnerName))
+    string.format("Award %s to %s?", display, tostring(winnerName))
+  StaticPopupDialogs["ZUGLOOT_AWARD"].itemLink = itemLink
   StaticPopupDialogs["ZUGLOOT_AWARD"].OnAccept = onAccept or function() end
   StaticPopup_Show("ZUGLOOT_AWARD")
   return true
@@ -454,9 +532,8 @@ function M.DoAward(itemID, itemLink, winnerName, source)
 end
 
 -- Sim award flow: the ML picks one row of the award menu for each winner
--- slot, then (if the winner rolled TMOG) either confirms the TMOG roller
--- or the pass-along. Headless (tests): auto-pick the top winner per slot,
--- matching what the old ConfirmAward chain did.
+-- slot. Headless (tests): the menu stays pending and the harness plays
+-- the ML via AwardChosen.
 M.pendingAwardMenu = nil -- { sess, data } while the ML decides
 
 function M.HandleSimAward(sess, data)
@@ -472,17 +549,17 @@ function M.HandleSimAward(sess, data)
   if not (StaticPopupDialogs and StaticPopup_Show) then
     -- Headless (tests): the menu stays pending and the harness plays the
     -- ML via AwardChosen — same decision point as the client, minus the
-    -- frame. (finishSim auto-picks only the scripted simtmog pass-along.)
+    -- frame.
     return
   end
   -- In-client sim: show the real menu like a live roll.
   M.ShowAwardMenu(sess, data)
 end
 
--- The ML chose a recipient for the finished roll (menu row, candidate grid,
--- or pass-along target). Confirms via popup, then awards. Works for live
--- and sim; sim continuation runs through Sim.afterAwards.
--- choice = { name=recipient, via="winner"|"menu"|"candidate"|"trade",
+-- The ML chose a recipient for the finished roll (kind-winner row,
+-- candidate grid, or ... selection). Confirms via popup, then awards.
+-- Works for live and sim; sim continuation runs through Sim.afterAwards.
+-- choice = { name=recipient, via="winner"|"menu"|"candidate"|"tmog",
 --            rollType=optional }
 function M.AwardChosen(choice)
   local pend = M.pendingAwardMenu
@@ -498,6 +575,15 @@ function M.AwardChosen(choice)
   if Z.Sim then Z.Sim.pendingAward = nil end
   local name = choice and choice.name
   if not name then Z.Print("Pick a recipient first.") return end
+  -- Award applied (popup accepted or headless): a finished detail closes,
+  -- the row shows done on the overview.
+  local function closeFinishedDetail()
+    if Z.LootWindow and Z.LootWindow.detail
+        and Z.LootWindow.detail.itemID == sess.itemID
+        and (Z.LootWindow.detail.phase or "pick") == "award" then
+      Z.LootWindow.CloseDetail()
+    end
+  end
   local link = sess.itemLink
   local source = sess.silent and "sim" or "raid"
   if Z.LootWindow then Z.LootWindow.MarkDone(sess.itemID) end
@@ -520,11 +606,7 @@ function M.AwardChosen(choice)
   end
   showAwardPopup(link, name, function()
     M.DoAward(sess.itemID, link, name, source)
-    if (choice.via == "trade" or (data.tradePlan and name == data.tradePlan.to))
-        and data.tradePlan and data.tradePlan.from ~= name then
-      -- TMOG pass-along: winner got it first on paper, trade the leg.
-      M.RecordTrade(sess.itemID, link, data.tradePlan.from, name, sess.silent)
-    end
+    closeFinishedDetail()
     M.pendingAwardMenu = nil
     M.session = nil
     if sess.silent then
@@ -553,10 +635,7 @@ function M.AwardChosen(choice)
       end
     end
     M.DoAward(sess.itemID, link, name, source)
-    if (choice.via == "trade" or (data.tradePlan and name == data.tradePlan.to))
-        and data.tradePlan and data.tradePlan.from ~= name then
-      M.RecordTrade(sess.itemID, link, data.tradePlan.from, name, sess.silent)
-    end
+    closeFinishedDetail()
     M.pendingAwardMenu = nil
     M.session = nil
     if sess.silent then
@@ -576,35 +655,9 @@ function M.Award(itemID, itemLink, winnerEntry)
   else
     M.pendingAwardMenu = { sess = { itemID = itemID, itemLink = itemLink, id = 0, silent = false, itemCount = 1 },
       data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
-        candidates = {}, tradePlan = nil, none = false, itemID = itemID, itemLink = itemLink } }
+        candidates = {}, perType = {}, none = false, itemID = itemID, itemLink = itemLink } }
   end
   M.AwardChosen({ name = winnerEntry.name, via = "winner" })
-end
-
--- Transmog pass-along (RollFor TradeTracker-style, manual): the roll winner
--- received the item but trades it to the real winner. Records the leg on
--- the latest history record, marks the recipient won too (one-win rule),
--- logs it, and announces it in group chat. ML-only live; sim auto-fires it
--- for TMOG winners (see Sim.afterAwards).
-function M.RecordTrade(itemID, itemLink, fromName, toName, isSim)
-  if not Z.DB.sheet then Z.Print("No sheet loaded.") return end
-  if not Z.SRData.HasWon(Z.DB.sheet, itemID, fromName) then
-    Z.Print("Note: " .. tostring(fromName) .. " is not marked as winner of " .. tostring(itemLink or itemID) .. " — recording anyway.")
-  end
-  Z.SRData.MarkWon(Z.DB.sheet, itemID, toName)
-  local hist = Z.SRData.GetRolls(Z.DB.sheet, itemID)
-  local last = hist[Z.Util.ArrayCount(hist)]
-  if last then
-    last.trades = last.trades or {}
-    table.insert(last.trades, { from = fromName, to = toName, t = (time and time()) or 0 })
-  end
-  if Z.DropLog then
-    Z.DropLog.Add(itemID, itemLink, isSim and "sim" or "raid", "trade", toName .. " (from " .. fromName .. ")")
-  end
-  local msg = fromName .. " traded " .. tostring(itemLink or ("item:" .. itemID)) .. " to " .. toName .. " (transmog pass-along)"
-  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(msg) else Z.Print(msg) end
-  if Z.MainWindow then Z.MainWindow.Refresh() end
-  if Z.SRView then Z.SRView.Refresh() end
 end
 
 -- RollFor-style: when a boss is looted, the master looter picks it up.

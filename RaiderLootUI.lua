@@ -138,22 +138,45 @@ end
 local function SetItemInfo(link)
   local iconPath = "Interface\\Icons\\INV_Misc_QuestionMark"
   local name, quality = nil, nil
-  if link and GetItemInfo then
-    local id = string.match(tostring(link), "item:(%d+)")
-    if id then
-      local n, _, q, _, _, _, _, _, tex = GetItemInfo(tonumber(id))
+  if link then
+    -- Sheet-style resolution via the shared link-first chain
+    -- (GetItemInfo(link), then GetItemInfo(id), then [Name] parse): the
+    -- bare-ID call alone misses whenever the cache key is the full link.
+    if Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+      local id = string.match(tostring(link), "item:(%d+)")
+      local n, fullLink, q, tex = Z.LootWindow.ResolveItemInfo(
+        id and tonumber(id), link, nil, nil, nil)
       if n then
         name, quality = n, q
+        if fullLink and fullLink ~= "" then
+          link = fullLink -- full color link for tooltip/shift-click parity
+        end
         if tex then iconPath = tex end
       end
+    elseif GetItemInfo then
+      local id = string.match(tostring(link), "item:(%d+)")
+      if id then
+        local n, _, q, _, _, _, _, _, tex = GetItemInfo(tonumber(id))
+        if n then
+          name, quality = n, q
+          if tex then iconPath = tex end
+        end
+      end
+    end
+    if not name then
+      name = string.match(tostring(link), "%[(.-)%]")
     end
   end
   if itemIcon then itemIcon:SetTexture(iconPath) end
   if iconButton and iconButton.SetNormalTexture then iconButton:SetNormalTexture(iconPath) end
+  M.iconPath = iconPath -- exposed for tests/headless
+  M.itemNameText = (name and tostring(name)) or nil
   if itemName then
     if name and quality and GetItemQualityColor then
       local _, _, _, hex = GetItemQualityColor(quality)
       itemName:SetText((hex or "") .. tostring(name) .. "|r")
+    elseif name then
+      itemName:SetText(tostring(name))
     else
       itemName:SetText(tostring(link or "?"))
     end

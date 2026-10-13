@@ -54,7 +54,6 @@ end
 function M.Stop()
   M.pending = {}
   M.auto = false
-  M.tmogPassAlong = false
   if M.running then
     M.running = false
     Z.Print("Sim stopped (queue cleared; current item plays out).")
@@ -153,17 +152,10 @@ local function finishOpts(sess, sheet)
   return { cap = Z.Caps.SR, requireSR = (not openRoll and sheet ~= nil), itemCount = sess.itemCount or 1 }
 end
 
--- Called after a sim award completes: fires the transmog trade leg when
--- the ML passed a TMOG win to the real winner, then asks for the next roll.
+-- Called after a sim award completes: asks for the next roll.
 -- Continuation is timer-deferred so award confirmation never nests the
 -- next item inside this call stack.
 function M.afterAwards()
-  local ML = Z.MasterLootUI
-  local lastTrade = M.pendingTrade
-  M.pendingTrade = nil
-  if lastTrade and ML then
-    ML.RecordTrade(lastTrade.itemID, lastTrade.itemLink, lastTrade.from, lastTrade.to, true)
-  end
   Z.Timer.After(1.0, function() M.RequestNextRoll() end)
 end
 
@@ -192,7 +184,7 @@ local function finishSim(entry, round)
   if not ML or not ML.session then M.RequestNextRoll() return end
   local sheet = Z.DB and Z.DB.sheet
   local names = {}
-  -- Pre-resolve (same opts Finish uses): tie subset + TMOG trade plan.
+  -- Pre-resolve (same opts Finish uses): tie subset.
   -- Finish re-resolves deterministically on identical inputs.
   local pre = nil
   if sheet then
@@ -200,21 +192,8 @@ local function finishSim(entry, round)
     local tied = pre.tied or {}
     for i = 1, Z.Util.ArrayCount(tied) do table.insert(names, tied[i].name) end
   end
-  M.pendingTrade = nil
   M.pendingAward = nil
   local outcome = ML.Finish()
-  if outcome == "awaiting" and not (StaticPopupDialogs and StaticPopup_Show) then
-    -- Headless ML (tests): the menu is pending; script only the simtmog
-    -- pass-along, everything else waits for the harness's AwardChosen
-    -- (the harness plays the ML, like the client does).
-    local pend = ML.pendingAwardMenu
-    local menu = pend and pend.data
-    local top = menu and menu.winners and menu.winners[1]
-    if top and menu.tradePlan and M.tmogPassAlong then
-      M.pendingAward = { name = menu.tradePlan.to, via = "trade" }
-      ML.AwardChosen(M.pendingAward)
-    end
-  end
   if outcome == "tie" then
     if Z.Util.ArrayCount(names) == 0 or round > M.TIE_ROUNDS then
       Z.Print("SIM tie left unresolved — re-roll manually or /zl cr.")
@@ -246,8 +225,8 @@ local function finishSim(entry, round)
   if outcome == "awaiting" then
     -- The ML decides: in-client the menu frame is on screen and
     -- AwardChosen/popup continuations own what follows; headless the menu
-    -- stays pending for the harness's AwardChosen — except the scripted
-    -- simtmog pass-along above and the nobody-eligible close-out here.
+    -- stays pending for the harness's AwardChosen — except the
+    -- nobody-eligible close-out here.
     local pend = ML.pendingAwardMenu
     if pend and pend.data and pend.data.none then
       ML.pendingAwardMenu = nil
@@ -398,7 +377,6 @@ function M.SimItem(argText)
   local itemID = Z.Util.ItemID(link or "")
   if not itemID then Z.Print("Usage: /zl sim <itemlink|itemID> [fillers]") return end
   local fillers = tonumber(n) or 0
-  M.tmogPassAlong = false
   local entry = M.BuildEntry(sheet, itemID, link, fillers)
   Z.Print("SIM " .. entry.mode .. " item " .. itemID .. " (" .. Z.Util.ArrayCount(entry.rolls) .. " rolls, replaying live with timers):")
   table.insert(M.pending, entry)
@@ -428,7 +406,6 @@ function M.SimBoss(name)
     table.insert(M.pending, M.BuildEntry(sheet, itemID, tostring(itemID), 0))
   end
   M.auto = false -- boss runs are ML-driven: Roll per item, like live loot
-  M.tmogPassAlong = false
   M.doneRows = {}
   M.lastEntries = {}
   for i = 1, Z.Util.ArrayCount(M.pending) do
@@ -440,9 +417,8 @@ function M.SimBoss(name)
   Z.Print("Loot window open — click Roll on an item (or /zl simroll <item>).")
 end
 
--- Transmog pass-along demo: like /zl sim, but the first sheet roller also
--- rolls TMOG, so a TMOG win ("might get item") auto-trades to the top MS
--- roller with full chat + history + log reflection.
+-- Transmog demo: like /zl sim, but the first sheet roller rolls TMOG
+-- instead of SR, so the award window offers the TMOG kind winner.
 function M.SimTmog(argText)
   local sheet = M.RequireSheet()
   if not sheet then return end
@@ -464,8 +440,7 @@ function M.SimTmog(argText)
   -- would drop their second roll, so the SR entry is replaced).
   local all = Z.Resolver.FakeRolls(sheet, itemID,
     { cap = Z.Caps.SR, sheetOnly = true, tmog = { tmogName } })
-  -- Everyone else rolls MS in this demo so a TMOG win has a "real winner"
-  -- to pass to (PickTradeRecipient targets the top MS roller).
+  -- Everyone else rolls MS in this demo.
   local kept = {}
   for i = 1, Z.Util.ArrayCount(all) do
     local rv = all[i]
@@ -477,10 +452,9 @@ function M.SimTmog(argText)
     end
   end
   local entry = { itemID = itemID, link = link, mode = "SIM", rolls = kept }
-  Z.Print("SIM-TMOG item " .. itemID .. " (" .. tostring(tmogName) .. " rolls TMOG instead of SR — watch for the pass-along):")
+  Z.Print("SIM-TMOG item " .. itemID .. " (" .. tostring(tmogName) .. " rolls TMOG instead of SR):")
   table.insert(M.pending, entry)
   M.auto = true
-  M.tmogPassAlong = true -- headless ML passes the TMOG win to the real winner
   M.SyncLootWindow()
   M.RequestRoll(entry.itemID)
 end

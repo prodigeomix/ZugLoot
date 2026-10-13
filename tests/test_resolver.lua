@@ -37,13 +37,22 @@ eq(res.winners[1].name, "A", "sr+ winner")
 eq(res.winners[1].effective, 100, "effective = 40+60")
 eq(res.ranked[2].effective, 95, "runner up")
 
--- 2. Miss-roll ignored: non-SR roller with 100 loses to SR roller with 1.
+-- 2a. Priority: off-sheet MS 100 is a valid MS contest but loses to
+-- SR 1 by kind priority (each type judged by itself, SR first).
 local res2 = R.ResolveItem(s, 17063, {
   { name = "A", roll = 1, type = "SR" },
   { name = "Ninja", roll = 100, type = "MS" },
 }, { cap = 100, requireSR = true })
-eq(res2.winners[1].name, "A", "missroll ignored")
-eq(res2.missrolls[1].name, "Ninja", "missroll flagged")
+eq(res2.winners[1].name, "A", "sr 1 outranks ms 100")
+eq(res2.perType.MS.entry.name, "Ninja", "ms contest still recorded")
+
+-- 2b. Miss-roll: SR-range roll WITHOUT the reserve is ignored.
+local res2b = R.ResolveItem(s, 17063, {
+  { name = "A", roll = 1, type = "SR" },
+  { name = "Ninja", roll = 100, type = "SR" },
+}, { cap = 100, requireSR = true })
+eq(res2b.winners[1].name, "A", "fake-sr missroll ignored")
+eq(res2b.missrolls[1].name, "Ninja", "missroll flagged")
 
 -- 3. Tie at top => tied list, winner holds cutoff members.
 local s3 = sheetWith(1, { { name = "A", rolls = 1 }, { name = "B", rolls = 1 } })
@@ -102,11 +111,71 @@ local res7 = R.ResolveItem(s3, 1, {
 -- A has two entries (0 invalid dropped, 10 kept); best-per-player keeps 10.
 eq(res7.winners[1].name, "A", "invalid rolls dropped")
 
+-- 8b. Per-type contests: TMOG 15 vs SR 58 — SR wins outright, TMOG
+-- still owns its kind (directly awardable, never the overall winner).
+local sT = sheetWith(77, { { name = "SRGuy", rolls = 1 }, { name = "TMog", rolls = 1 } })
+local resT = R.ResolveItem(sT, 77, {
+  { name = "SRGuy", roll = 58, type = "SR" },
+  { name = "TMog", roll = 15, type = "TMOG" },
+}, { cap = 100, requireSR = true })
+eq(resT.winners[1].name, "SRGuy", "sr wins outright")
+eq(resT.perType.SR.entry.name, "SRGuy", "sr owns its kind")
+eq(resT.perType.TMOG.entry.name, "TMog", "tmog owns its kind at 15")
+eq(resT.perType.TMOG.entry.effective, 15, "tmog effective is raw")
+ok(resT.winners[1].name ~= "TMog", "tmog never takes the winner slot")
+
+-- 8c. Priority SR > MS > OS: a low SR beats a high MS; MS beats OS.
+local sP = sheetWith(78, { { name = "S", rolls = 1 } })
+local resP = R.ResolveItem(sP, 78, {
+  { name = "S", roll = 5, type = "SR" },
+  { name = "M", roll = 99, type = "MS" },
+  { name = "O", roll = 98, type = "OS" },
+}, { cap = 100, requireSR = true })
+eq(resP.winners[1].name, "S", "sr 5 outranks ms/os 99")
+eq(resP.perType.MS.entry.name, "M", "ms owns its kind")
+eq(resP.perType.OS.entry.name, "O", "os owns its kind")
+-- MS with no SR contest wins outright (open shape for non-sheet M/O).
+local resP2 = R.ResolveItem(sP, 78, {
+  { name = "M", roll = 99, type = "MS" },
+  { name = "O", roll = 98, type = "OS" },
+}, { cap = 100, requireSR = true })
+eq(resP2.winners[1].name, "M", "ms wins with no sr contest")
+
+-- 8d. Ranges per type: OS cap 99, TMOG cap 98 — over-cap never wins.
+local resC = R.ResolveItem(sP, 78, {
+  { name = "O", roll = 100, type = "OS" },
+  { name = "M", roll = 60, type = "MS" },
+}, { cap = 100, requireSR = true })
+eq(resC.winners[1].name, "M", "os 100 is over-cap, ms wins")
+eq(resC.perType.OS.entry, nil, "no os contest on over-cap")
+local resC2 = R.ResolveItem(sP, 78, {
+  { name = "T", roll = 99, type = "TMOG" },
+}, { cap = 100, requireSR = false })
+eq(#resC2.winners, 0, "lone tmog 99 (over 98) wins nothing")
+ok(resC2.perType.TMOG.entry == nil, "no tmog contest on over-cap")
+
+-- 8e. No SR bonus outside SR: sheet roller rolling MS gets raw value.
+local sB = sheetWith(79, { { name = "S", rolls = 1, sr_plus = 50 } })
+local resB = R.ResolveItem(sB, 79, {
+  { name = "S", roll = 40, type = "MS" },
+}, { cap = 100, requireSR = false })
+eq(resB.perType.MS.entry.effective, 40, "ms takes no sr bonus")
+
+-- 8f. Ties re-roll WITHIN the kind (SR tie + clean MS: tie, no winner).
+local sTie = sheetWith(80, { { name = "A", rolls = 1 }, { name = "B", rolls = 1 } })
+local resTie = R.ResolveItem(sTie, 80, {
+  { name = "A", roll = 50, type = "SR" },
+  { name = "B", roll = 50, type = "SR" },
+  { name = "M", roll = 99, type = "MS" },
+}, { cap = 100, requireSR = true })
+eq(#resTie.tied, 2, "sr tie needs reroll despite ms 99")
+eq(resTie.perType.SR.tied[1].name, "B", "tie recorded in kind")
+
 -- 8. FakeRolls + full SR resolution path incl. fillers as missrolls.
 math.randomseed(1234)
 local rolls = R.FakeRolls(s, 17063, { cap = 100, fillers = 2 })
 local res8 = R.ResolveItem(s, 17063, rolls, { cap = 100, requireSR = true })
 ok(res8.winners[1].name == "A" or res8.winners[1].name == "B", "sim resolves to SR roller")
-eq(#res8.missrolls, 2, "fillers flagged as missrolls")
+ok(res8.perType.MS.entry ~= nil, "fillers contest MS (valid kind)")
 
 return T

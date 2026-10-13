@@ -100,20 +100,33 @@ Sheet = {
    `+srplus` (default 0). `HARDRES;` line lists hard-reserved item IDs.
 3. Anything else → import error naming the first bad line (never half-imports).
 
-### 3.2 SR+ calculation (normative)
+### 3.2 Roll types (normative): each kind judged by itself
 
-- `effective = baseRoll(1..cap) + (sr_plus or 0)`.
-- Roll caps (LootBlare parity): SR 1–100, MS 1–100, OS 1–99, TMOG 1–98.
-  SR sessions only accept SR-range rolls (1–100) from eligible rollers.
-- Eligible for an SR item = on that item's roller list AND not already in
-  `won[itemID]` AND (raid roster check optional: offline players flagged, not deleted).
-- Winner = highest `effective`. Ties among top → tie-roll session restricted to
-  tied players. Miss-rolls (player without SR rolling on an SR item) are recorded
-  but **ignored** for winner selection and flagged in output (`MISSRROLL`).
-- Non-SR items: open roll, highest base roll wins (MS > OS > TMOG priority display
-  only; winner is still highest roll in highest priority class that rolled —
-  LootBlare-style sorting).
-- Two-copies drops (`2x<link>`): top two distinct winners by same rules.
+- Ranges (LootBlare parity): SR 1–100, MS 1–100, OS 1–99, TMOG 1–98.
+  A roll only counts inside its own range — anything above the TYPE cap is
+  an over-roll (flagged, never wins). `effective = base + sr_plus`, where
+  the SR bonus applies to SR rolls by sheet rollers ONLY (MS/OS/TMOG never
+  take sr_plus).
+- Each kind crowns its own winner (`perType`: best SR, best MS, best OS,
+  best TMOG). Ties re-roll WITHIN the kind.
+- Overall winner by priority SR > MS > OS: the best SR beats any MS/OS
+  roll (TMOG 15 vs SR 58 → SR wins outright). TMOG never takes an overall
+  winner slot — it crowns its own kind winner, directly awardable.
+- Miss-rolls = SR-range rolls from players WITHOUT the reserve (fake SR
+  claims): recorded but ignored. MS/OS rolls are valid kind contests from
+  anyone (the sheet only holds SR rollers); TMOG never misses.
+- Eligible = not already in `won[itemID]` (one-win-per-item; excluded rolls
+  stay visible with `[already won]`, never silently dropped).
+- Open rolls (`arf`, off-sheet): every kind is a fair contest — highest
+  effective wins regardless of type letter (TMOG still excluded from the
+  overall slot).
+- Two-copies drops (`2x<link>`): winner + runner-up (same kind first, then
+  other kinds in priority order).
+- TMOG is directly awardable: the award window offers `Award <name> (TMOG)`
+  for the kind winner next to the outright winner rows. The ML awards the
+  SR, MS, OS or TMOG winner; anything after the award (e.g. a trade) is
+  outside the addon. Chat announces per kind (`SR winner: …`, `MS winner:
+  …`, `OS winner: …`, `TMOG winner: …`).
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; resolver excludes them from later sessions for that itemID.
   Excluded rollers stay visible everywhere: their rolls are kept in a separate
@@ -210,7 +223,26 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   `GetItemInfo(itemID)`, then the slot texture/name captured at scan time,
   then `[Name]` parsed out of the link; rows never show bare `item:<id>` while
   the client cache knows the item; tooltip on hover, shift-click links /
-  ctrl-click dress-up) (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
+  ctrl-click dress-up). The raider roll window resolves its icon + name
+  through the same link-first chain (`RaiderLootUI.SetItemInfo` →
+  `LootWindow.ResolveItemInfo`), so it matches the loot list instead of
+  degrading to a `?` icon and raw-link text when the bare-ID cache key
+  misses.
+- **Row detail = the roll window** (RollFor preview → rolling → winners in
+  one window, cf. `gui-sr-tie.gif`): clicking a row opens the detail with
+  SR (direct award on a single holder) / Roll / Close. Choosing **Roll keeps
+  the window open** — it flips to the rolling view listing every valid roll
+  with its kind (`SR: Aaa 90 (=100)`), SR > MS > OS > TMOG best-first, with
+  Finish (early) / Cancel / Close. **When the roll finishes the same window
+  becomes the award window**: TWO award buttons -- `Award <winner>` (kind
+  winner by priority) and `Award TMOG (<name>)` whenever the TMOG kind was
+  contested (floating bottom bar: each row justified, wraps when narrow,
+  rolls text always clears it) — `...` for anyone else (menu candidates: any raider, for when
+  something is wrong with the rolls), Close. The
+  confirm popup names the item (`Award <name> to <who>?`, full link kept on
+  the dialog) — never a bare `item:<id>`. Awarding closes it; the overview
+  row shows done. Cancel drops the window back to pick (re-roll / choose /
+  close). (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
   reserves). Nothing auto-starts — clicking a row opens the **row detail**
   (320 wide, so `Award <name>` fits long names on one line): direct **Award**
   when exactly one SR/HR holder exists (no rolling needed), **...** for a
@@ -226,15 +258,9 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   the ML answers `/zl award <name>`. The pick fires the confirmation popup
   (`Award <link> to <name>?`) → `GiveMasterLoot` + `AWARD` broadcast + `won`
   marking + DropLog entry.
-- **TMOG winner choice**: when the top winner rolled TMOG, the menu proposes
-  the pass-along (TMOG roller → real winner, top SR/MS loser). The ML either
-  confirms the TMOG roller ("they get it") or the pass-along — the trade leg
-  lands on the session history, in the drop log (`trade`), and in group chat.
-- **Transmog pass-along**: when a TMOG roll wins, the holder may trade the
-  item to the real winner. `/zl trade <item> <from> <to>` (ML-only) records
-  the leg: recipient marked won too, trade note appended to the session
-  history (shown in the Sheet tab), `trade` drop-log entry, group-chat
-  announcement (`X traded [item] to Y (transmog pass-along)`).
+- **TMOG kind award**: whenever the TMOG kind was contested, the menu offers
+  `Award TMOG (<name>)` next to the outright winner — the ML awards the SR,
+  MS, OS or TMOG winner directly. No trade handling: the award is final.
 
 ### 4.3 Raider loot window (`RaiderLootUI.lua`) — LootBlare-like
 
@@ -299,12 +325,9 @@ actual roll flow, not a separate code path:
 - Nothing auto-awards, ever: the sim replays the live menu too. After the ML
   picks, the confirm popup fires and the queue continues (in-client: as you
   accept; headless: the harness's `AwardChosen`).
-- `/zl simtmog <itemLink>` — transmog pass-along demo: one roller rolls TMOG
-  instead of SR; the menu proposes the pass-along and the (headless) ML
-  choice passes it to the real winner, with the trade leg in chat
-  (`... (transmog pass-along)`), on the session history, in the drop log
-  (`trade`), and the recipient marked won. Live TMOG wins decide the same
-  way in the menu (or `/zl trade` afterwards).
+- `/zl simtmog <itemLink>` — transmog demo: one roller rolls TMOG instead
+  of SR; the award window offers the TMOG kind winner next to the outright
+  winner and the ML awards either directly.
 - Chat routing matches live rolls: raid → `RAID` + `RAID_WARNING`, party →
   `PARTY` (warnings have no party channel, so plain party text), solo → local
   chat frame. Sim sessions are silent on the addon channel (no
@@ -386,11 +409,9 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl ver | /zl verlist version grid | text list
 /zl sim <link> [N]   simulate one item (auto-plays: the ML chose it)
 /zl simboss <boss>   queue boss drops in the loot window (ML rolls each)
-/zl simtmog <link>   transmog pass-along demo (menu choice passes it along)
+/zl simtmog <link>   transmog demo (TMOG kind winner awardable)
 /zl simroll <item>   roll one queued sim item (ML)
-/zl simtmog <link>   transmog pass-along demo (TMOG win auto-trades)
 /zl simstop          stop a running sim (clears queue)
-/zl trade <item> <from> <to>  record transmog pass-along trade (ML)
 /zl log | /zl logclear drop log
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)

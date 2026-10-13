@@ -1,7 +1,8 @@
 -- tests/test_mlflow.lua
 -- ML-driven flow: boss loot scan -> loot window, Roll per item, award menu
--- (winners + roll-type groups + class-sorted candidates), /zl award pick,
--- transmog pass-along (RecordTrade live + simtmog choice).
+-- (winners + roll-type groups + TMOG kind row + class-sorted candidates),
+-- /zl award pick. The ML awards the SR, MS, OS or TMOG winner directly;
+-- no trade handling (out of scope).
 local T = { pass = 0, fail = 0, errors = {} }
 
 local function eq(a, b, msg)
@@ -101,10 +102,8 @@ local function resetHarness(rollTime)
   Sim.pending = {}
   Sim.running = false
   Sim.auto = false
-  Sim.tmogPassAlong = false
   Sim.lastEntries = {}
   Sim.pendingAward = nil
-  Sim.pendingTrade = nil
   ML.session = nil
   ML.pendingAwardMenu = nil
   ZugLoot.LootWindow.Clear()
@@ -182,30 +181,26 @@ ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(drain(), "drain rest award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "rest resolves")
 
--- 4. RecordTrade live: marks recipient, annotates history, logs + announces.
+-- 4. Direct award by kind: the ML awards the TMOG kind winner straight
+-- from the menu (no trade leg — out of scope).
 resetHarness()
-SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Aaa")
-SRData.RecordRolls(ZugLoot.DB.sheet, 1001,
-  ZugLoot.Resolver.ToHistoryEntry(
-    ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
-      { { name = "Aaa", roll = 90, type = "SR" } }, { cap = 100, requireSR = true }), "SR", 1))
-printed = {}
-ML.RecordTrade(1001, "item:1001", "Aaa", "Bbb", false)
-ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "recipient marked won")
-local hist = SRData.GetRolls(ZugLoot.DB.sheet, 1001)
-local last = hist[#hist]
-eq(#(last.trades or {}), 1, "trade leg on history")
-eq(last.trades[1].from, "Aaa", "trade from")
-eq(last.trades[1].to, "Bbb", "trade to")
-eq(dropAdds[#dropAdds].outcome, "trade", "drop log outcome trade")
-local sawTrade = false
-for i = 1, #printed do
-  if string.find(printed[i], "Aaa traded") and string.find(printed[i], "Bbb") then sawTrade = true end
-end
-ok(sawTrade, "trade announced")
+ML.BeginSession(1001, "item:1001", "SR", false)
+ML.OnSystemRoll("Aaa", 90, 1, 100)
+ML.OnSystemRoll("Tmog", 15, 1, 98)
+table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
+local res4 = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
+  { cap = 100, requireSR = true })
+local menu4 = ML.BuildAwardMenu(ML.session, res4)
+eq(menu4.perType.TMOG.entry.name, "Tmog", "tmog kind winner")
+ML.pendingAwardMenu = { sess = ML.session, data = menu4 }
+ML.AwardChosen({ name = "Tmog", via = "tmog" })
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tmog"), "tmog winner awarded directly")
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "no spillover mark")
+eq(dropAdds[#dropAdds].outcome, "award", "drop log outcome award")
+eq(dropAdds[#dropAdds].winner, "Tmog", "drop log winner")
 
--- 5. Award menu: winners + SR/MS/OS/TMOG groups + class-sorted candidates
--- + TMOG trade plan (RollFor finish-popup data).
+-- 5. Award menu: winners + SR/MS/OS/TMOG groups + TMOG kind row +
+-- class-sorted candidates.
 resetHarness()
 ML.BeginSession(1001, "item:1001", "SR", false)
 ML.OnSystemRoll("Aaa", 90, 1, 100)   -- SR 90+10
@@ -217,26 +212,29 @@ local menu = ML.BuildAwardMenu(ML.session, res5)
 eq(menu.winners[1].name, "Aaa", "menu top winner")
 eq(menu.winners[1].rollType, "SR", "menu winner roll type")
 eq(menu.groups.SR[1].name, "Aaa", "SR group ranked")
--- TMOG miss-roller is not in any award group...
+-- TMOG has its own contest row even while SR wins outright (directly
+-- awardable — no pass-through machinery).
+ok(menu.perType.TMOG ~= nil and menu.perType.TMOG.entry ~= nil, "tmog contest row present")
+eq(menu.perType.TMOG.entry.name, "Tmog", "tmog contest names the roller")
+-- Over-cap rolls (above the TYPE range) stay out of award groups...
 local inGroups = false
 for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
   for j = 1, #menu.groups[gt] do
-    if menu.groups[gt][j].name == "Tmog" then inGroups = true end
+    if menu.groups[gt][j].overCap then inGroups = true end
   end
 end
-ok(not inGroups, "miss-rolls stay out of award groups")
+ok(not inGroups, "over-cap rolls stay out of award groups")
 -- ...but IS in the class-sorted candidate list (awardable by the ML).
 local candNames = {}
 for i = 1, #menu.candidates do candNames[menu.candidates[i].name] = true end
 ok(candNames["Tmog"] and candNames["Aaa"] and candNames["Bbb"], "candidates cover rollers")
 ML.Cancel()
--- TMOG top winner proposes the pass-along to the real winner.
+-- TMOG kind winner alongside the MS winner.
 resetHarness()
 ML.BeginSession(1001, "item:1001", "SR", false)
 ML.OnSystemRoll("Aaa", 5, 1, 100)
 ML.OnSystemRoll("Bbb", 80, 1, 98) -- feeds as TMOG... use direct rolls instead
 ML.session.rolls = {
-  { name = "Aaa", roll = 5, type = "SR" },
   { name = "Bbb", roll = 80, type = "MS" },
   { name = "Tmog", roll = 97, type = "TMOG" },
 }
@@ -247,13 +245,13 @@ table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
 local res5c = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
   { cap = 100, requireSR = true })
 local menu5c = ML.BuildAwardMenu(ML.session, res5c)
-eq(menu5c.winners[1].name, "Tmog", "tmog top winner")
-ok(menu5c.tradePlan ~= nil, "trade plan proposed")
-eq(menu5c.tradePlan.from, "Tmog", "trade from tmog roller")
-eq(menu5c.tradePlan.to, "Bbb", "trade to real winner (top SR/MS)")
+-- Per-type: Bbb wins MS outright (priority), Tmog owns TMOG directly.
+eq(menu5c.winners[1].name, "Bbb", "ms wins outright by priority")
+eq(menu5c.winners[1].rollType, "MS", "winner kind MS")
+eq(menu5c.perType.TMOG.entry.name, "Tmog", "tmog owns its kind")
 ML.Cancel()
 
--- 6. simtmog end-to-end: TMOG win passes to the real winner by ML choice.
+-- 6. simtmog end-to-end: TMOG roller is directly awardable from the menu.
 resetHarness()
 -- rollers: Aaa(SR), Bbb(MS-converted); Aaa rolls TMOG high.
 -- FakeRolls order: Aaa SR, Bbb SR, Aaa TMOG -> rigged {5, 6, 97}.
@@ -261,15 +259,15 @@ math.random = rigged({ 5, 6, 97 })
 Sim.SimTmog("1001")
 ok(drain(), "drain simtmog")
 math.random = realRandom
-ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "tmog roller NOT marked (passed along)")
-ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "real winner marked via trade")
-local sawPass = false
-for i = 1, #printed do
-  if string.find(printed[i], "pass-along", 1, true) then sawPass = true end
-end
-ok(sawPass, "pass-along announced")
-local h2 = SRData.GetRolls(ZugLoot.DB.sheet, 1001)
-ok(#(h2[#h2].trades or {}) == 1, "trade leg on sim history")
+-- Headless sim leaves the menu pending; the harness plays the ML and
+-- awards the TMOG kind winner directly.
+ok(ML.pendingAwardMenu ~= nil, "menu pending for ML choice")
+local menu6 = ML.pendingAwardMenu.data
+ok(menu6.perType.TMOG ~= nil and menu6.perType.TMOG.entry ~= nil, "tmog contest present")
+ML.AwardChosen({ name = menu6.perType.TMOG.entry.name, via = "tmog" })
+ok(drain(), "drain simtmog award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "tmog roller awarded")
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "no spillover mark")
 
 -- 7. RangeFor: TMOG feeds roll 1-98 so the roller list labels them TMOG.
 local function second(rtype) local _, mx = Sim.RangeFor(rtype) return mx end

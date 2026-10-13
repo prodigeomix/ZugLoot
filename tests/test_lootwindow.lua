@@ -1,6 +1,7 @@
 -- tests/test_lootwindow.lua
--- RollFor-style loot window: numbered rows (icon/name/SR-HR badge),
--- row detail (direct Award on single SR/HR, "..." choices, Close).
+-- RollFor-style loot window: numbered rows (icon/name/SR-HR badge), and the
+-- row detail that STAYS OPEN as the roll window (pick -> rolling -> award):
+-- live roll list with kinds, finish-early, award-in-window.
 local T = { pass = 0, fail = 0, errors = {} }
 
 local function eq(a, b, msg)
@@ -220,5 +221,199 @@ local lines = LW.DetailLines()
 ok(#lines == 3, "three detail lines")
 ok(string.find(lines[1], "SR:2", 1, true) ~= nil, "title carries badge")
 ok(string.find(lines[2], "Aaa", 1, true) ~= nil, "rollers listed")
+
+-- 6. Persistent roll window: pick -> rolling -> award in ONE window.
+-- Roll from the detail: it stays open and tracks the session.
+ZugLoot.DB = { sheet = makeSheet() }
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+local liveSessions = {}
+ML.StartItemRoll = function(id)
+  table.insert(liveSessions, id)
+  ML.session = { id = 7, itemID = id, itemLink = "item:" .. id, mode = "SR",
+    rolls = {}, itemCount = 1 }
+end
+ML.FinishEarly = function() ML.Finish(true) end
+eq(LW.doAction(1001, "roll"), "rolling", "roll starts from detail")
+ok(LW.detail ~= nil, "detail STAYS OPEN on roll (not closed)")
+eq(LW.detail.phase, "rolling", "detail phase rolling")
+eq(LW.detail.sessionID, 7, "detail tracks the session")
+-- Rolls land with their kind; first-roll-only; foreign sessions ignored.
+ok(LW.DetailOnRoll(1001, 7, "Aaa", 90, "SR", 100), "SR roll lands")
+ok(LW.DetailOnRoll(1001, 7, "Bbb", 80, "MS", 80), "MS roll lands")
+ok(LW.DetailOnRoll(1001, 7, "Oz", 97, "TMOG", 97), "TMOG roll lands")
+ok(not LW.DetailOnRoll(1001, 7, "Aaa", 50, "SR", 60), "second roll ignored")
+ok(not LW.DetailOnRoll(1001, 999, "Eve", 50, "SR", 50), "foreign session ignored")
+ok(not LW.DetailOnRoll(1002, 7, "Eve", 50, "SR", 50), "other item ignored")
+local rl = LW.DetailLines()
+local sawSR, sawMS, sawTM = false, false, false
+for i = 1, #rl do
+  if string.find(rl[i], "SR: Aaa 90", 1, true) then sawSR = true end
+  if string.find(rl[i], "MS: Bbb 80", 1, true) then sawMS = true end
+  if string.find(rl[i], "TMOG: Oz 97", 1, true) then sawTM = true end
+end
+ok(sawSR and sawMS and sawTM, "roll list shows every roll with its kind")
+-- Sorted SR > MS > OS > TMOG regardless of feed order.
+local sorted = LW.SortedDetailRolls()
+eq(sorted[1].rollType, "SR", "SR first")
+eq(sorted[#sorted].rollType, "TMOG", "TMOG last")
+-- Detail actions while rolling: Finish / Cancel / Close (no Award/...).
+local racts = LW.DetailActions()
+eq(racts[1].id, "finish", "rolling offers Finish")
+eq(racts[2].id, "cancel", "rolling offers Cancel")
+-- A second roll while one is live is refused, window untouched.
+ML.session = { id = 7, itemID = 1001 }
+eq(LW.doAction(1001, "roll"), "roll failed", "second roll refused")
+eq(LW.detail.phase, "rolling", "phase untouched by refused roll")
+ML.session = nil
+-- Finish: the same window becomes the award window (menu handed over).
+local menu6 = ML.BuildAwardMenu(
+  { itemID = 1001, itemLink = "item:1001", id = 7 },
+  ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
+    { { name = "Aaa", roll = 90, type = "SR" },
+      { name = "Bbb", roll = 80, type = "MS" } },
+    { cap = 100, requireSR = true }))
+ok(LW.DetailOnFinish(1001, menu6), "finish hands menu to detail")
+eq(LW.detail.phase, "award", "detail phase award")
+ok(LW.detail ~= nil, "same window awards (not a new one)")
+local al = LW.DetailLines()
+local sawWinner = false
+for i = 1, #al do
+  if string.find(al[i], "winner: Aaa", 1, true) then sawWinner = true end
+end
+ok(sawWinner, "award window names the winner with kind")
+local aacts = LW.DetailActions()
+eq(aacts[1].id, "award-name", "award offers winner rows")
+eq(aacts[1].name, "Aaa", "top winner first")
+-- Award from the window: the rolled-award path (menu confirm). The real
+-- AwardChosen marks done + closes; emulate the harness playing the ML.
+local pickName = aacts[1].name
+ML.pendingAwardMenu = { sess = { itemID = 1001, itemLink = "item:1001",
+    id = 7, silent = false, itemCount = 1 }, data = menu6 }
+ML.AwardChosen = function(choice)
+  SRData.MarkWon(ZugLoot.DB.sheet, 1001, choice.name)
+  LW.MarkDone(1001)
+  ML.pendingAwardMenu = nil
+  ML.session = nil
+  LW.CloseDetail()
+end
+eq(LW.doAction(1001, "award-name", pickName), "awarded Aaa", "award in window")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "window award won-marks")
+eq(LW.Find(1001).status, "done", "row done after window award")
+ok(LW.detail == nil, "window closed after award")
+
+-- 6b. TMOG 15 vs SR 58: SR wins outright; the TMOG kind row awards the
+-- TMOG roller directly (no trade leg — out of scope).
+ZugLoot.DB = { sheet = makeSheet() }
+table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+local menuT = ML.BuildAwardMenu(
+  { itemID = 1001, itemLink = "item:1001", id = 9 },
+  ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
+    { { name = "Aaa", roll = 58, type = "SR" },
+      { name = "Tmog", roll = 15, type = "TMOG" } },
+    { cap = 100, requireSR = true }))
+eq(menuT.winners[1].name, "Aaa", "sr wins outright by priority")
+eq(menuT.perType.TMOG.entry.name, "Tmog", "tmog owns its kind")
+ok(LW.DetailOnFinish(1001, menuT), "tmog finish to detail")
+local tacts = LW.DetailActions()
+eq(tacts[1].id, "award-name", "winner row first")
+eq(tacts[1].name, "Aaa", "winner row names SR winner")
+local tmogRow = nil
+for i = 1, #tacts do
+  if tacts[i].via == "tmog" then tmogRow = tacts[i] break end
+end
+ok(tmogRow ~= nil, "TMOG kind row present")
+eq(tmogRow.name, "Tmog", "tmog row names the kind winner")
+-- TMOG kind award via the window: direct, no leg, window closes.
+local gotTmog = nil
+ML.pendingAwardMenu = { sess = { itemID = 1001, itemLink = "item:1001",
+    id = 9, silent = false, itemCount = 1 }, data = menuT }
+ML.AwardChosen = function(choice)
+  gotTmog = choice
+  SRData.MarkWon(ZugLoot.DB.sheet, 1001, choice.name)
+  LW.MarkDone(1001)
+  ML.pendingAwardMenu = nil
+  LW.CloseDetail()
+end
+eq(LW.doAction(1001, "award-name", { name = tmogRow.name, via = tmogRow.via }),
+  "awarded Tmog", "tmog kind award from window")
+eq(gotTmog.via, "tmog", "tmog via forwarded")
+eq(gotTmog.name, "Tmog", "tmog recipient forwarded")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tmog"), "tmog winner marked")
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "no spillover mark")
+ok(LW.detail == nil, "window closed after tmog award")
+
+-- 6c. Confirm popup shows the item NAME (regression: "Award item:<id>").
+-- Restores the real AwardChosen afterwards (§6b stubbed it).
+dofile("MasterLootUI.lua")
+ML = ZugLoot.MasterLootUI
+StaticPopupDialogs = {}
+StaticPopup_Show = function(name) return name end
+LW.SetItems({ { itemID = 1001, link = "item:1001", name = "Dragonfang Blade" } }, "loot")
+ML.pendingAwardMenu = { sess = { itemID = 1001, itemLink = "item:1001",
+    id = 10, silent = false, itemCount = 1 },
+  data = { winners = { { name = "Aaa" } },
+    itemID = 1001, itemLink = "item:1001" } }
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+local ctext = StaticPopupDialogs["ZUGLOOT_AWARD"].text
+ok(string.find(ctext, "Dragonfang Blade", 1, true) ~= nil,
+  "confirm shows item name, got: " .. tostring(ctext))
+ok(not string.find(ctext, "item:1001", 1, true),
+  "confirm hides item:id, got: " .. tostring(ctext))
+StaticPopupDialogs = nil
+StaticPopup_Show = nil
+
+-- 7. Cancel drops a rolling detail back to pick (re-roll / choose / close).
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+ML.session = { id = 8, itemID = 1001, silent = false }
+LW.detail.phase = "rolling"
+LW.detail.sessionID = 8
+LW.DetailOnRoll(1001, 8, "Aaa", 90, "SR", 100)
+ML.Cancel = function()
+  ML.session = nil
+  LW.MarkOpen(1001)
+  -- mirror of MasterLootUI.Cancel's detail reset (headless ML stub)
+  if LW.detail and LW.detail.itemID == 1001 and LW.detail.sessionID == 8 then
+    LW.detail.phase = "pick"
+    LW.detail.sessionID = nil
+    LW.detail.rolls = {}
+    LW.detail.menu = nil
+    LW.detail.status = "open"
+    LW.RefreshDetail()
+  end
+end
+eq(LW.doAction(1001, "cancel"), "cancelled", "cancel from window")
+eq(LW.detail.phase, "pick", "detail back to pick after cancel")
+eq(#LW.detail.rolls, 0, "rolls cleared after cancel")
+ok(LW.detail ~= nil, "window stays for re-roll choice")
+
+-- 8. Flow layout: one row when wide, wrap when narrow, justified.
+-- Wide bar: all four share one justified row (even side margins).
+local wide = LW.LayoutBarRows({
+  { btn = "a", w = 80 }, { btn = "b", w = 80 },
+  { btn = "c", w = 44 }, { btn = "d", w = 60 },
+}, 300)
+eq(#wide, 1, "wide bar: one row")
+eq(#wide[1], 4, "wide bar: all four placed")
+-- total 264, space (300-264)/5 = 7.2: first starts at 7.2, last ends 292.8
+local first, last = wide[1][1], wide[1][4]
+ok(math.abs(first.x - 7.2) < 0.01, "row justified left margin")
+ok(math.abs((last.x + last.w) - 292.8) < 0.01, "row justified right margin")
+-- Narrow bar (the 320 frame => 300 usable is wide; force narrow): TMOG
+-- wraps above instead of overlapping .../Close.
+local narrow = LW.LayoutBarRows({
+  { btn = "a", w = 150 }, { btn = "b", w = 150 },
+  { btn = "c", w = 44 }, { btn = "d", w = 60 },
+}, 300)
+eq(#narrow, 2, "narrow bar: wraps to two rows")
+eq(#narrow[1], 1, "first row holds the wide primary alone")
+eq(narrow[2][1].btn, "b", "TMOG floats to the next row, not over ...")
+-- Single button centers with even margins.
+local one = LW.LayoutBarRows({ { btn = "a", w = 80 } }, 300)
+eq(#one, 1, "single: one row")
+ok(math.abs(one[1][1].x - 110) < 0.01, "single button centered")
 
 return T
