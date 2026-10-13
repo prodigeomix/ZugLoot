@@ -74,18 +74,31 @@ end
 eq(#RA.GetArchive(db), RA.MAX_KEPT, "archive capped")
 ok(RA.Find(db, "R1") == nil, "oldest evicted past cap")
 
--- 5. ListSummaries newest-first with active flag.
+-- 5. ListSummaries: latest raid at top by import time, with active flag.
 db = {}
 db.sheet = makeSheet("Rlive")
+db.sheet.meta.importedAt = 1000 -- older raid
 RA.ArchiveActive(db, 3000)
 db.sheet = makeSheet("Rold")
+db.sheet.meta.importedAt = 2000 -- newer raid (name sorts either way)
 RA.ArchiveActive(db, 3001)
 local rows = RA.ListSummaries(db)
 eq(#rows, 2, "two summaries")
-eq(rows[1].raidID, "Rold", "newest summary first")
+eq(rows[1].raidID, "Rold", "latest raid first by import time")
 -- Rold is live now (we archived Rlive, then set Rold live? no: db.sheet IS Rold)
 ok(rows[1].active, "live sheet flagged active")
 ok(not rows[2].active, "other not active")
+eq(rows[1].raidTime, 2000, "row carries raid time")
+
+-- 5b. Re-archiving an old raid never shuffles it above newer raids.
+-- (Archive position changes; ListSummaries order must not.)
+db.sheet = makeSheet("Rlive")
+db.sheet.meta.importedAt = 1000
+RA.ArchiveActive(db, 4000) -- archived NOW, but raid itself is older
+local rows5b = RA.ListSummaries(db)
+eq(#rows5b, 2, "still two summaries")
+eq(rows5b[1].raidID, "Rold", "newer raid stays on top despite re-archive")
+eq(rows5b[2].raidID, "Rlive", "re-archived old raid stays below")
 
 -- 6. Restore round-trips won + rolls + items; archive copy stays frozen.
 local back, err = RA.RestoreSheet(db, "Rlive")
@@ -124,6 +137,11 @@ eq(#RA.GetArchive(ZugLoot.DB), 2, "outgoing progress archived on switch")
 local cur = RA.Find(ZugLoot.DB, "Rnew-live")
 ok(cur ~= nil and cur.nSessions == 1, "outgoing progress kept in archive")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa") == false, "activated sheet has its own won state")
+
+-- 8b. RaidTime prefers import time, falls back to archive time.
+eq(RA.RaidTime({ importedAt = 1500, archivedAt = 9999 }), 1500, "import time wins")
+eq(RA.RaidTime({ importedAt = 0, archivedAt = 777 }), 777, "archive fallback")
+eq(RA.RaidTime({}), 0, "empty snapshot -> 0")
 
 -- 9. Freshly loaded sheet lists immediately, even though never unloaded.
 local db2 = { sheet = makeSheet("Rfresh") }

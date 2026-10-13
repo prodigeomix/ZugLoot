@@ -17,7 +17,88 @@ Z.MainWindow = M
 M.activeTab = "sheet"
 M.frame = nil
 
-local WIN_W, WIN_H = 660, 540
+-- Window size: big, but never larger than the screen. Targets are resolved
+-- against GetScreenWidth/Height at build/show time (UI scale and resolution
+-- changes mid-session trigger a rebuild via EnsureSize).
+M.TARGET_W, M.TARGET_H = 900, 640
+M.MIN_W, M.MIN_H = 480, 360
+M.MARGIN_W, M.MARGIN_H = 40, 60
+M.winW, M.winH = nil, nil
+
+-- NOTE (Lua scoping): these locals MUST stay above screenSize/EnsureSize/
+-- RefreshSize. Lua binds locals statically, so an assignment textually above
+-- the `local` declaration silently writes a global instead — the window
+-- would grow while every row kept rendering at the stale 596px width.
+-- per-tab scroll bodies: tabKey -> { sf, child, sb, y }
+local bodies = {}
+local tabBtns = {}
+local headerFS = nil
+local activeRaidFS = nil
+
+local BODY_TOP, BODY_BOTTOM, BODY_LEFT = -118, 14, 14
+-- Body width follows the live window width (window width minus 64).
+local BODY_WIDTH = 596
+
+local function screenSize()
+  local sw, sh = nil, nil
+  if GetScreenWidth then
+    local ok, v = pcall(GetScreenWidth)
+    if ok and tonumber(v) then sw = tonumber(v) end
+  end
+  if GetScreenHeight then
+    local ok, v = pcall(GetScreenHeight)
+    if ok and tonumber(v) then sh = tonumber(v) end
+  end
+  if not sw and UIParent and UIParent.GetWidth then
+    local ok, v = pcall(function() return UIParent:GetWidth() end)
+    if ok and tonumber(v) and tonumber(v) > 0 then sw = tonumber(v) end
+  end
+  if not sh and UIParent and UIParent.GetHeight then
+    local ok, v = pcall(function() return UIParent:GetHeight() end)
+    if ok and tonumber(v) and tonumber(v) > 0 then sh = tonumber(v) end
+  end
+  return sw, sh
+end
+
+-- Pure sizing: returns w, h clamped to the screen minus margins.
+-- sw/sh may be nil (mock/test) to exercise the fallback + clamp math.
+function M.ComputeSize(sw, sh)
+  local w, h = M.TARGET_W, M.TARGET_H
+  if sw and tonumber(sw) and tonumber(sw) > 0 then
+    w = math.min(w, math.floor(tonumber(sw) - M.MARGIN_W))
+  end
+  if sh and tonumber(sh) and tonumber(sh) > 0 then
+    h = math.min(h, math.floor(tonumber(sh) - M.MARGIN_H))
+  end
+  if w < M.MIN_W then w = M.MIN_W end
+  if h < M.MIN_H then h = M.MIN_H end
+  return w, h
+end
+
+function M.RefreshSize()
+  local sw, sh = screenSize()
+  M.winW, M.winH = M.ComputeSize(sw, sh)
+  if M.winW and M.winW > 200 then BODY_WIDTH = M.winW - 64 end
+  return M.winW, M.winH
+end
+
+-- Rebuild the window if the clamped size changed since Build
+-- (resolution / UI-scale change). Returns true when rebuilt.
+function M.EnsureSize()
+  local sw, sh = screenSize()
+  local w, h = M.ComputeSize(sw, sh)
+  if M.frame and M.winW == w and M.winH == h then return false end
+  if M.frame then M.frame:Hide() end
+  M.frame = nil
+  bodies = {}
+  tabBtns = {}
+  headerFS = nil
+  activeRaidFS = nil
+  M.winW, M.winH = w, h
+  if M.winW and M.winW > 200 then BODY_WIDTH = M.winW - 64 end
+  M.Build()
+  return true
+end
 
 local PAL = {
   bg    = { 0.055, 0.059, 0.071, 0.97 },
@@ -46,11 +127,6 @@ local TABS = {
   { key = "versions", label = "VERSIONS" },
   { key = "setup",    label = "SETUP" },
 }
-
--- per-tab scroll bodies: tabKey -> { sf, child, sb, y }
-local bodies = {}
-local tabBtns = {}
-local headerFS = nil
 
 local function hairline(parent, y1, x1, x2)
   local t = parent:CreateTexture(nil, "ARTWORK")
@@ -140,12 +216,12 @@ end
 -------------------------------------------------------------------------------
 -- Scroll body per tab
 -------------------------------------------------------------------------------
-local BODY_TOP, BODY_BOTTOM, BODY_LEFT, BODY_WIDTH = -118, 14, 14, 596
-
 local function MakeBody(parent, key)
+  local bw = BODY_WIDTH
+  local winH = (M.winH or 540)
   local sf = CreateFrame("ScrollFrame", "ZugLootBody_" .. key, parent)
   sf:SetPoint("TOPLEFT", parent, "TOPLEFT", BODY_LEFT, BODY_TOP)
-  sf:SetWidth(BODY_WIDTH) sf:SetHeight(WIN_H + BODY_TOP - BODY_BOTTOM)
+  sf:SetWidth(bw) sf:SetHeight(winH + BODY_TOP - BODY_BOTTOM)
   local child = CreateFrame("Frame", "ZugLootBodyChild_" .. key, sf)
   child:SetWidth(BODY_WIDTH) child:SetHeight(10)
   sf:SetScrollChild(child)
@@ -157,6 +233,9 @@ local function MakeBody(parent, key)
   local dn = getglobal("ZugLootBar_" .. key .. "ScrollDownButton")
   if up then up:Hide() end
   if dn then dn:Hide() end
+  -- NOTE: do NOT hide the pre-existing thumb texture here. SetThumbTexture
+  -- reuses that same texture object, so hiding it first hides the live
+  -- thumb too and the scrollbar ends up with no indicator at all.
   sb:SetThumbTexture("Interface\\Buttons\\WHITE8X8")
   local th = sb:GetThumbTexture()
   if th then th:SetWidth(6) th:SetHeight(24) th:SetVertexColor(0.42, 0.43, 0.48, 0.95) end
@@ -174,6 +253,16 @@ local function MakeBody(parent, key)
   return bodies[key]
 end
 
+-- Single owner for slider visibility: a tab's slider is only ever shown when
+-- its tab is active AND its content overflows. All five sliders share one
+-- screen rect, so a stale slider from a hidden tab would paint a frozen
+-- thumb over the live list.
+local function SyncSlider(key)
+  local b = bodies[key]
+  if not b then return end
+  if key == M.activeTab and b.hasOverflow then b.sb:Show() else b.sb:Hide() end
+end
+
 local function ClearBody(key)
   local b = bodies[key]
   if not b then return end
@@ -181,9 +270,11 @@ local function ClearBody(key)
     if b.rows[i] and b.rows[i].Hide then b.rows[i]:Hide() end
   end
   b.rows = {}
+  b.hasOverflow = false
   b.child:SetHeight(10)
   b.sb:SetMinMaxValues(0, 0) b.sb:SetValue(0)
   if b.sf.SetVerticalScroll then b.sf:SetVerticalScroll(0) end
+  b.sb:Hide()
 end
 
 local function TrackRow(key, row, h)
@@ -199,7 +290,8 @@ local function TrackRow(key, row, h)
   local maxScroll = b.child:GetHeight() - b.sf:GetHeight()
   if maxScroll < 0 then maxScroll = 0 end
   b.sb:SetMinMaxValues(0, maxScroll)
-  if maxScroll <= 8 then b.sb:Hide() else b.sb:Show() end
+  b.hasOverflow = maxScroll > 8
+  SyncSlider(key)
 end
 
 -------------------------------------------------------------------------------
@@ -354,11 +446,8 @@ function M.RenderRaids()
     local sub = FS(row, "GameFontHighlightSmall", "")
     sub:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -22)
     sub:SetWidth(BODY_WIDTH - 110) sub:SetJustifyH("LEFT")
-    local when = "?"
-    if r.archivedAt and r.archivedAt > 0 then
-      if date then when = date("%Y-%m-%d %H:%M", r.archivedAt)
-      elseif os and os.date then when = os.date("%Y-%m-%d %H:%M", r.archivedAt) end
-    end
+    -- Raid date = sheet import time (raid start proxy), not archive time.
+    local when = Z.Util.FormatTime(r.raidTime or r.importedAt)
     sub:SetText("by " .. tostring(r.importedBy) .. " · " .. tostring(r.source or "?") .. " · " .. when
       .. "\n" .. tostring(r.nItems or 0) .. " items · " .. tostring(r.nRollers or 0) .. " players · "
       .. tostring(r.nSessions or 0) .. " sessions · " .. tostring(r.nWon or 0) .. " won")
@@ -540,7 +629,18 @@ function M.Refresh()
   local sheet = Z.DB and Z.DB.sheet
   local nItems = sheet and Z.Util.TableCount(sheet.items) or 0
   local nRolls = sheet and Z.Util.TableCount(sheet.rolls or {}) or 0
-  headerFS:SetText("raid: " .. tostring(sheet and sheet.meta and sheet.meta.raidID or "—")
+  local meta = sheet and sheet.meta
+  local started = Z.Util.FormatTime(meta and meta.importedAt)
+  -- Prominent active raid on the brand row.
+  if sheet and meta and meta.raidID then
+    local nm = (meta.raidName and meta.raidName ~= "") and ("  " .. tostring(meta.raidName)) or ""
+    activeRaidFS:SetText("|cFF00FF00ACTIVE RAID:|r" .. nm .. "  |cFFFFD700" .. tostring(meta.raidID) .. "|r")
+  else
+    activeRaidFS:SetText("|cff888888no active raid|r")
+  end
+  headerFS:SetText("ID " .. tostring((meta and meta.raidID) or "—")
+    .. "   |   " .. tostring((meta and meta.raidName) or "—")
+    .. "   |   started " .. started
     .. "   |   " .. tostring(nItems) .. " items   |   " .. tostring(nRolls) .. " rolled")
   for _, tb in ipairs(tabBtns) do
     if tb.key == M.activeTab then
@@ -555,6 +655,7 @@ function M.Refresh()
     local bd = bodies[td.key]
     if bd then
       if td.key == M.activeTab then bd.sf:Show() else bd.sf:Hide() end
+      SyncSlider(td.key)
     end
   end
   local fn = RENDER[M.activeTab]
@@ -566,10 +667,41 @@ function M.SelectTab(key)
   M.Refresh()
 end
 
+-- Test hook (used by tests/mockrun.lua): slider visibility per tab.
+function M.DebugSliderState()
+  local out = {}
+  for key, b in pairs(bodies) do
+    out[key] = (b.sb and b.sb.IsVisible and b.sb:IsVisible()) and true or false
+  end
+  return out
+end
+
+-- Test hook: live layout numbers. Guards the Lua-scoping rule above:
+-- BODY_WIDTH must always track winW (a stale 596 here means the row layout
+-- silently detached from the window size again).
+function M.DebugLayout()
+  return { winW = M.winW, winH = M.winH, bodyWidth = BODY_WIDTH }
+end
+
+-- Test hook: current header line text.
+function M.DebugHeader()
+  if headerFS and headerFS.GetText then return headerFS:GetText() end
+  return nil
+end
+
+-- Test hook: current active-raid line text.
+function M.DebugActiveRaid()
+  if activeRaidFS and activeRaidFS.GetText then return activeRaidFS:GetText() end
+  return nil
+end
+
 function M.Build()
+  if not M.winW or not M.winH then M.RefreshSize() end
+  local winW, winH = M.winW, M.winH
   local f = CreateFrame("Frame", "ZugLootMainWindow", UIParent)
-  f:SetWidth(WIN_W) f:SetHeight(WIN_H)
+  f:SetWidth(winW) f:SetHeight(winH)
   f:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
+  f:SetClampedToScreen(true)
   f:SetMovable(true) f:EnableMouse(true)
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", function() f:StartMoving() end)
@@ -593,9 +725,13 @@ function M.Build()
   local ver = FS(f, "GameFontNormalSmall", "v" .. tostring(Z.VERSION))
   ver:SetPoint("LEFT", brand, "RIGHT", 8, 0)
   ver:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3])
+  -- Active raid, prominent on the brand row: green ACTIVE + raid name + ID.
+  activeRaidFS = FS(f, "GameFontNormal", "")
+  activeRaidFS:SetPoint("TOPRIGHT", f, "TOPRIGHT", -150, -12)
+  activeRaidFS:SetWidth(winW - 320) activeRaidFS:SetJustifyH("RIGHT")
   headerFS = FS(f, "GameFontHighlightSmall", "")
   headerFS:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -34)
-  headerFS:SetWidth(WIN_W - 120) headerFS:SetJustifyH("LEFT")
+  headerFS:SetWidth(winW - 120) headerFS:SetJustifyH("LEFT")
   headerFS:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3])
   local xb = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   xb:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
@@ -614,7 +750,7 @@ function M.Build()
   hairline(f, -56, 14, -14)
   -- tab rail (Aegis BuildSpecTabs pattern: buttons + gold underline)
   local n = Z.Util.ArrayCount(TABS)
-  local w = math.floor(560 / n)
+  local w = math.floor((winW - 100) / n)
   for i = 1, n do
     local td = TABS[i]
     local b = CreateFrame("Button", "ZugLootTab_" .. td.key, f)
@@ -642,7 +778,7 @@ function M.Build()
   -- bodies
   for _, td in ipairs(TABS) do MakeBody(f, td.key) end
   -- footer
-  hairline(f, -(WIN_H - 30), 14, -14)
+  hairline(f, -(winH - 30), 14, -14)
   local closeB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   closeB:SetWidth(80) closeB:SetHeight(20)
   closeB:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 6)
@@ -653,6 +789,7 @@ function M.Build()
 end
 
 function M.Show(tab)
+  M.EnsureSize()
   if not M.frame then M.Build() end
   if tab then M.activeTab = tab end
   if M.activeTab == "versions" and Z.VersionGrid then Z.VersionGrid.Request() end

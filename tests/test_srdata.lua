@@ -43,7 +43,7 @@ ok(bad == nil and berr ~= nil, "bad line rejected")
 
 -- 3. New raidres format: srPlus object, isValid=false still counts.
 local data = {
-  metadata = { id = "X1", origin = "raidres" },
+  metadata = { id = "X1", origin = "raidres", instances = { "Molten Core" } },
   reservations = {
     { character = { name = "Carbon", class = "Priest" }, raidItemId = 6724, srPlus = { value = 10, isValid = true } },
     { character = { name = "Zizz", class = "Druid" }, raidItemId = 6724, srPlus = { value = 50, isValid = false } },
@@ -63,6 +63,12 @@ eq(s2.items[6725].rollers[1].sr_plus, 30, "flat number srPlus")
 eq(s2.items[6726].rollers[1].sr_plus, 5, "string srPlus coerced")
 ok(s2.hardres[17782] ~= nil, "hardres from export")
 eq(s2.meta.raidID, "X1", "raid id kept")
+eq(s2.meta.raidName, "Molten Core", "raid name from instances[1]")
+-- instance fallback (name or id) when no instances array:
+local s2b = SRData.TransformRaidRes({ metadata = { id = "Y", instance = "Blackwing Lair" }, softreserves = {} })
+eq(s2b.meta.raidName, "Blackwing Lair", "raid name from instance")
+local s2c = SRData.TransformRaidRes({ metadata = { id = "Z" }, softreserves = {} })
+ok(s2c.meta.raidName == nil, "no instance info -> nil raid name")
 
 -- 4. Legacy format: sr_plus number/string, rollBonus, max-not-sum on dupes.
 local leg = {

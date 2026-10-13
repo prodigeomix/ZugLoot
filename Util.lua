@@ -191,5 +191,22 @@ function M.JsonDecode(s)
   return val
 end
 
+-- Format an epoch timestamp for display. Pure + testable: works with the
+-- WoW `date` global, stock `os.date`, or returns "?" when ts is empty.
+function M.FormatTime(ts, fmt)
+  ts = tonumber(ts) or 0
+  if ts <= 0 then return "?" end
+  fmt = fmt or "%Y-%m-%d %H:%M"
+  if date then
+    local ok, s = pcall(date, fmt, ts)
+    if ok and s then return s end
+  end
+  if os and os.date then
+    local ok, s = pcall(os.date, fmt, ts)
+    if ok and s then return s end
+  end
+  return tostring(ts)
+end
+
 if ZugLoot then ZugLoot.Util = M end
 return M

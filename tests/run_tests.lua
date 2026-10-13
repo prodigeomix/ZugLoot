@@ -21,6 +21,7 @@ local function run(file)
 end
 
 -- Tests dofile() sibling pure modules, so run them with cwd = addon root.
+run("test_util.lua")
 run("test_srdata.lua")
 run("test_resolver.lua")
 run("test_security.lua")
@@ -28,6 +29,7 @@ run("test_itemcards.lua")
 run("test_sim.lua")
 run("test_reset.lua")
 run("test_raids.lua")
+run("test_window_size.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
 -- fake 1.12 frame API to catch typos/nil-globals outside the client.

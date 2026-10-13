@@ -166,8 +166,23 @@ function M.TransformRaidRes(data)
   local sheet = M.NewSheet()
   sheet.meta.source = "paste"
   local metaId = nil
-  if type(data.metadata) == "table" and data.metadata.id then metaId = tostring(data.metadata.id) end
+  local raidName = nil
+  if type(data.metadata) == "table" then
+    if data.metadata.id then metaId = tostring(data.metadata.id) end
+    -- Raid/instance name: `instances` array first, then `instance` (name or id).
+    local inst = data.metadata.instances
+    if type(inst) == "table" then
+      local i = 1
+      while inst[i] ~= nil do
+        if inst[i] and inst[i] ~= "" then raidName = tostring(inst[i]) break end
+        i = i + 1
+      end
+    elseif data.metadata.instance ~= nil and data.metadata.instance ~= "" then
+      raidName = tostring(data.metadata.instance)
+    end
+  end
   sheet.meta.raidID = metaId
+  sheet.meta.raidName = raidName
   local function xform(items, name, role, quality)
     for i = 1, Util.ArrayCount(items) do
       local it = items[i]

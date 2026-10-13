@@ -7,6 +7,7 @@ local function newObj(kind)
   function o:ClearAllPoints() end
   function o:SetMovable() end
   function o:EnableMouse() end
+  function o:SetClampedToScreen() end
   function o:RegisterForDrag() end
   function o:SetScript(k,f) self.scripts[k]=f end
   function o:GetScript(k) return self.scripts[k] end
@@ -60,6 +61,9 @@ Z.MainWindow.Build();
 Z.MainWindow.Show("sheet");
 print("empty sheet render OK");
 local s,_ = Z.SRData.ParseLineFormat("Blackfang; 17063:2+20, 19137:1\nCarbon; 18646:1+60, 17063:1+130\nHARDRES; 17782, 18564\n");
+s.meta.raidID = "MOCK-RAID-1";
+s.meta.raidName = "Molten Core";
+s.meta.importedAt = 1720000000;
 Z.SRData.RecordRolls(s, 17063, { t=1, mode="SR", winners={"Carbon"}, entries={{name="Carbon",base=95,sr_plus=130,effective=225},{name="Blackfang",base=40,sr_plus=20,effective=60}} });
 Z.SRData.EnsureUnreserved(s, 9999, 4);
 Z.SRData.RecordRolls(s, 9999, { t=2, mode="OPEN", winners={"SoloPlayer"}, entries={{name="SoloPlayer",base=70,sr_plus=0,effective=70}} });
@@ -71,4 +75,34 @@ for _,tab in ipairs({"sheet","raids","rolls","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end
+-- scrollbar invariant, checked on every tab: a visible slider may only belong
+-- to the active tab. Hidden tabs must never paint a thumb (the old bug left
+-- stale sliders from hidden tabs over the live list).
+for _,tab in ipairs({"sheet","raids","rolls","versions","setup"}) do
+  Z.MainWindow.SelectTab(tab);
+  local sliderState = Z.MainWindow.DebugSliderState();
+  for other, vis in pairs(sliderState) do
+    assert(not vis or other == tab, "slider of hidden tab " .. other .. " visible while on " .. tab);
+  end
+end
+print("slider invariant OK");
+-- layout invariant: rows must span the live window (bodyWidth == winW - 64).
+-- Catches Lua-scoping regressions where size assignments miss the locals.
+local layout = Z.MainWindow.DebugLayout();
+assert(layout.winW == 900, "expected 900-wide window in mock, got " .. tostring(layout.winW));
+assert(layout.bodyWidth == layout.winW - 64, "body width " .. tostring(layout.bodyWidth) .. " detached from window " .. tostring(layout.winW));
+print("layout invariant OK");
+-- header shows ID, raid name and raid start
+Z.MainWindow.SelectTab("sheet");
+local hdr = Z.MainWindow.DebugHeader();
+assert(hdr and string.find(hdr, "ID MOCK-RAID-1", 1, true), "header shows raid ID, got: " .. tostring(hdr));
+assert(string.find(hdr, "Molten Core", 1, true), "header shows raid name, got: " .. tostring(hdr));
+assert(string.find(hdr, "started 2024", 1, true), "header shows raid start, got: " .. tostring(hdr));
+assert(string.find(hdr, "items", 1, true), "header shows item count, got: " .. tostring(hdr));
+-- prominent active raid line on the brand row
+local act = Z.MainWindow.DebugActiveRaid();
+assert(act and string.find(act, "ACTIVE RAID", 1, true), "active raid label, got: " .. tostring(act));
+assert(string.find(act, "Molten Core", 1, true), "active raid name, got: " .. tostring(act));
+assert(string.find(act, "MOCK-RAID-1", 1, true), "active raid ID, got: " .. tostring(act));
+print("header invariant OK");
 print("MOCK UI RUN OK");

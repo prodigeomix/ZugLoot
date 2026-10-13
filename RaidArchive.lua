@@ -159,10 +159,20 @@ function M.SyncActive(db, now)
   return snap
 end
 
--- Lightweight rows for the Raids tab, newest first. The live sheet is
--- always included (synced first) so a just-loaded raid shows up even if
--- it was never unloaded.
--- Row: { raidID, importedBy, importedAt, archivedAt, source,
+-- Effective raid datetime for ordering: the sheet's import time (stamped
+-- when the sheet was loaded = raid start for our purposes). Falls back to
+-- archive time for legacy snapshots that predate importedAt.
+function M.RaidTime(snap)
+  if snap.importedAt and snap.importedAt > 0 then return snap.importedAt end
+  return snap.archivedAt or 0
+end
+
+-- Lightweight rows for the Raids tab, latest raid at the top. The live
+-- sheet is always included (synced first) so a just-loaded raid shows up
+-- even if it was never unloaded. Ordering is by raid datetime
+-- (importedAt), NOT archive position, so re-archiving an old raid (e.g.
+-- activating it to peek) never shuffles it above newer raids.
+-- Row: { raidID, importedBy, importedAt, archivedAt, raidTime, source,
 --        nItems, nRollers, nSessions, nWon, active }
 function M.ListSummaries(db, now)
   M.SyncActive(db, now)
@@ -177,6 +187,7 @@ function M.ListSummaries(db, now)
       importedBy = s.importedBy,
       importedAt = s.importedAt,
       archivedAt = s.archivedAt,
+      raidTime = M.RaidTime(s),
       source = s.source,
       nItems = s.nItems,
       nRollers = s.nRollers,
@@ -186,6 +197,12 @@ function M.ListSummaries(db, now)
     })
     i = i + 1
   end
+  table.sort(out, function(a, b)
+    if (a.raidTime or 0) ~= (b.raidTime or 0) then
+      return (a.raidTime or 0) > (b.raidTime or 0)
+    end
+    return tostring(a.raidID) < tostring(b.raidID)
+  end)
   return out
 end
 

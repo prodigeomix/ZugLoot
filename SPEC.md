@@ -56,7 +56,7 @@ Rules:
 
 ```lua
 Sheet = {
-  meta    = { raidID = "Leader-epoch", importedAt = 0, importedBy = "Name", source = "paste|file" },
+  meta    = { raidID = "Leader-epoch", raidName = "Molten Core"|nil, importedAt = 0, importedBy = "Name", source = "paste|file" },
   items   = { [itemID] = { quality = 4, rollers = { { name="X", rolls=2, sr_plus=30 }, ... } } },
   hardres = { [itemID] = { quality = 5 } },
   won     = { [itemID] = { ["PlayerName"] = true } },  -- one copy per player per raid
@@ -69,6 +69,11 @@ Sheet = {
   item (RollFor parity: keep `max`, never sum). `nil/0` = no bonus.
 - `won` is runtime-only (per raid, cleared on new sheet / `/zl reset`). It is what
   powers "won items are visible but marked; that raider can't win another copy".
+- `raidName` = instance name from the raidres export (`metadata.instances[1]`,
+  else `metadata.instance`); nil for hand-written line sheets. Shown in the
+  window header next to the ID.
+- `importedAt` = import timestamp = the raid's start time for display and
+  raid-list ordering (see Raids tab).
 
 ### 3.1 Supported import formats
 
@@ -135,7 +140,9 @@ Sheet = {
 
 ### 4.1 Main window (`MainWindow.lua`) — both roles, Aegis-SBR-skinned
 
-- `/zl sheet` opens the big tabbed window (660×540, movable, flat dark palette,
+- `/zl sheet` opens the big tabbed window (900×640 target, clamped to screen
+  minus margins, min 480×360, re-clamped + rebuilt on resolution/UI-scale
+  change, clamped-to-screen dragging; movable, flat dark palette,
   gold accent strip, tab rail with gold underline on the active tab, per-tab
   scroll bodies with scrollbar + mouse wheel). Tabs: **Sheet** (default) |
   **Raids** | **Rolls** | **Versions** | **Setup**. `/zl log` opens Rolls,
@@ -159,13 +166,20 @@ Sheet = {
 - Card data comes from pure `ItemCards.BuildCards(sheet)` (tested); roll
   sessions persist in `sheet.rolls[itemID]` (capped at 25/item), recorded by
   `MasterLootUI.AnnounceResult` for every finished session.
-- Header: raidID, item count, rolled-item count. Setup tab: Import (paste),
+- Header: brand row carries a prominent green `ACTIVE RAID: <name> <raidID>`
+  (grey `no active raid` when no sheet); sub-line `ID <raidID> | <raid name> |
+  started <date> | N items | M rolled` (raid name "—" for line sheets without
+  instance info). Setup tab: Import (paste),
   Load from File, auto-roll toggle, clear won marks, roll-time/log stats.
-- **Raids tab**: imported raids, newest first — the live sheet is always
-  listed too (synced on load and on every render, so a just-loaded raid shows
-  up even though it was never unloaded). Each row shows raidID (+ green
-  `[ACTIVE]` on the live one), importer, source, archive date, and counts
-  (items / players / sessions / won). **Activate** makes a raid the live
+- **Raids tab**: imported raids with the **latest raid at the top**, ordered
+  by raid datetime = the sheet's `meta.importedAt` import timestamp (the
+  closest thing to a raid start time the sheet carries; `archivedAt` is only
+  a fallback for legacy snapshots). Archive position never affects order, so
+  re-archiving an old raid can't shuffle it above newer ones. The live sheet
+  is always listed too (synced on load and on every render, so a just-loaded
+  raid shows up even though it was never unloaded). Each row shows raidID
+  (+ green `[ACTIVE]` on the live one), importer, source, raid date, and
+  counts (items / players / sessions / won). **Activate** makes a raid the live
   sheet and continues it — won marks + roll history come along, and the
   outgoing sheet is archived first so no progress is lost (`/zl raid <raidID>`
   does the same from chat). History lives in `ZugLootDB.raidArchive` (capped
