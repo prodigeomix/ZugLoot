@@ -17,7 +17,10 @@ No dependencies. Interface 11200.
   `<WoW>/CustomData/ZugLoot_SR.txt` (see `CustomData_example/ZugLoot_SR.txt`)
   and press **Load from File**. Solo (no group) you can still load a sheet
   the same way to preview/sim — it just isn't broadcast until you group up.
-- Everyone: `/zl sheet` to view the sheet (sorted by item, `Name xN (+SR+)`, WON marks).
+- Everyone: `/zl sheet` opens the big tabbed window (Sheet | Rolls | Versions | Setup).
+  Sheet tab shows one card per item: hoverable icon, `Name xN (+SR+)`, `[HR]` /
+  `[rolled xN]` badges, WON marks, and every roll session this raid one line
+  per player.
 - ML: `/zl rf <itemlink>` starts an SR roll. `/zl sim <itemlink>` practices without a raid.
 - Raider: frame pops on ML warning / ROLL_REQ / group-loot drops. `/zl auto on` to auto-roll SRs.
 - `/zl ver` shows the addon-version squares grid. `/zl help` lists commands.

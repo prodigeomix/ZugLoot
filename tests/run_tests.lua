@@ -24,10 +24,26 @@ end
 run("test_srdata.lua")
 run("test_resolver.lua")
 run("test_security.lua")
+run("test_itemcards.lua")
+
+-- Mock-client UI run: executes MainWindow Build + all tab renders under a
+-- fake 1.12 frame API to catch typos/nil-globals outside the client.
+print("--- mock UI run --")
+local mchunk, merr = loadfile("tests/mockrun.lua")
+if not mchunk then
+  print("LOAD FAIL mockrun.lua: " .. tostring(merr))
+  totalFail = totalFail + 1
+else
+  local mok, merr2 = pcall(mchunk)
+  if not mok then
+    print("RUN FAIL mockrun.lua: " .. tostring(merr2))
+    totalFail = totalFail + 1
+  end
+end
 
 -- 5.0-syntax sanity: all shipped lua files must parse (loadfile without running).
-local files = { "Constants.lua", "Util.lua", "SRData.lua", "Resolver.lua", "SRView.lua",
-  "SRSecurity.lua", "SRImport.lua", "BossData.lua" }
+local files = { "Constants.lua", "Util.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "SRView.lua",
+  "SRSecurity.lua", "SRImport.lua", "BossData.lua", "MainWindow.lua" }
 for _, f in ipairs(files) do
   local c, e = loadfile(f)
   if not c then print("PARSE FAIL " .. f .. ": " .. tostring(e)) totalFail = totalFail + 1

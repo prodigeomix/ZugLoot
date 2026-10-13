@@ -114,18 +114,31 @@ Sheet = {
 
 ## 4. UI
 
-### 4.1 SR sheet view (`SRView.lua`) — both roles
+### 4.1 Main window (`MainWindow.lua`) — both roles, Aegis-SBR-skinned
 
-- `/zl sheet` or toolbar button. Movable, closable, `UIDropDown`-free (1.12-safe).
-- Sorted **by item**: itemID ascending, grouped with icon + link (cached via
-  `GetItemInfo(tonumber(id))` numeric-ID trick, cf. LootBlare fix #8), quality color.
-- Per item row: each roller as `|c<classcolor>Name|r xN (+M)`; SR+ in gold.
-  Won players struck through + `WON` tag; rows for fully-won-by-you items dimmed.
-- Header: raidID, importer, counts (items / rollers / hardres), buttons:
-  `Import` (ML/RL only, others see disabled + tooltip "Master looter or raid
-  leader only"), `Load from File`, `Close`.
-- "Fancy" = class colors, quality borders, zebra rows, icon textures, WON badges,
-  tooltips with roller detail. No external libs.
+- `/zl sheet` opens the big tabbed window (660×540, movable, flat dark palette,
+  gold accent strip, tab rail with gold underline on the active tab, per-tab
+  scroll bodies with scrollbar + mouse wheel). Tabs: **Sheet** (default) |
+  **Rolls** | **Versions** | **Setup**. `/zl log` opens Rolls, `/zl ver` opens
+  Versions. (`SRView`/`DropLog`/`VersionGrid` standalone frames retired into
+  tabs; their modules keep pure logic + slash commands.)
+- **Sheet tab**, one card per item, sorted by itemID ascending:
+  - icon button (texture via `GetItemInfo(tonumber(id))` numeric-ID trick, cf.
+    LootBlare fix #8; quality-color bottom border). **Hover = full GameTooltip
+    item details** (`SetHyperlink` when the client knows the item, fallback
+    text otherwise). Click inserts the link into an open chat box.
+  - title: quality-colored name + `[HR]` tag + green `[rolled xN]` badge.
+  - SR list: `Name xN (+SR+)` (SR+ in gold), `[WON]` marks for already-won.
+  - roll history: every finished session this raid as its own block
+    (`— rolls #k (mode) => winners`), **one line per player**:
+    `Carbon 95(+130=225)` with `WINNER:` prefix, `[miss — no SR]` /
+    `[already won]` flags where applicable.
+  - zebra rows; row hover tooltip summarizes SR/HR + roll state.
+- Card data comes from pure `ItemCards.BuildCards(sheet)` (tested); roll
+  sessions persist in `sheet.rolls[itemID]` (capped at 25/item), recorded by
+  `MasterLootUI.AnnounceResult` for every finished session.
+- Header: raidID, item count, rolled-item count. Setup tab: Import (paste),
+  Load from File, auto-roll toggle, clear won marks, roll-time/log stats.
 
 ### 4.2 Master-looter console (`MasterLootUI.lua`) — RollFor-like
 

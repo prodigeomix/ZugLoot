@@ -89,6 +89,8 @@ function M.Refresh()
 end
 
 function M.Toggle()
+  -- Delegates to the tabbed main window (Sheet tab); kept for API compat.
+  if Z.MainWindow then Z.MainWindow.Toggle("sheet") return end
   if not frame then M.Build() end
   if frame:IsVisible() then frame:Hide() else M.Refresh() frame:Show() end
 end

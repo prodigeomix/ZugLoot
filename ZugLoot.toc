@@ -12,6 +12,7 @@ Core.lua
 FileIO.lua
 SRData.lua
 Resolver.lua
+ItemCards.lua
 SRSecurity.lua
 Comm.lua
 SRImport.lua
@@ -20,6 +21,7 @@ MasterLootUI.lua
 RaiderLootUI.lua
 AutoRoll.lua
 VersionGrid.lua
+MainWindow.lua
 BossData.lua
 Sim.lua
 DropLog.lua

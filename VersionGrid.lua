@@ -72,34 +72,10 @@ function M.RenderRows(names)
   return rows
 end
 
-local gridFrame = nil
 function M.Show()
+  -- Versions tab in the main window owns the grid now; kept for API compat.
+  if Z.MainWindow then Z.MainWindow.Toggle("versions") return end
   M.Request()
-  if not gridFrame then
-    gridFrame = CreateFrame("Frame", "ZugLootVerFrame", UIParent)
-    gridFrame:SetWidth(300) gridFrame:SetHeight(200)
-    gridFrame:SetPoint("CENTER", UIParent, "CENTER", 200, 0)
-    gridFrame:SetMovable(true) gridFrame:EnableMouse(true)
-    gridFrame:RegisterForDrag("LeftButton")
-    gridFrame:SetScript("OnDragStart", function() gridFrame:StartMoving() end)
-    gridFrame:SetScript("OnDragStop", function() gridFrame:StopMovingOrSizing() end)
-    gridFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
-      edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
-      insets = { left = 4, right = 4, top = 4, bottom = 4 } })
-    gridFrame:SetBackdropColor(0, 0, 0, 0.9)
-    local t = gridFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    t:SetPoint("TOP", gridFrame, "TOP", 0, -10)
-    t:SetText("ZugLoot versions (" .. Z.VERSION .. ")")
-    local c = gridFrame:CreateFontString("ZugLootVerContent", "OVERLAY", "GameFontHighlightSmall")
-    c:SetPoint("TOPLEFT", gridFrame, "TOPLEFT", 14, -40)
-    c:SetWidth(272) c:SetJustifyH("LEFT")
-    local cb = CreateFrame("Button", nil, gridFrame, "UIPanelButtonTemplate")
-    cb:SetWidth(80) cb:SetHeight(22)
-    cb:SetPoint("BOTTOM", gridFrame, "BOTTOM", 0, 12)
-    cb:SetText("Close")
-    cb:SetScript("OnClick", function() gridFrame:Hide() end)
-  end
-  gridFrame:Show()
 end
 
 function M.PrintList()

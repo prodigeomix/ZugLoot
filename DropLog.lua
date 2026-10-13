@@ -44,40 +44,7 @@ function M.Lines()
   return out
 end
 
-local logFrame = nil
 function M.Show()
-  if not logFrame then
-    logFrame = CreateFrame("Frame", "ZugLootLogFrame", UIParent)
-    logFrame:SetWidth(460) logFrame:SetHeight(300)
-    logFrame:SetPoint("CENTER", UIParent, "CENTER", -200, 0)
-    logFrame:SetMovable(true) logFrame:EnableMouse(true)
-    logFrame:RegisterForDrag("LeftButton")
-    logFrame:SetScript("OnDragStart", function() logFrame:StartMoving() end)
-    logFrame:SetScript("OnDragStop", function() logFrame:StopMovingOrSizing() end)
-    logFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
-      edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
-      insets = { left = 4, right = 4, top = 4, bottom = 4 } })
-    logFrame:SetBackdropColor(0, 0, 0, 0.9)
-    local t = logFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-    t:SetPoint("TOP", logFrame, "TOP", 0, -10)
-    t:SetText("ZugLoot — Drop log")
-    local c = logFrame:CreateFontString("ZugLootLogContent", "OVERLAY", "GameFontHighlightSmall")
-    c:SetPoint("TOPLEFT", logFrame, "TOPLEFT", 14, -40)
-    c:SetWidth(432) c:SetJustifyH("LEFT") c:SetJustifyV("TOP")
-    local cb = CreateFrame("Button", nil, logFrame, "UIPanelButtonTemplate")
-    cb:SetWidth(80) cb:SetHeight(22)
-    cb:SetPoint("BOTTOM", logFrame, "BOTTOM", 0, 12)
-    cb:SetText("Close")
-    cb:SetScript("OnClick", function() logFrame:Hide() end)
-    logFrame:Hide()
-  end
-  local c = getglobal("ZugLootLogContent")
-  if c then
-    local ls = M.Lines()
-    local show = {}
-    for i = 1, math.min(Z.Util.ArrayCount(ls), 25) do table.insert(show, ls[i]) end
-    c:SetText(table.concat(show, "\n"))
-  end
-  logFrame:Show()
-  for i = 1, Z.Util.ArrayCount(M.Lines()) do Z.Print(M.Lines()[i]) end
+  -- Rolls tab in the main window owns the log view now; kept for API compat.
+  if Z.MainWindow then Z.MainWindow.Toggle("rolls") return end
 end

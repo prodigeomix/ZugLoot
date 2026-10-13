@@ -20,7 +20,32 @@ if not Util then
 end
 
 function M.NewSheet()
-  return { meta = { raidID = nil, importedAt = 0, importedBy = "?", source = "?" }, items = {}, hardres = {}, won = {} }
+  return { meta = { raidID = nil, importedAt = 0, importedBy = "?", source = "?" }, items = {}, hardres = {}, won = {}, rolls = {} }
+end
+
+M.ROLLS_PER_ITEM_MAX = 25
+
+-- Roll history: every finished roll session for an itemID this raid.
+-- entry = { t=epoch, mode="SR"|"OPEN"|"RAID"|"TWO", winners={names},
+--             entries={ {name, base, sr_plus, effective, missroll, excludedWon} } }
+-- Entries should be stored sorted by effective desc (record-time sort).
+function M.RecordRolls(sheet, itemID, entry)
+  sheet.rolls = sheet.rolls or {}
+  sheet.rolls[itemID] = sheet.rolls[itemID] or {}
+  table.insert(sheet.rolls[itemID], entry)
+  while Util.ArrayCount(sheet.rolls[itemID]) > M.ROLLS_PER_ITEM_MAX do
+    table.remove(sheet.rolls[itemID], 1)
+  end
+  return Util.ArrayCount(sheet.rolls[itemID])
+end
+
+function M.GetRolls(sheet, itemID)
+  if not sheet or not sheet.rolls or not sheet.rolls[itemID] then return {} end
+  return sheet.rolls[itemID]
+end
+
+function M.RollCount(sheet, itemID)
+  return Util.ArrayCount(M.GetRolls(sheet, itemID))
 end
 
 -- SR+ extraction parity with RollFor: max wins, value only (isValid ignored).
@@ -206,6 +231,10 @@ end
 
 function M.ClearWon(sheet)
   sheet.won = {}
+end
+
+function M.ClearRolls(sheet)
+  sheet.rolls = {}
 end
 
 function M.SortedItemIDs(sheet)

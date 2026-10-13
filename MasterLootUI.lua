@@ -113,6 +113,30 @@ function M.AnnounceResult(sess, res)
     for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(w, res.winners[i].name .. " (" .. res.winners[i].effective .. ")") end
     SendChatMessage("Winner: " .. table.concat(w, ", "), "RAID_WARNING")
   end
+  -- Persist the session into per-item roll history (survives the session).
+  if Z.DB.sheet and Z.SRData.RecordRolls then
+    local winNames = {}
+    for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(winNames, res.winners[i].name) end
+    local entries = {}
+    for i = 1, Z.Util.ArrayCount(res.entries or res.ranked) do
+      local e = (res.entries or res.ranked)[i]
+      table.insert(entries, { name = e.name, base = e.base, sr_plus = e.sr_plus or 0,
+        effective = e.effective or e.base, missroll = e.missroll, excludedWon = e.excludedWon })
+    end
+    -- History entries read top-down: sort by effective desc.
+    table.sort(entries, function(a, b)
+      if (a.effective or 0) ~= (b.effective or 0) then return (a.effective or 0) > (b.effective or 0) end
+      return tostring(a.name) < tostring(b.name)
+    end)
+    Z.SRData.RecordRolls(Z.DB.sheet, sess.itemID, {
+      t = (time and time()) or 0,
+      mode = sess.mode,
+      winners = winNames,
+      entries = entries,
+      missrolls = Z.Util.ArrayCount(res.missrolls),
+    })
+    if Z.MainWindow then Z.MainWindow.Refresh() end
+  end
 end
 
 function M.Award(itemID, itemLink, winnerEntry)
