@@ -1,0 +1,25 @@
+## Interface: 11200
+## Title: ZugLoot
+## Author: Eirik
+## Version: 0.1.0
+## Notes: SR-based loot for master looters and raiders. Inspired by RollFor + LootBlare.
+## SavedVariables: ZugLootDB
+## SavedVariablesPerCharacter: ZugLootCharDB
+
+Constants.lua
+Util.lua
+Core.lua
+FileIO.lua
+SRData.lua
+Resolver.lua
+SRSecurity.lua
+Comm.lua
+SRImport.lua
+SRView.lua
+MasterLootUI.lua
+RaiderLootUI.lua
+AutoRoll.lua
+VersionGrid.lua
+BossData.lua
+Sim.lua
+DropLog.lua

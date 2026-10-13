@@ -1,0 +1,7 @@
+# Player; itemID[:count][+srplus], ...
+# Lines starting with # are comments. Blank lines ignored.
+# HARDRES; lists hard-reserved item IDs (shown, never rolled).
+Blackfang; 17063:2+20, 19137:1
+Carbon; 18646:1+60, 17063:1+130
+Blackdeath; 19137:1+10, 18805:1+10
+HARDRES; 17782, 18564
