@@ -76,16 +76,16 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
       local excluded = wonMap[rv.name] == true
       -- Over-cap: above the TYPE range (e.g. 99 on a 1-98 TMOG roll).
       local over = base > typeCap
-      -- Miss: an SR-range roll from someone WITHOUT the reserve (a
-      -- fake SR claim). MS/OS rolls are valid kind contests from anyone
-      -- (the sheet only holds SR rollers — requiring it would make MS/OS
-      -- unwinnable); TMOG never misses.
+      -- Miss: only legacy/test input still carries an SR tag for someone
+      -- WITHOUT the reserve (a fake SR claim — the live feed re-types
+      -- those as MS in OnSystemRoll). MS/OS/TMOG rolls are valid kind
+      -- contests from anyone (the sheet only holds SR rollers).
       local miss = false
       if not over and not excluded then
         if rtype == "SR" then miss = requireSR and not isSR
         else miss = false end
       end
-      -- SR bonus: SR rolls by sheet rollers only.
+      -- SR bonus: SR-kind rolls by sheet rollers only.
       local bonus = 0
       if rtype == "SR" and isSR then bonus = info.bonus or 0 end
       table.insert(entries, {

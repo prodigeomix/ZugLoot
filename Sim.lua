@@ -50,6 +50,14 @@ function M.Busy()
   return false
 end
 
+-- Display name for sim chat lines (never a bare item:id).
+local function dispName(itemID, link)
+  if Z.MasterLootUI and Z.MasterLootUI.DisplayItemLink then
+    return Z.MasterLootUI.DisplayItemLink(itemID, link)
+  end
+  return tostring(link or ("item:" .. tostring(itemID)))
+end
+
 -- Stop a running sim: drop the queue (the live item, if any, plays out).
 function M.Stop()
   M.pending = {}
@@ -169,11 +177,32 @@ function M.RangeFor(rtype)
   return 1, caps.SR or 100
 end
 
--- Feed one roll into the live sim session (timer callback).
+-- Feed one roll into the live sim session (timer callback). The precomputed
+-- entry carries the INTENT (like a player clicking the MS dice): feed the
+-- range, then stamp the intended kind — OnSystemRoll would otherwise read
+-- every sheet roller at 1-100 back as SR.
 local function feedRoll(sess, rv)
   if not Z.MasterLootUI or Z.MasterLootUI.session ~= sess then return end
   local minR, maxR = M.RangeFor(rv.type)
   Z.MasterLootUI.OnSystemRoll(rv.name, rv.roll, minR, maxR)
+  if rv.type and sess and sess.rolls then
+    for i = 1, Z.Util.ArrayCount(sess.rolls) do
+      if sess.rolls[i].name == rv.name then
+        sess.rolls[i].type = rv.type
+        break
+      end
+    end
+  end
+  -- The ML roll window mirrors the corrected kind.
+  if Z.LootWindow and Z.LootWindow.detail
+      and Z.LootWindow.detail.itemID == sess.itemID
+      and Z.LootWindow.detail.phase == "rolling" then
+    local drolls = Z.LootWindow.detail.rolls or {}
+    for i = 1, Z.Util.ArrayCount(drolls) do
+      if drolls[i].name == rv.name then drolls[i].rollType = rv.type break end
+    end
+    Z.LootWindow.RefreshDetail()
+  end
 end
 
 -- Finish wrapper: resolves, re-rolls ties (up to TIE_ROUNDS fresh rounds
@@ -184,13 +213,18 @@ local function finishSim(entry, round)
   if not ML or not ML.session then M.RequestNextRoll() return end
   local sheet = Z.DB and Z.DB.sheet
   local names = {}
-  -- Pre-resolve (same opts Finish uses): tie subset.
+  local tieKind = nil
+  -- Pre-resolve (same opts Finish uses): tie subset + its kind (ties only
+  -- ever happen WITHIN one kind, so re-rolls keep that kind's range).
   -- Finish re-resolves deterministically on identical inputs.
   local pre = nil
   if sheet then
     pre = Z.Resolver.ResolveItem(sheet, ML.session.itemID, ML.session.rolls, finishOpts(ML.session, sheet))
     local tied = pre.tied or {}
-    for i = 1, Z.Util.ArrayCount(tied) do table.insert(names, tied[i].name) end
+    for i = 1, Z.Util.ArrayCount(tied) do
+      table.insert(names, tied[i].name)
+      if tied[i].rollType then tieKind = tied[i].rollType end
+    end
   end
   M.pendingAward = nil
   local outcome = ML.Finish()
@@ -214,10 +248,12 @@ local function finishSim(entry, round)
       end
       sess.rolls = kept
     end
-    local cap = Z.Caps.SR
+    local tmin, tmax = 1, Z.Caps.SR
+    if tieKind then tmin, tmax = M.RangeFor(tieKind) end
+    local cap = tmax
     for i = 1, Z.Util.ArrayCount(names) do
       local nm = names[i]
-      Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, { name = nm, type = "SR", roll = math.random(1, cap) }) end)
+      Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, { name = nm, type = tieKind or "SR", roll = math.random(tmin, cap) }) end)
     end
     Z.Timer.After((Z.Util.ArrayCount(names) + 1) * M.ROLL_GAP + 0.2, function() finishSim(entry, round + 1) end)
     return
@@ -248,13 +284,8 @@ function M.playOne(entry)
   local rollTime = (Z.DB and Z.DB.rollTime) or 15
   ML.BeginSession(entry.itemID, entry.link, entry.mode, true)
   if Z.LootWindow then Z.LootWindow.MarkRolling(entry.itemID) end
-  -- ML view: make sure the sheet window is up (don't toggle it away).
-  if Z.MainWindow and Z.MainWindow.Show then
-    local f = Z.MainWindow.frame
-    if not f or not (f.IsVisible and f:IsVisible()) then
-      Z.MainWindow.Show("sheet")
-    end
-  end
+  -- No forced sheet window: the sim plays in the loot + roll windows, and
+  -- the sheet opens only on player request (/zl sheet).
   for i = 1, Z.Util.ArrayCount(entry.rolls) do
     local rv = entry.rolls[i]
     Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, rv) end)
@@ -292,7 +323,7 @@ function M.RequestRoll(itemID)
       local entry = table.remove(M.pending, i)
       M.running = true
       M.SyncLootWindow()
-      Z.Print("SIM: rolling " .. tostring(entry.link) .. " (ML pick).")
+      Z.Print("SIM: rolling " .. dispName(entry.itemID, entry.link) .. " (ML pick).")
       M.playOne(entry)
       return
     end
@@ -378,7 +409,7 @@ function M.SimItem(argText)
   if not itemID then Z.Print("Usage: /zl sim <itemlink|itemID> [fillers]") return end
   local fillers = tonumber(n) or 0
   local entry = M.BuildEntry(sheet, itemID, link, fillers)
-  Z.Print("SIM " .. entry.mode .. " item " .. itemID .. " (" .. Z.Util.ArrayCount(entry.rolls) .. " rolls, replaying live with timers):")
+  Z.Print("SIM " .. entry.mode .. " item " .. dispName(itemID, link) .. " (" .. Z.Util.ArrayCount(entry.rolls) .. " rolls, replaying live with timers):")
   table.insert(M.pending, entry)
   M.auto = true -- one-shot: ML chose it by typing the command
   M.SyncLootWindow()
@@ -393,14 +424,31 @@ function M.SimBoss(name)
     return
   end
   name = Z.Util.Trim(name or "")
-  local table_ = Z.BossData[name]
+  -- Drop source, in order: live pfQuest loot table (random weighted picks
+  -- from the boss's own drops, Rarescanner pattern) -> static BossData.
+  local table_ = nil
+  local source = "BossData"
+  if Z.pfLoot then
+    local picks = Z.pfLoot.BossDrops(name)
+    if Z.Util.ArrayCount(picks) > 0 then
+      table_ = picks
+      source = "pfQuest (" .. Z.Util.ArrayCount(picks) .. " rolled drops)"
+    end
+  end
+  table_ = table_ or Z.BossData[name]
   if not table_ then
     local avail = {}
     for b in pairs(Z.BossData) do table.insert(avail, b) end
-    Z.Print("Unknown boss. Try: " .. table.concat(avail, ", "))
+    Z.Print("Unknown boss (not in pfQuest or BossData). Try: " .. table.concat(avail, ", "))
     return
   end
-  Z.Print("SIM boss " .. name .. " drops, one item at a time (sheet players, one-win applies across drops):")
+  local disp = name
+  if Z.pfLoot and source ~= "BossData" then
+    -- Show the localized pfQuest name when it differs (typed "rag" etc.).
+    local entry = Z.pfLoot.EntryIdByName(name)
+    if entry then disp = Z.pfLoot.NameOf(entry) .. " [" .. name .. "]" end
+  end
+  Z.Print("SIM boss " .. disp .. " drops (" .. source .. "), one item at a time (sheet players, one-win applies across drops):")
   for i = 1, Z.Util.ArrayCount(table_) do
     local itemID = table_[i]
     table.insert(M.pending, M.BuildEntry(sheet, itemID, tostring(itemID), 0))
@@ -452,7 +500,7 @@ function M.SimTmog(argText)
     end
   end
   local entry = { itemID = itemID, link = link, mode = "SIM", rolls = kept }
-  Z.Print("SIM-TMOG item " .. itemID .. " (" .. tostring(tmogName) .. " rolls TMOG instead of SR):")
+  Z.Print("SIM-TMOG item " .. dispName(itemID, link) .. " (" .. tostring(tmogName) .. " rolls TMOG instead of SR):")
   table.insert(M.pending, entry)
   M.auto = true
   M.SyncLootWindow()
@@ -474,5 +522,5 @@ function M.Requeue(itemID)
   table.insert(M.pending, 1, M.BuildEntry(sheet, itemID, link, 0))
   M.running = true
   M.SyncLootWindow()
-  Z.Print("SIM: item " .. tostring(itemID) .. " back in the loot window.")
+  Z.Print("SIM: item " .. dispName(itemID, nil) .. " back in the loot window.")
 end

@@ -269,7 +269,75 @@ ok(drain(), "drain simtmog award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "tmog roller awarded")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "no spillover mark")
 
+-- 7b. Roll kind: 1-100 is SR only with the reserve, else MS (regression:
+-- the roll window + award showed SR for every 1-100 roll). 1-99 is OS,
+-- 1-98 is TMOG, regardless of the sheet.
+resetHarness()
+ML.BeginSession(1001, "item:1001", "SR", false)
+ML.OnSystemRoll("Aaa", 90, 1, 100)    -- on sheet -> SR
+ML.OnSystemRoll("Stranger", 95, 1, 100) -- no reserve -> MS (not SR!)
+ML.OnSystemRoll("Offspec", 88, 1, 99)   -- OS by range
+ML.OnSystemRoll("Tmog", 15, 1, 98)      -- TMOG by range
+local kinds = {}
+for i = 1, #ML.session.rolls do
+  kinds[ML.session.rolls[i].name] = ML.session.rolls[i].type
+end
+eq(kinds["Aaa"], "SR", "reserve + 1-100 = SR")
+eq(kinds["Stranger"], "MS", "no reserve + 1-100 = MS")
+eq(kinds["Offspec"], "OS", "1-99 = OS")
+eq(kinds["Tmog"], "TMOG", "1-98 = TMOG")
+-- The MS 95 is a valid contest (not a miss) losing by priority to SR.
+local resK = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
+  ML.session.rolls, { cap = 100, requireSR = true })
+eq(resK.winners[1].name, "Aaa", "sr wins by priority")
+eq(resK.perType.MS.entry.name, "Stranger", "stranger owns MS")
+eq(#resK.missrolls, 0, "no missrolls — kinds decided at feed")
+local menuK = ML.BuildAwardMenu(ML.session, resK)
+eq(menuK.winners[1].rollType, "SR", "award shows SR for the reserve holder")
+eq(menuK.perType.MS.entry.name, "Stranger", "award shows MS for the stranger")
+ML.Cancel()
+-- Award window: every kind winner has its own row (SR/MS/OS/TMOG).
+resetHarness()
+local LW = ZugLoot.LootWindow
+ZugLoot.LootWindow.SetItems({ { itemID = 1001, link = "item:1001" } }, "loot")
+ZugLoot.LootWindow.OpenDetail(1001)
+ZugLoot.LootWindow.detail.phase = "award"
+ZugLoot.LootWindow.detail.menu = menuK
+local kacts = LW.DetailActions()
+local kinds = {}
+for i = 1, #kacts do
+  if kacts[i].id == "award-name" then kinds[kacts[i].name] = kacts[i].label end
+end
+ok(string.find(kinds["Aaa"] or "", "(SR)", 1, true) ~= nil, "Aaa row labeled SR")
+ok(string.find(kinds["Stranger"] or "", "(MS)", 1, true) ~= nil, "Stranger row labeled MS")
+LW.CloseDetail()
+
 -- 7. RangeFor: TMOG feeds roll 1-98 so the roller list labels them TMOG.
+-- 8. Chat never shows a bare item:id: session announce, result line,
+-- award line and award menu all use the resolved display name.
+resetHarness()
+ZugLoot.LootWindow.SetItems(
+  { { itemID = 1001, link = "item:1001", name = "Dragonfang Blade" } }, "loot")
+printed = {}
+ML.BeginSession(1001, "item:1001", "SR", false)
+eq(ML.session.dispName, "Dragonfang Blade", "session carries display name")
+ML.OnSystemRoll("Aaa", 90, 1, 100)
+ML.OnSystemRoll("Bbb", 80, 1, 100)
+ML.Finish()
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+local leaked = nil
+for i = 1, #printed do
+  if string.find(printed[i], "item:1001", 1, true) then leaked = printed[i] break end
+end
+ok(leaked == nil, "no bare item:id in chat, got: " .. tostring(leaked))
+local sawNamed = false
+for i = 1, #printed do
+  if string.find(printed[i], "Dragonfang Blade", 1, true) then sawNamed = true break end
+end
+ok(sawNamed, "chat names the item")
+ML.session = nil
+ML.pendingAwardMenu = nil
+
 local function second(rtype) local _, mx = Sim.RangeFor(rtype) return mx end
 eq(second("TMOG"), 98, "tmog cap")
 eq(second("OS"), 99, "os cap")

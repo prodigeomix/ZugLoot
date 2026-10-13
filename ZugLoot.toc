@@ -26,5 +26,6 @@ AutoRoll.lua
 VersionGrid.lua
 MainWindow.lua
 BossData.lua
+pfLoot.lua
 Sim.lua
 DropLog.lua

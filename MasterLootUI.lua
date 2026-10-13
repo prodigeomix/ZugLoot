@@ -25,7 +25,9 @@ function M.BeginSession(itemID, itemLink, mode, silent)
   local itemCount = 1
   if mode == "TWO" then itemCount = 2 end
   M.session = { id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
-  local label = itemLink
+  -- Chat-visible name, resolved once (never a bare item:id in chat).
+  M.session.dispName = M.DisplayItemLink(itemID, itemLink)
+  local label = M.session.dispName
   if mode == "OPEN" then label = label .. " (open roll)"
   elseif mode == "RAID" then label = label .. " (raid roll)"
   elseif mode == "TWO" then label = label .. " (2 top win)" end
@@ -93,12 +95,21 @@ function M.OnSystemRoll(player, roll, minR, maxR)
   for i = 1, Z.Util.ArrayCount(sess.rolls) do
     if sess.rolls[i].name == player then return end
   end
+  -- Roll kind: the RANGE the player chose decides SR/MS vs OS vs TMOG,
+  -- but 1-100 is SR only when they hold the reserve on this item —
+  -- otherwise it is an MS roll. (Sheet lookup here so the roll window,
+  -- award menu and resolver all see the same kind.)
   local rtype = "MS"
-  if maxR == Z.Caps.OS then rtype = "OS"
-  elseif maxR == Z.Caps.TMOG then rtype = "TMOG" end
-  if minR == 1 and maxR == Z.Caps.SR then
-    -- SR-range; keep MS label unless sheet says SR (resolver decides).
-    rtype = "SR"
+  if minR == 1 and maxR == Z.Caps.OS then rtype = "OS"
+  elseif minR == 1 and maxR == Z.Caps.TMOG then rtype = "TMOG"
+  elseif minR == 1 and maxR == Z.Caps.SR then
+    rtype = "MS"
+    if Z.DB.sheet and Z.SRData.GetRollers then
+      local rollers = Z.SRData.GetRollers(Z.DB.sheet, sess.itemID)
+      for i = 1, Z.Util.ArrayCount(rollers) do
+        if rollers[i].name == player then rtype = "SR" break end
+      end
+    end
   end
   table.insert(sess.rolls, { name = player, roll = roll, type = rtype })
   -- Flag already-won rollers so the live list shows them as excluded.
@@ -217,7 +228,7 @@ function M.AnnounceResult(sess, res)
     end
     table.insert(parts, "excluded: " .. table.concat(xm, ", "))
   end
-  local resultText = "ZugLoot result [" .. sess.itemLink .. "]: " .. table.concat(parts, " | ")
+  local resultText = "ZugLoot result [" .. (sess.dispName or sess.itemLink) .. "]: " .. table.concat(parts, " | ")
   if Z.Comm and Z.Comm.SayGroup then
     Z.Comm.SayGroup(resultText)
   else
@@ -269,7 +280,7 @@ function M.AnnounceResult(sess, res)
         q = qq
       end
       if Z.SRData.EnsureUnreserved(Z.DB.sheet, sess.itemID, q) then
-        Z.Print("Note: " .. tostring(sess.itemLink or sess.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
+        Z.Print("Note: " .. tostring(sess.dispName or sess.itemLink or sess.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
       end
     end
     Z.SRData.RecordRolls(Z.DB.sheet, sess.itemID,
@@ -407,7 +418,11 @@ end
 
 function M.AwardMenuLines(data)
   local lines = {}
-  table.insert(lines, "Award " .. tostring(data.itemLink or ("item:" .. tostring(data.itemID))) .. " to?")
+  local menuName = data.itemLink
+  if Z.MasterLootUI and Z.MasterLootUI.DisplayItemLink then
+    menuName = Z.MasterLootUI.DisplayItemLink(data.itemID, data.itemLink)
+  end
+  table.insert(lines, "Award " .. tostring(menuName) .. " to?")
   -- Each kind judged by itself (ranges: SR 100, MS 100, OS 99, TMOG 98).
   for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
     local row = (data.perType or {})[gt]
@@ -527,7 +542,9 @@ function M.DoAward(itemID, itemLink, winnerName, source)
   Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName)
   if Z.Comm then Z.Comm.BroadcastAward(itemID, winnerName) end
   if Z.DropLog then Z.DropLog.Add(itemID, itemLink, source, "award", winnerName) end
-  Z.Print("Awarded " .. tostring(itemLink) .. " to " .. winnerName)
+  local disp = tostring(itemLink)
+  if M.DisplayItemLink then disp = M.DisplayItemLink(itemID, itemLink) end
+  Z.Print("Awarded " .. disp .. " to " .. winnerName)
   if Z.SRView then Z.SRView.Refresh() end
 end
 
@@ -696,7 +713,9 @@ function M.OnLootOpened()
     end
   end
   if Z.Util.ArrayCount(found) == 0 then return end
-  if Z.MainWindow and Z.MainWindow.Show then Z.MainWindow.Show("sheet") end
+  -- The sheet window stays closed: the ML works the loot window, and the
+  -- sheet opens only on player request (/zl sheet). An already-open sheet
+  -- still refreshes via the paths below.
   for i = 1, Z.Util.ArrayCount(found) do
     local f = found[i]
     Z.Comm.WarnGroup("ZugLoot loot: " .. f.link)

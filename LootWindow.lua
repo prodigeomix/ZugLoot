@@ -614,24 +614,25 @@ function M.DetailActions(d)
     return actions
   end
   if (d.phase or "pick") == "award" and d.menu then
+    -- Every kind winner gets its own row: overall winner(s) first, then
+    -- each contested kind (SR/MS/OS/TMOG) not already listed. The ML
+    -- awards the SR, MS, OS or TMOG winner directly; ... covers anyone
+    -- else (e.g. when something is wrong with the rolls).
+    local listed = {}
     for i = 1, Z.Util.ArrayCount(d.menu.winners or {}) do
       local w = d.menu.winners[i]
       table.insert(actions, { id = "award-name", label = "Award " .. w.name
-        .. " (" .. tostring(w.rollType) .. ")", name = w.name })
+        .. " (" .. tostring(w.rollType) .. ")", name = w.name, via = "winner" })
+      listed[w.name] = true
     end
-    -- TMOG kind winner: its own row whenever the kind was contested. The
-    -- ML awards the SR, MS, OS or TMOG winner directly; anything after
-    -- the award (e.g. a trade) is outside the addon.
-    local trow = (d.menu.perType or {}).TMOG
-    if trow and trow.entry then
-      local dup = false
-      for i = 1, Z.Util.ArrayCount(actions) do
-        if actions[i].name == trow.entry.name then dup = true break end
-      end
-      if not dup then
+    for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
+      local trow = (d.menu.perType or {})[gt]
+      if trow and trow.entry and not listed[trow.entry.name] then
+        listed[trow.entry.name] = true
+        local via = (gt == "TMOG") and "tmog" or "winner"
         table.insert(actions, { id = "award-name",
-          label = "Award " .. trow.entry.name .. " (TMOG)",
-          name = trow.entry.name, via = "tmog" })
+          label = "Award " .. trow.entry.name .. " (" .. gt .. ")",
+          name = trow.entry.name, via = via })
       end
     end
     table.insert(actions, { id = "more", label = "..." })

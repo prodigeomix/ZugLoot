@@ -108,7 +108,9 @@ Sheet = {
   the SR bonus applies to SR rolls by sheet rollers ONLY (MS/OS/TMOG never
   take sr_plus).
 - Each kind crowns its own winner (`perType`: best SR, best MS, best OS,
-  best TMOG). Ties re-roll WITHIN the kind.
+  best TMOG) from the RANGE the player chose — 1-100 is SR only with the
+  reserve on the item, otherwise MS; 1-99 OS; 1-98 TMOG. Ties re-roll
+  WITHIN the kind.
 - Overall winner by priority SR > MS > OS: the best SR beats any MS/OS
   roll (TMOG 15 vs SR 58 → SR wins outright). TMOG never takes an overall
   winner slot — it crowns its own kind winner, directly awardable.
@@ -216,7 +218,7 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
 - **Loot window** (`LootWindow.lua`, RollFor modern-skin style): on
   `LOOT_OPENED`, if you are the ML, the corpse is scanned for roll-worthy
   items (quality ≥ `minLootQuality`, default rare+). Each is announced in group
-  chat + logged (`loot`/`seen`), the sheet window opens, and the **loot window
+  chat + logged (`loot`/`seen`), and the **loot window
   lists every drop as a numbered row: row number, item icon, quality-colored
   item name, and the SR/HR badge on the right** (resolution chain per row —
   same source the sheet list uses: `GetItemInfo(row link)`, then
@@ -298,7 +300,7 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   on, ML resolves immediately from `ROLL_ANS` messages (no chat-roll wait), with a
   5s fallback to normal rolling if answers are missing.
 
-### 4.6 Simulation (`Sim.lua` + `BossData.lua` + `Timer.lua`)
+### 4.6 Simulation (`Sim.lua` + `BossData.lua` + `pfLoot.lua` + `Timer.lua`)
 
 In-game, no raid needed. **Requires the loaded sheet** — without one both
 commands refuse with a pointer to `/zl import`. Every roller is a player from
@@ -314,7 +316,16 @@ actual roll flow, not a separate code path:
   timer, ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
   rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
   item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
-- `/zl simboss <boss>` — queues the `BossData[boss]` loot table into the
+- `/zl simboss <boss>` — rolls the boss's OWN drops: with pfQuest loaded,
+  the name resolves to its pfDB unit entry and the queue is filled with
+  weighted roulette draws over its real epic loot table (direct `U` +
+  refloot `R` entries, Rarescanner pattern, 0.4% noise floor). EPICS ONLY
+  (client `GetItemInfo` quality check): distinct items first like a real
+  kill, then one extra draw may double a single item (double drops happen
+  but never dominate). Nothing is guaranteed per run, so consecutive runs
+  vary. Re-rolled fresh every run (up to 4 drops). Without pfQuest (or for
+  an unknown name) it falls back to the static `BossData[boss]` table.
+  Either way the drops land
   **same loot window** (title `Simulated loot: <boss>`, source `sim`) and
   stops: the ML — you — initiates every roll from the list (Roll button or
   `/zl simroll <item>`), in any order. After each finish the award menu
@@ -372,7 +383,8 @@ ZugLoot/
   RaiderLootUI.lua   LootBlare-like frame incl. group-loot display
   AutoRoll.lua       auto-roll + auto-resolve eligibility
   VersionGrid.lua    squares grid + version request handling
-  BossData.lua       tiny boss→items tables for simboss
+  BossData.lua       static fallback boss→items tables for simboss
+  pfLoot.lua         pfQuest loot lookup (name->entry->weighted drops)
   RaidArchive.lua    raid history snapshots: view / continue past raids
   Sim.lua            /zl sim, /zl simboss, /zl simtmog, /zl simroll (uses Resolver)
   DropLog.lua        drop log store + window
