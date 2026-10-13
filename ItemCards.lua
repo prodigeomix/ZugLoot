@@ -100,6 +100,7 @@ function M.CardSummary(card)
       local t = e.name .. " " .. tostring(e.base)
       if e.sr_plus and e.sr_plus > 0 then t = t .. "(+" .. e.sr_plus .. "=" .. e.effective .. ")" end
       if e.missroll then t = t .. " [miss]" end
+      if e.excludedWon then t = t .. " [already won]" end
       table.insert(lines, t)
     end
     local w = Util.ArrayCount(sess.winners) > 0 and (" => " .. table.concat(sess.winners, ",")) or ""

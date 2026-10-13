@@ -67,20 +67,24 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
   return entries
 end
 
--- Rank entries: winners first. Ignores missrolls + won-excluded.
+-- Rank entries: winners first. Ignores missrolls + won-excluded for winning,
+-- but keeps won-excluded rolls visible in `excluded` so later sessions show
+-- who rolled while ineligible.
 -- opts: { itemCount=1 }
 -- Returns ranked (sorted desc by effective), winners (top itemCount distinct names),
---   tied (players tied at cutoff needing re-roll), missrolls (flagged list).
+--   tied (players tied at cutoff needing re-roll), missrolls + excluded (flagged lists).
 function M.Resolve(entries, opts)
   opts = opts or {}
   local itemCount = opts.itemCount or 1
   local cand = {}
   local miss = {}
+  local excluded = {}
   local k = 1
   while entries[k] ~= nil do
     local e = entries[k]
     if e.missroll then table.insert(miss, e)
-    elseif not e.excludedWon then table.insert(cand, e) end
+    elseif e.excludedWon then table.insert(excluded, e)
+    else table.insert(cand, e) end
     k = k + 1
   end
   -- keep best roll per player
@@ -117,7 +121,7 @@ function M.Resolve(entries, opts)
       end
     end
   end
-  return { ranked = ranked, winners = winners, tied = tied, missrolls = miss }
+  return { ranked = ranked, winners = winners, tied = tied, missrolls = miss, excluded = excluded }
 end
 
 -- One-call: build + resolve. Returns same as Resolve plus entries.
@@ -128,13 +132,50 @@ function M.ResolveItem(sheetLike, itemID, rolls, opts)
   return res
 end
 
+-- Build a sheet.rolls history entry from a resolve result.
+-- Shared by live sessions (MasterLootUI) and simulation (Sim) so both write
+-- the same shape. Entries sorted by effective desc for top-down display.
+function M.ToHistoryEntry(res, mode, t)
+  local winNames = {}
+  local winners = res.winners or {}
+  local i = 1
+  while winners[i] ~= nil do table.insert(winNames, winners[i].name) i = i + 1 end
+  local src = res.entries or res.ranked or {}
+  local entries = {}
+  local j = 1
+  while src[j] ~= nil do
+    local e = src[j]
+    table.insert(entries, { name = e.name, base = e.base, sr_plus = e.sr_plus or 0,
+      effective = e.effective or e.base, missroll = e.missroll, excludedWon = e.excludedWon })
+    j = j + 1
+  end
+  table.sort(entries, function(a, b)
+    if (a.effective or 0) ~= (b.effective or 0) then return (a.effective or 0) > (b.effective or 0) end
+    return tostring(a.name) < tostring(b.name)
+  end)
+  local miss = res.missrolls or {}
+  local excl = res.excluded or {}
+  -- Fallback: older results predate `excluded`; derive from entry flags.
+  if count(excl) == 0 and count(src) > 0 then
+    local j2 = 1
+    while src[j2] ~= nil do
+      if src[j2].excludedWon and not src[j2].missroll then table.insert(excl, src[j2]) end
+      j2 = j2 + 1
+    end
+  end
+  return { t = t or 0, mode = mode, winners = winNames, entries = entries,
+    missrolls = count(miss), excluded = excl }
+end
+
 -- Simulate rolls for testing/sim: rollers roll 1..cap, extras are miss-rolls.
 -- rng: function(lo,hi) default math.random. Returns rolls list.
 function M.FakeRolls(sheetLike, itemID, opts, rng)
   opts = opts or {}
   local cap = opts.cap or 100
-  local fillers = opts.fillers or 0
-  local missCount = opts.missrolls or 1
+  -- sheetOnly: roll just the sheet's own players (used by /zl sim so boss
+  -- sims use players from the loaded sheet, no fake Filler/Missroller names).
+  local fillers = opts.sheetOnly and 0 or (opts.fillers or 0)
+  local missCount = opts.sheetOnly and 0 or (opts.missrolls or 1)
   rng = rng or function(lo, hi) return math.random(lo, hi) end
   local rolls = {}
   local rollers = {}

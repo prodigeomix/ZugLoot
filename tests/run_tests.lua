@@ -25,6 +25,7 @@ run("test_srdata.lua")
 run("test_resolver.lua")
 run("test_security.lua")
 run("test_itemcards.lua")
+run("test_sim.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
 -- fake 1.12 frame API to catch typos/nil-globals outside the client.
@@ -43,7 +44,7 @@ end
 
 -- 5.0-syntax sanity: all shipped lua files must parse (loadfile without running).
 local files = { "Constants.lua", "Util.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "SRView.lua",
-  "SRSecurity.lua", "SRImport.lua", "BossData.lua", "MainWindow.lua" }
+  "SRSecurity.lua", "SRImport.lua", "BossData.lua", "MainWindow.lua", "Sim.lua", "MasterLootUI.lua" }
 for _, f in ipairs(files) do
   local c, e = loadfile(f)
   if not c then print("PARSE FAIL " .. f .. ": " .. tostring(e)) totalFail = totalFail + 1

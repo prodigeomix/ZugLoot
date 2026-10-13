@@ -111,6 +111,11 @@ Sheet = {
 - Two-copies drops (`2x<link>`): top two distinct winners by same rules.
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; resolver excludes them from later sessions for that itemID.
+  Excluded rollers stay visible everywhere: their rolls are kept in a separate
+  `excluded` list (never silently dropped), shown with an `[already won]` tag in
+  the raid result line, the live raider roll list (greyed), sim output, and the
+  Sheet tab history lines (`Resolver.ToHistoryEntry` carries them into
+  `sheet.rolls`).
 
 ## 4. UI
 
@@ -188,13 +193,22 @@ Sheet = {
 
 ### 4.6 Simulation (`Sim.lua` + `BossData.lua`)
 
-In-game, no raid needed:
+In-game, no raid needed. **Requires the loaded sheet** — without one both
+commands refuse with a pointer to `/zl import`. Every roller is a player from
+the sheet; there are no fake Filler/Missroller names unless you pass N > 0.
 
-- `/zl sim <itemLink> [N]` — fake session for the item using current sheet rollers
-  (+ N random fillers): prints each fake roll, effective values, miss-roll demo
-  (one filler rolls without SR → flagged/ignored), tie demo, winner.
-- `/zl simboss <boss>` — random draws from `BossData[boss]` loot table, resolves
-  each via sheet (SR resolution, open raid-rolls for unreserved, results summary).
+- `/zl sim <itemLink> [N]` — fake session for the item. On-sheet item: mode
+  `SIM`, all its SR rollers roll (plus N optional MS fillers, flagged as
+  miss-rolls). Off-sheet item: mode `SIM-OPEN`, every player on the sheet
+  rolls (plus N fillers). Prints each roll, effective values, winner/tie.
+- `/zl simboss <boss>` — walks the `BossData[boss]` loot table in order,
+  simulating each drop. Winners are won-marked immediately, so the one-win
+  rule chains across drops exactly like a real raid night.
+- Every sim session is **written back into the sheet**: roll history
+  (`sheet.rolls`, mode `SIM`/`SIM-OPEN`, same shape as live via
+  `Resolver.ToHistoryEntry`), won marks (skipped on ties — ties need a
+  re-roll, like live), and drop-log entries (source `sim`). Visible in the
+  Sheet tab right away. `/zl reset` clears sim history + won marks.
 - Uses the **same** `Resolver` pure module as real sessions and as `tests/`, so
   sim output matches tested logic. Randomness via `math.random`, seeded by time.
 

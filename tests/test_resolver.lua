@@ -53,7 +53,7 @@ local res3 = R.ResolveItem(s3, 1, {
 }, { cap = 100, requireSR = true })
 eq(#res3.tied, 2, "tie needs reroll")
 
--- 4. One-win-per-item: previous winner excluded.
+-- 4. One-win-per-item: previous winner excluded but still shown.
 local s4 = sheetWith(5, { { name = "A", rolls = 1 }, { name = "B", rolls = 1 } })
 SRData.MarkWon(s4, 5, "A")
 local res4 = R.ResolveItem(s4, 5, {
@@ -61,6 +61,20 @@ local res4 = R.ResolveItem(s4, 5, {
   { name = "B", roll = 2, type = "SR" },
 }, { cap = 100, requireSR = true })
 eq(res4.winners[1].name, "B", "won player excluded")
+-- excluded rolls are visible, not dropped:
+eq(#res4.excluded, 1, "excluded list has the won roller")
+eq(res4.excluded[1].name, "A", "excluded roller named")
+eq(res4.excluded[1].base, 100, "excluded roll value kept")
+-- excluded entries also appear in res.entries with the flag:
+local foundExcl = false
+for i = 1, #res4.entries do
+  if res4.entries[i].name == "A" and res4.entries[i].excludedWon then foundExcl = true end
+end
+ok(foundExcl, "excluded roller present in entries with flag")
+-- history entry carries excluded through:
+local h4 = R.ToHistoryEntry(res4, "SR", 999)
+eq(#h4.excluded, 1, "history carries excluded")
+eq(h4.excluded[1].name, "A", "history excluded name")
 
 -- 5. Two-top-win: two distinct winners.
 local res5 = R.ResolveItem(s3, 1, {

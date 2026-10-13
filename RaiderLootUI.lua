@@ -71,11 +71,13 @@ function M.ShowItem(itemLink, seconds)
   if Z.AutoRoll then Z.AutoRoll.MaybeAutoRoll(itemLink) end
 end
 
-function M.OnRoll(player, roll, rtype)
+function M.OnRoll(player, roll, rtype, excluded)
   if not frame or not frame:IsVisible() then return end
   local color = "FFFFFFFF"
   for i = 1, 4 do if ROLL_BUTTONS[i].type == rtype then color = ROLL_BUTTONS[i].color end end
-  rollList:SetText((rollList:GetText() or "") .. "\n|c" .. color .. player .. ": " .. roll .. " (" .. rtype .. ")|r")
+  local tag = ""
+  if excluded then tag = " |cff888888[already won]|r" color = "FF888888" end
+  rollList:SetText((rollList:GetText() or "") .. "\n|c" .. color .. player .. ": " .. roll .. " (" .. rtype .. ")|r" .. tag)
   timeLeft = Z.DB.rollTime or 15 -- refresh on activity (LootBlare parity)
 end
 

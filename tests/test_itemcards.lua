@@ -76,6 +76,30 @@ ok(string.find(sum, "rolls#1") ~= nil, "summary has session 1")
 ok(string.find(sum, "rolls#2") ~= nil, "summary has session 2")
 ok(string.find(sum, "Blackfang") ~= nil, "summary has winner")
 
+-- 5b. Excluded (already-won) rollers show in session lines + summary.
+local exclSheet = SRData.NewSheet()
+exclSheet.items[77] = { quality = 4, rollers = {
+  { name = "Prev", rolls = 1, sr_plus = 5 },
+  { name = "Next", rolls = 1, sr_plus = nil },
+} }
+SRData.MarkWon(exclSheet, 77, "Prev")
+local exclRes = ZugLoot.Resolver.ResolveItem(exclSheet, 77, {
+  { name = "Prev", roll = 99, type = "SR" },
+  { name = "Next", roll = 10, type = "SR" },
+}, { cap = 100, requireSR = true })
+eq(exclRes.winners[1].name, "Next", "subsequent roll won by eligible")
+SRData.RecordRolls(exclSheet, 77, ZugLoot.Resolver.ToHistoryEntry(exclRes, "SR", 5))
+local exclCards = Cards.BuildCards(exclSheet)
+local exclLines = exclCards[1].rollSessions[1].lines
+local exclShown = false
+for i = 1, #exclLines do
+  if exclLines[i].name == "Prev" and exclLines[i].excludedWon then exclShown = true end
+end
+ok(exclShown, "excluded roller shown in card session lines")
+local exclSum = Cards.CardSummary(exclCards[1])
+ok(string.find(exclSum, "Prev 99") ~= nil, "summary shows excluded roll")
+ok(string.find(exclSum, "already won") ~= nil, "summary tags already won")
+
 -- 6. Empty sheet -> no cards; nil sheet -> no cards.
 eq(#Cards.BuildCards(SRData.NewSheet()), 0, "empty sheet, no cards")
 eq(#Cards.BuildCards(nil), 0, "nil sheet, no cards")

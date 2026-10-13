@@ -105,8 +105,13 @@ function M.ResetWon()
     Z.Print("Only the master looter or raid leader can reset won marks.")
     return
   end
-  if Z.DB.sheet then Z.SRData.ClearWon(Z.DB.sheet) end
-  Z.Print("Won marks cleared (new raid).")
+  -- Sim sessions write into the same history/won marks, so a fresh raid
+  -- clears both.
+  if Z.DB.sheet then
+    Z.SRData.ClearWon(Z.DB.sheet)
+    if Z.SRData.ClearRolls then Z.SRData.ClearRolls(Z.DB.sheet) end
+  end
+  Z.Print("Won marks and roll history cleared (new raid).")
   if Z.SRView then Z.SRView.Refresh() end
 end
 

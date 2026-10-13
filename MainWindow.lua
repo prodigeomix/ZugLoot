@@ -452,7 +452,7 @@ function M.RenderSetup()
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (see Rolls tab)\n" ..
-    "Simulate: /zl sim <link> — /zl simboss <boss>")
+    "Simulate (needs sheet, writes back): /zl sim <link> — /zl simboss <boss>")
   info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -118)
   info:SetWidth(BODY_WIDTH - 16) info:SetJustifyH("LEFT")
   TrackRow(key, row, 200)

@@ -61,7 +61,12 @@ function M.OnSystemRoll(player, roll, minR, maxR)
     rtype = "SR"
   end
   table.insert(sess.rolls, { name = player, roll = roll, type = rtype })
-  Z.RaiderLootUI.OnRoll(player, roll, rtype)
+  -- Flag already-won rollers so the live list shows them as excluded.
+  local excluded = false
+  if Z.DB.sheet and Z.SRData.HasWon then
+    excluded = Z.SRData.HasWon(Z.DB.sheet, sess.itemID, player)
+  end
+  Z.RaiderLootUI.OnRoll(player, roll, rtype, excluded)
 end
 
 function M.FinishEarly() M.Finish(true) end
@@ -107,6 +112,24 @@ function M.AnnounceResult(sess, res)
     for i = 1, Z.Util.ArrayCount(res.missrolls) do table.insert(mm, res.missrolls[i].name) end
     table.insert(parts, "missrolls: " .. table.concat(mm, ","))
   end
+  -- Already-won rollers can't win again but stay visible.
+  local excl = res.excluded or {}
+  if Z.Util.ArrayCount(excl) == 0 and res.entries then
+    for i = 1, Z.Util.ArrayCount(res.entries) do
+      local e = res.entries[i]
+      if e.excludedWon and not e.missroll then table.insert(excl, e) end
+    end
+  end
+  if Z.Util.ArrayCount(excl) > 0 then
+    local xm = {}
+    for i = 1, Z.Util.ArrayCount(excl) do
+      local e = excl[i]
+      local s = e.name .. " " .. tostring(e.base)
+      if e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. (e.effective or e.base) .. ")" end
+      table.insert(xm, s .. " [already won]")
+    end
+    table.insert(parts, "excluded: " .. table.concat(xm, ", "))
+  end
   SendChatMessage("ZugLoot result [" .. sess.itemLink .. "]: " .. table.concat(parts, " | "), "RAID")
   if Z.Util.ArrayCount(res.winners) > 0 then
     local w = {}
@@ -114,27 +137,10 @@ function M.AnnounceResult(sess, res)
     SendChatMessage("Winner: " .. table.concat(w, ", "), "RAID_WARNING")
   end
   -- Persist the session into per-item roll history (survives the session).
+  -- Same shape the sim writes (Resolver.ToHistoryEntry).
   if Z.DB.sheet and Z.SRData.RecordRolls then
-    local winNames = {}
-    for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(winNames, res.winners[i].name) end
-    local entries = {}
-    for i = 1, Z.Util.ArrayCount(res.entries or res.ranked) do
-      local e = (res.entries or res.ranked)[i]
-      table.insert(entries, { name = e.name, base = e.base, sr_plus = e.sr_plus or 0,
-        effective = e.effective or e.base, missroll = e.missroll, excludedWon = e.excludedWon })
-    end
-    -- History entries read top-down: sort by effective desc.
-    table.sort(entries, function(a, b)
-      if (a.effective or 0) ~= (b.effective or 0) then return (a.effective or 0) > (b.effective or 0) end
-      return tostring(a.name) < tostring(b.name)
-    end)
-    Z.SRData.RecordRolls(Z.DB.sheet, sess.itemID, {
-      t = (time and time()) or 0,
-      mode = sess.mode,
-      winners = winNames,
-      entries = entries,
-      missrolls = Z.Util.ArrayCount(res.missrolls),
-    })
+    Z.SRData.RecordRolls(Z.DB.sheet, sess.itemID,
+      Z.Resolver.ToHistoryEntry(res, sess.mode, (time and time()) or 0))
     if Z.MainWindow then Z.MainWindow.Refresh() end
   end
 end

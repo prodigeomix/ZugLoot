@@ -21,7 +21,9 @@ No dependencies. Interface 11200.
   Sheet tab shows one card per item: hoverable icon, `Name xN (+SR+)`, `[HR]` /
   `[rolled xN]` badges, WON marks, and every roll session this raid one line
   per player.
-- ML: `/zl rf <itemlink>` starts an SR roll. `/zl sim <itemlink>` practices without a raid.
+- ML: `/zl rf <itemlink>` starts an SR roll. `/zl sim <itemlink>` / `/zl simboss <boss>`
+  practice against the loaded sheet (sheet required) and write results back into
+  it — check the Sheet tab afterwards. `/zl reset` clears sim history.
 - Raider: frame pops on ML warning / ROLL_REQ / group-loot drops. `/zl auto on` to auto-roll SRs.
 - `/zl ver` shows the addon-version squares grid. `/zl help` lists commands.
 

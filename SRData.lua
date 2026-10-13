@@ -249,5 +249,23 @@ function M.GetRollers(sheet, itemID)
   return sheet.items[itemID].rollers or {}
 end
 
+-- All unique player names across every item, sorted. Used for open-roll sims
+-- so unreserved items are rolled by players from the loaded sheet.
+function M.AllPlayerNames(sheet)
+  local seen, out = {}, {}
+  if not sheet or not sheet.items then return out end
+  for _, item in pairs(sheet.items) do
+    local rollers = item.rollers or {}
+    local i = 1
+    while rollers[i] ~= nil do
+      local n = rollers[i].name
+      if n and not seen[n] then seen[n] = true table.insert(out, n) end
+      i = i + 1
+    end
+  end
+  table.sort(out)
+  return out
+end
+
 if ZugLoot then ZugLoot.SRData = M end
 return M
