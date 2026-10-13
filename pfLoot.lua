@@ -135,6 +135,66 @@ function M.Index(db, reset)
   return M.index
 end
 
+-- Grouped drops for a unit entry: the boss's loot TABLES, each with its
+-- members. A boss doesn't drop "the top 4 by chance%" — it drops a few
+-- items from each of its loot tables (weapon table, armor table, tier
+-- table, ...). Each group is one refloot table covering this unit
+-- (R members) or the direct-U remainder (chance > 0 items that belong to
+-- no table covering this unit). Returns
+-- { { items={ {item, chance}... }, ref=<refId or 0> }... }.
+-- An item shared by several tables for the same unit (e.g. tier pants in
+-- both 30547 and 30484) lives in EACH of them — it is a real member of
+-- both, never deduplicated away. `chance` is informational only; the
+-- per-run per-table hit decides how many of a table's members drop, so
+-- individual chances never need to be "real" percentages.
+function M.DropGroups(entry, db, reset)
+  if not entry then return {} end
+  db = db or M.Db()
+  if not db or not db.items or not db.items.data
+      or not db.refloot or not db.refloot.data then
+    return {} end
+  if reset or not M.index then
+    M.index = M.BuildIndex(db)
+  end
+  local items, refloot = db.items.data, db.refloot.data
+  local groups = {}   -- [refKey] = { ref=refKey, items={...} }, refKey 0 = direct
+  -- ref membership first: an item lives in EVERY table covering this unit
+  for itemId, d in pairs(items) do
+    if type(d) == "table" and d.R then
+      for refId in pairs(d.R) do
+        local ref = refloot[refId]
+        if ref and type(ref) == "table" and ref.U and ref.U[entry] then
+          groups[refId] = groups[refId] or { ref = refId, items = {} }
+          table.insert(groups[refId].items, itemId)
+        end
+      end
+    end
+  end
+  -- Direct-U remainder: only items in NO covering table. Chance 0 members
+  -- of the junk group (ref 30171 belongs to nobody's real table) would
+  -- double-count everything, so the remainder is chance-0-excluded.
+  local inTable = {}
+  for _, g in pairs(groups) do
+    for i = 1, Z.Util.ArrayCount(g.items) do inTable[g.items[i]] = true end
+  end
+  for itemId, d in pairs(items) do
+    if type(d) == "table" and not inTable[itemId] then
+      if d.U and d.U[entry] and (d.U[entry] or 0) > 0 then
+        groups[0] = groups[0] or { ref = 0, items = {} }
+        table.insert(groups[0].items, itemId)
+      end
+    end
+  end
+  local out = {}
+  for _, g in pairs(groups) do
+    table.sort(g.items)
+    if Z.Util.ArrayCount(g.items) > 0 then table.insert(out, g) end
+  end
+  -- Deterministic order: direct-U group first, then ref tables ascending.
+  table.sort(out, function(a, b) return (a.ref or 0) < (b.ref or 0) end)
+  return out
+end
+
 -- All drops for a unit entry: sorted { {item=itemId, chance}... } best first.
 function M.DropsFor(entry, db, reset)
   if not entry then return {} end
@@ -148,6 +208,80 @@ function M.DropsFor(entry, db, reset)
   return list
 end
 
+-- Weighted picks from a unit's grouped loot TABLES: one roll per table
+-- (each boss loot table contributes ~1 drop, so tier-2 pants show up as
+-- often as weapons). The old routine rolled once over a single weighted
+-- pool, which favored frequent table-mates and starved whole tables.
+-- `groups` comes from DropGroups; rng(lo,hi) injectable (tests rig it,
+-- honoring [lo,hi]); qualityFn injectable (tests stub it). Within a table
+-- the member is a uniform pick of the loot-worthy (epic+/unknown-quality)
+-- members — per-item chances in pfQuest are data-mixed (some tables carry
+-- real %, some carry 0), so they must not gate membership. Caller caps the
+-- total: draws while `Z.Util.ArrayCount(out) < count`, tables roll in
+-- group order (direct-U first, then ref tables), so a big count still
+-- reaches every table. Dupes: up to MAX_DUPES per item. Returns itemIds.
+function M.PickGroupDrops(groups, count, rng, qualityFn)
+  rng = rng or function(lo, hi) return math.random(lo, hi) end
+  count = count or M.DROP_COUNT
+  local ng = Z.Util.ArrayCount(groups or {})
+  if ng == 0 or count <= 0 then return {} end
+  -- Loot-worthy members per table (epic+; nil quality kept for Turtle
+  -- customs). Junk table-mates (cached green/blue) never win their slot.
+  -- The junk shared group (ref 30171 belongs to NOBODY's real loot table)
+  -- is capped at one hit per kill: its epics stay possible, but the
+  -- 76-strong green army can no longer flood the window.
+  local tables = {}
+  for gi = 1, ng do
+    local g = groups[gi]
+    local members = {}
+    for mi = 1, Z.Util.ArrayCount(g.items or {}) do
+      local id = g.items[mi]
+      local q = M.QualityOf(id, qualityFn)
+      if q == nil or q >= M.WANT_QUALITY then
+        table.insert(members, id)
+      end
+    end
+    if Z.Util.ArrayCount(members) > 0 then
+      table.insert(tables, { members = members, junkShared = (g.ref == 30171) })
+    end
+  end
+  local nt = Z.Util.ArrayCount(tables)
+  if nt == 0 then return {} end
+  -- Each table contributes up to two hits while room lasts: first pass one
+  -- per table (every table shows up), second pass one more per table
+  -- (multiple pairs of pants happen — that's a real Ragnaros), dupes of
+  -- the same member capped at MAX_DUPES. The junk shared table is capped
+  -- at ONE hit total.
+  local out, hits, junkHits = {}, {}, 0
+  for pass = 1, 2 do
+    for ti = 1, nt do
+      if Z.Util.ArrayCount(out) >= count then break end
+      local t = tables[ti]
+      if (hits[ti] or 0) < pass
+          and not (t.junkShared and junkHits >= 1) then
+        local members = t.members
+        local nm = Z.Util.ArrayCount(members)
+        local tries, pick = 0, nil
+        while tries < nm do
+          local cand = members[rng(1, nm)]
+          tries = tries + 1
+          if (M.CountOf(out, cand) or 0) < M.MAX_DUPES then
+            pick = cand
+            break
+          end
+        end
+        if pick then
+          table.insert(out, pick)
+          hits[ti] = (hits[ti] or 0) + 1
+          if t.junkShared then junkHits = junkHits + 1 end
+        end
+      end
+    end
+    if Z.Util.ArrayCount(out) >= count then break end
+  end
+  return out
+end
+
 -- Weighted picks from a drop list: roulette draws over the eligible
 -- EPIC pool (weights = chance%). A RANDOM distinct count first — a real
 -- kill drops 2-4 items, not every eligible epic; then a single extra draw
@@ -158,6 +292,8 @@ end
 -- rig it, honoring [lo,hi]); qualityFn injectable (tests stub it). Final
 -- order is best-chance-first (dupes adjacent) for a stable display.
 -- Returns a random-count subset of the epic pool (+ maybe one double).
+-- Legacy path: kept for the no-table fallback (BossDrops callers that pass
+-- a bare drop list); the boss sim itself uses PickGroupDrops + DropGroups.
 function M.PickDrops(drops, count, rng, qualityFn)
   rng = rng or function(lo, hi) return math.random(lo, hi) end
   count = count or M.DROP_COUNT
@@ -291,13 +427,15 @@ function M.CountOf(t, v)
   return c
 end
 
--- Boss name -> random drop itemIds (the simboss source). Empty when pfQuest
--- is absent, the name is unknown, or nothing in the table rolls.
--- qualityFn threads through for tests (live: client GetItemInfo).
+-- Boss name -> random drop itemIds (the simboss source). One hit per loot
+-- table (tables are slots: weapon, armor, tier ...), so whole tables can't
+-- starve. Empty when pfQuest is absent, the name is unknown, or every
+-- table is empty of loot-worthy members. qualityFn threads through for
+-- tests (live: client GetItemInfo, epic+/nil-kept).
 function M.BossDrops(name, count, rng, db, qualityFn)
   local entry = M.EntryIdByName(name, db)
   if not entry then return {} end
-  local drops = M.DropsFor(entry, db)
-  if Z.Util.ArrayCount(drops) == 0 then return {} end
-  return M.PickDrops(drops, count or M.DROP_COUNT, rng, qualityFn)
+  local groups = M.DropGroups(entry, db)
+  if Z.Util.ArrayCount(groups) == 0 then return {} end
+  return M.PickGroupDrops(groups, count or M.DROP_COUNT, rng, qualityFn)
 end

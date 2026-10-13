@@ -20,17 +20,23 @@ ZugLoot.Util = ZugLoot.Util or dofile("Util.lua")
 dofile("pfLoot.lua")
 local P = ZugLoot.pfLoot
 
--- Fake pfDB slice: two units, direct + refloot drops, one junk drop.
+-- Fake pfDB slice: two units, direct + TWO refloot tables (weapon/armor
 local fakeDb = {
   units = { loc = { [101] = "Test Boss", [102] = "Trash Mob" } },
   items = { data = {
     [5001] = { U = { [101] = 20 } },          -- direct 20%
     [5002] = { U = { [101] = 2 } },           -- direct 2%
-    [5003] = { R = { [7] = 50 } },            -- refloot 50%
+    [5003] = { R = { [7] = 50 } },            -- weapon table 50%
+    [5006] = { R = { [7] = 0 } },             -- weapon table, unknown chance
+    [5007] = { R = { [8] = 0 } },             -- armor table, unknown chance
+    [5008] = { R = { [8] = 0 } },             -- armor table, unknown chance
     [5004] = { U = { [102] = 30 } },          -- other mob only
-    [5005] = { U = { [101] = 0.1 } },         -- below the noise floor
+    [5005] = { U = { [101] = 0.1 } },         -- below the old noise floor
   } },
-  refloot = { data = { [7] = { U = { [101] = 1 } } } },
+  refloot = { data = {
+    [7] = { U = { [101] = 1 } },              -- weapon table
+    [8] = { U = { [101] = 1 } },              -- armor table
+  } },
 }
 
 -- 1. Name -> entry (case-insensitive, all units, not just rares).
@@ -65,7 +71,8 @@ local function rigged(values)
     return v
   end
 end
-local qualities = { [5003] = 4, [5001] = 4, [5002] = 3, [5005] = 3 }
+local qualities = { [5003] = 4, [5001] = 4, [5002] = 3, [5005] = 3,
+  [5006] = 4, [5007] = 4, [5008] = 4 }
 local function qual(id) return qualities[id] end
 -- Random distinct count + coin-gated double (NOT "fill to cap": that was
 -- the deterministic same-list bug for small epic pools).
@@ -111,19 +118,46 @@ eq(z1[1], 7001, "chance-0 epic included")
 local z2 = P.PickDrops(zeroDrops, 4, rigged({ 1, 1, 2 }), function() return nil end)
 eq(#z2, 1, "nil quality kept")
 
--- 4. BossDrops end-to-end (fake db injected, no pfDB global needed).
-local boss = P.BossDrops("Test Boss", 4, rigged({ 2, 100, 200, 1, 100 }), fakeDb, qual)
-eq(#boss, 3, "boss epic drops picked (incl. double)")
-eq(boss[1], 5003, "best drop first")
--- fresh loot every call: same pool, but the coin gate skips the double this
--- run -> 2 items, not 3 (count varies run to run).
-local boss2 = P.BossDrops("Test Boss", 4, rigged({ 2, 600, 500, 2 }), fakeDb, qual)
-eq(#boss2, 2, "re-rolled loot count differs")
-eq(boss2[1], 5003, "sorted best first")
-eq(boss2[2], 5001, "second kind, no double")
+-- 4. Grouped tables: weapon table (7) + armor table (8) + direct.
+-- Per-run each TABLE contributes ~1 hit, so whole tables can't starve.
+local groups = P.DropGroups(101, fakeDb, true)
+eq(#groups, 3, "weapon + armor + direct groups")
+local gmap = {}
+for gi = 1, #groups do gmap[groups[gi].ref] = groups[gi].items end
+eq(#gmap[0], 3, "direct group holds 5001+5002+5005")
+eq(#gmap[7], 2, "weapon table holds 5003+5006")
+eq(#gmap[8], 2, "armor table holds 5007+5008")
+-- G1: pass 1 hits every table (direct, weapon, armor), count caps at 4.
+local g1 = P.PickGroupDrops(groups, 4, rigged({ 1, 2, 1, 2 }), qual)
+eq(#g1, 4, "one per table + second pass")
+eq(g1[1], 5001, "direct slot first")
+eq(g1[2], 5006, "weapon slot (uniform pick 2 of 2)")
+eq(g1[3], 5007, "armor slot")
+eq(g1[4], 5001, "second pass revisits direct")
+-- G2: junk table-mates never win a slot even when the roll aims at them.
+-- 5002 (blue) shares the direct group with 5001; rng keeps hitting it.
+local g2 = P.PickGroupDrops(groups, 2, rigged({ 2, 2, 2, 1, 1, 1 }), qual)
+ok(g2[1] ~= 5002 and g2[2] ~= 5002, "blue table-mate never wins")
+-- G3: dupes capped (same weapon rolled twice max).
+local g3 = P.PickGroupDrops({ { ref = 7, items = { 5003 } } }, 4,
+  rigged({ 1, 1, 1, 1, 1 }), qual)
+eq(#g3, 2, "weapon dupes capped at two")
+
+-- 5. BossDrops end-to-end (fake db injected, no pfDB global needed).
+-- Weapon table rolls 5003, armor table rolls 5007, direct rolls 5001:
+local boss = P.BossDrops("Test Boss", 4, rigged({ 1, 1, 1, 2 }), fakeDb, qual)
+eq(#boss, 4, "one per table + second pass")
+eq(boss[1], 5001, "direct slot first")
+eq(boss[2], 5003, "weapon table")
+eq(boss[3], 5007, "armor table")
+-- reroll varies the MEMBERS: weapon 5006 this run, armor 5008.
+local boss2 = P.BossDrops("Test Boss", 4, rigged({ 1, 2, 2, 2 }), fakeDb, qual)
+eq(#boss2, 4, "same shape, different members")
+eq(boss2[2], 5006, "weapon member varies")
+eq(boss2[3], 5008, "armor member varies")
 ok(#P.BossDrops("Nobody", 4, rigged({ 1 }), fakeDb) == 0, "unknown boss empty")
 
--- 5. No pfQuest at all: everything degrades to nil/empty (simboss falls
+-- 6. No pfQuest at all: everything degrades to nil/empty (simboss falls
 -- back to BossData.lua, never errors).
 pfDB = nil
 P.index = nil

@@ -340,19 +340,18 @@ actual roll flow, not a separate code path:
   rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
   item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
 - `/zl simboss <boss>` — rolls the boss's OWN drops: with pfQuest loaded,
-  the name resolves to its pfDB unit entry and the queue is filled with
-  weighted roulette draws over its real loot table (direct `U` +
-  refloot `R` entries). The index keeps EVERY drop — including the many
-  real boss drops listed in refloot tables with chance 0 (unknown), which
-  are floored to a small weight so they stay pickable but rarer than
-  measured chances (a 0.4% noise floor here would shrink e.g. Ragnaros
-  from 100+ drops to a handful). The final pool is epic+ (`GetItemInfo`
-  quality ≥ 4; unknown/uncached quality is kept, not dropped, so Turtle
-  custom epics survive): a RANDOM distinct count first (2–4 items, like a
-  real kill — not "fill to the cap", which would repeat the same set),
-  then one coin-flip draw may double a single item (double drops happen
-  but never dominate). Nothing is guaranteed per run, so consecutive runs
-  vary. Re-rolled fresh every run. Without pfQuest it falls
+  the name resolves to its pfDB unit entry and the queue is filled from its
+  real loot TABLES (one refloot table per gear slot, plus the direct-drop
+  remainder). Each table contributes ~1 drop per kill — the weapon table,
+  the armor tables, the TIER table (Ragnaros T2 pants: 30484+30547 carry
+  them together, capped per pair) — so whole tables can't starve no
+  matter how the per-item chances read. The index keeps EVERY drop
+  (chance-0 refloot members included, weighted at a floor); the final pool
+  is epic+ (`GetItemInfo` quality ≥ 4, unknown/uncached quality kept, so
+  Turtle customs survive); the junk shared table (ref 30171, 76 world
+  greens) contributes at most one hit per kill. Nothing is guaranteed per
+  run, so consecutive runs vary. Re-rolled fresh every run. Without
+  pfQuest it falls
   back to the static `BossData[boss]` table — but ALSO re-rolled fresh per
   run (shuffled random-count subset of the table, sometimes a double), so
   no two manual-test runs show the same list.
