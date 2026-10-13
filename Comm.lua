@@ -53,10 +53,23 @@ function M.BroadcastAward(itemID, winner)
   send("AWARD:" .. tostring(itemID) .. ":" .. tostring(winner), c)
 end
 
--- Group-aware chat for roll traffic. Raid -> RAID / RAID_WARNING,
--- party -> PARTY, solo -> local chat frame (Z.Print). Used by live rolls
--- and sim alike so both behave identically in every grouping.
+-- Local loot channel: solo or non-master loot methods stay on the local
+-- chat frame (no one else's chat to coordinate); master loot in a group
+-- uses group chat like before. Used by live rolls and sim alike.
+local function localLoot()
+  if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return true end
+  if Z.SRSecurity and Z.SRSecurity.LootMethod then
+    local m = Z.SRSecurity.LootMethod()
+    if m and m ~= "master" then return true end
+  end
+  return false
+end
+
+-- Group-aware chat for roll traffic. Master loot in raid -> RAID /
+-- RAID_WARNING, master loot in party -> PARTY, everything else (solo,
+-- group/need/greed etc.) -> local chat frame (Z.Print).
 function M.SayGroup(msg)
+  if localLoot() then Z.Print(msg) return end
   if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
     if SendChatMessage then SendChatMessage(tostring(msg), "RAID") end
   elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
@@ -67,6 +80,7 @@ function M.SayGroup(msg)
 end
 
 function M.WarnGroup(msg)
+  if localLoot() then Z.Print(msg) return end
   if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
     if SendChatMessage then SendChatMessage(tostring(msg), "RAID_WARNING") end
   elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then

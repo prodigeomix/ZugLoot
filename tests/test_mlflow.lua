@@ -183,9 +183,11 @@ lootSlots = {
 }
 ML.OnLootOpened()
 ok(ML.session == nil, "no auto-start: ML initiates")
-eq(#ZugLoot.LootWindow.items, 2, "loot window lists both drops")
+eq(#ZugLoot.LootWindow.items, 3, "loot window covers every slot")
+eq(ZugLoot.LootWindow.items[1].itemID, 1001, "first roll row")
 eq(ZugLoot.LootWindow.items[1].status, "open", "first drop open")
 eq(ZugLoot.LootWindow.items[1].badge, "SR:2", "SR count badge")
+ok(ZugLoot.LootWindow.items[3].free, "grey is a free row, not a roll row")
 local sawLoot = false
 for i = 1, #printed do
   if string.find(printed[i], "ZugLoot loot: item:1002") then sawLoot = true end
@@ -199,12 +201,108 @@ ML.Cancel()
 ML.StartItemRoll(4242)
 ok(ML.session == nil, "unknown item refused")
 
--- 2. Non-ML never starts sessions from corpse loot.
+-- 2. Universal loot: whoever opens the corpse runs the window — any
+-- loot method, master looter or not, solo included. Blizzard's frame is
+-- DETACHED session-wide (RollFor parity: UnregisterAllEvents + OnHide
+-- stripped, not one-shot hidden, so it never pops back); awards loot slot.
 resetHarness()
 ZugLoot.SRSecurity.AmML = function() return false end
+local blizzDetached, blizzHidden, lootedSlots, masterGiven = 0, 0, {}, {}
+LootFrame = {
+  UnregisterAllEvents = function() blizzDetached = blizzDetached + 1 end,
+  SetScript = function() blizzDetached = blizzDetached + 1 end,
+  Hide = function() blizzHidden = blizzHidden + 1 end,
+}
+LootSlot = function(slot) table.insert(lootedSlots, slot) end
+GiveMasterLoot = function(slot, who) table.insert(masterGiven, { slot, who }) end
+UnitName = function() return "SoloPlayer" end
 lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
 ML.OnLootOpened()
-ok(ML.session == nil, "raider ignores corpse loot")
+eq(#ZugLoot.LootWindow.items, 1, "non-ML corpse still lists loot")
+ok(blizzDetached >= 2, "Blizzard loot frame detached (events + OnHide)")
+ok(blizzHidden >= 1, "Blizzard loot frame hidden while we cover the corpse")
+ok(ZugLoot.LootWindow.blizzardTakeover, "takeover flag armed")
+eq(ZugLoot.LootWindow.items[1].slot, 1, "row tracks its corpse slot")
+-- Solo award loots the corpse slot, then drops the row.
+ML.AwardDirect(1001, "SoloPlayer", "loot")
+eq(#lootedSlots, 1, "corpse slot looted on award")
+ok(ZugLoot.LootWindow.Find(1001) == nil, "awarded row gone, Blizzard frame stays hidden")
+-- Close with leftovers re-scans (rows come back); empty closes out.
+lootSlots = {
+  { link = "item:1001:0:0:0", quality = 4 },
+  { link = "item:1002:0:0:0", quality = 4 },
+}
+ML.OnLootOpened()
+ZugLoot.LootWindow.RemoveItem(1001)
+eq(ZugLoot.LootWindow.CloseOverview(), "rescanned", "close with leftovers rescans")
+eq(#ZugLoot.LootWindow.items, 2, "leftovers listed again after rescan")
+ZugLoot.LootWindow.RemoveItem(1001)
+ZugLoot.LootWindow.RemoveItem(1002)
+eq(ZugLoot.LootWindow.CloseOverview(), "closed", "empty close stays shut")
+-- Master-loot handoff: winner ~= us under master loot mints GiveMasterLoot.
+GetLootMethod = function() return "master" end
+UnitName = function() return "SoloPlayer" end
+LootFrame = { Hide = function() end }
+LootSlot = function() error("must not plain-loot under master loot") end
+GiveMasterLoot = function(slot, who) table.insert(masterGiven, { slot, who }) end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+ML.AwardDirect(1001, "SomebodyElse", "loot")
+eq(#masterGiven, 1, "master loot handed to the winner")
+eq(masterGiven[1][1], 1, "correct corpse slot")
+eq(masterGiven[1][2], "SomebodyElse", "correct winner")
+-- Grey-only corpse: no Blizzard fallback — the grey is a free row in OUR
+-- window (click loots it). Golden rule: nothing falls back to Blizzard.
+GetLootMethod = nil -- solo: plain LootSlot path
+LootSlot = function(slot) table.insert(lootedSlots, slot) end
+LootFrame = { UnregisterAllEvents = function() end, SetScript = function() end,
+  Show = function() error("must never show Blizzard frame") end, Hide = function() end }
+lootSlots = { { link = "item:9:0:0:0", quality = 1 } } -- grey only: free row
+ML.OnLootOpened()
+eq(#ZugLoot.LootWindow.items, 1, "grey-only corpse: one free row")
+ok(ZugLoot.LootWindow.items[1].free, "grey row is free, not rolled")
+local freeSlot = ZugLoot.LootWindow.items[1].slot
+local beforeFree = #lootedSlots
+ML.LootCorpseSlot(nil, 9, "SoloPlayer")
+eq(#lootedSlots, beforeFree + 1, "free row loots its corpse slot")
+eq(lootedSlots[#lootedSlots], freeSlot, "correct corpse slot")
+-- Coin slot: first row, loots on click (client GetLootSlotType path is
+-- stubbed here via LootSlotIsCoin; the scan reads it, not the link).
+LootSlotIsCoin = function(slot) if slot == 1 then return 1 end return 0 end
+lootSlots = { { link = nil }, { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(ZugLoot.LootWindow.items[1].itemID, "Coin", "coin row leads the list")
+ok(ZugLoot.LootWindow.items[1].coin, "coin flagged")
+local beforeCoin = #lootedSlots
+ML.LootCorpseSlot(nil, "Coin", "SoloPlayer")
+eq(#lootedSlots, beforeCoin + 1, "coin row loots its corpse slot")
+LootSlotIsCoin = nil
+-- Row click routing: coin/free rows loot at once (no detail); roll rows
+-- open the detail. Duplicate itemIDs loot the CLICKED slot only.
+local LW = ZugLoot.LootWindow
+LootSlotIsCoin = function(slot) if slot == 1 then return 1 end return 0 end
+lootSlots = { { link = nil },
+  { link = "item:9:0:0:0", quality = 1 },
+  { link = "item:9:0:0:0", quality = 1 },
+  { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.items[1].itemID, "Coin", "coin leads")
+eq(LW.OnRowClick("Coin"), "looted", "coin click loots")
+ok(LW.Find("Coin") == nil, "coin row gone after click")
+local freeRows = {}
+for i = 1, #LW.items do if LW.items[i].free then table.insert(freeRows, LW.items[i]) end end
+eq(#freeRows, 2, "two duplicate grey rows listed")
+eq(LW.OnRowClick(9), "looted", "grey click loots")
+local left = 0
+for i = 1, #LW.items do if LW.items[i].itemID == 9 then left = left + 1 end end
+eq(left, 1, "one duplicate grey still listed")
+eq(lootedSlots[#lootedSlots], 2, "clicked row's own slot looted")
+eq(LW.OnRowClick(1001), "detail", "roll row click opens detail")
+ok(LW.detail ~= nil and LW.detail.itemID == 1001, "detail tracks the roll row")
+LW.CloseDetail()
+LootSlotIsCoin = nil
+GetLootMethod = nil
+LootFrame, LootSlot, GiveMasterLoot, UnitName = nil, nil, nil, nil
 ZugLoot.SRSecurity.AmML = function() return true end
 
 -- 3. SimBoss queues only; ML initiates each from the shared loot window.

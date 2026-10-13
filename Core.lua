@@ -66,12 +66,18 @@ function Z.OnEvent(event, arg1, arg2, arg3, arg4)
   if event == "ADDON_LOADED" and arg1 == "ZugLoot" then
     Z.InitDB()
     Z.Print("loaded v" .. tostring(Z.VERSION) .. ". /zl help")
+    -- RollFor parity: detach Blizzard's loot frame for the whole session,
+    -- so OUR loot window is the loot window in every looting situation.
+    if Z.LootWindow and Z.LootWindow.DetachBlizzardLoot then
+      pcall(Z.LootWindow.DetachBlizzardLoot)
+    end
     if Z.VersionGrid then Z.VersionGrid.Announce() end
   elseif Z.Comm then
     Z.Comm.OnEvent(event, arg1, arg2, arg3, arg4)
   end
   if Z.MasterLootUI and Z.MasterLootUI.OnEvent then Z.MasterLootUI.OnEvent(event, arg1, arg2, arg3, arg4) end
   if Z.RaiderLootUI and Z.RaiderLootUI.OnEvent then Z.RaiderLootUI.OnEvent(event, arg1, arg2, arg3, arg4) end
+  if Z.LootWindow and Z.LootWindow.OnEvent then Z.LootWindow.OnEvent(event, arg1) end
 end
 
 function Z.Init()
@@ -81,6 +87,8 @@ function Z.Init()
   frame:RegisterEvent("CHAT_MSG_SYSTEM")
   frame:RegisterEvent("CHAT_MSG_RAID_WARNING")
   frame:RegisterEvent("LOOT_OPENED")
+  frame:RegisterEvent("LOOT_CLOSED")
+  frame:RegisterEvent("LOOT_SLOT_CLEARED")
   frame:RegisterEvent("RAID_ROSTER_UPDATE")
   frame:RegisterEvent("PARTY_MEMBERS_CHANGED")
   frame:SetScript("OnEvent", function() Z.OnEvent(event, arg1, arg2, arg3, arg4) end)

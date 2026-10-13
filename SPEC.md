@@ -26,7 +26,8 @@ dependencies, minimap button art. These are extension points, not blockers.
 
 | Role | How detected (1.12 APIs) | Powers |
 |------|--------------------------|--------|
-| Master Looter (ML) | `GetLootMethod()` returns `"master"` + `GetLootMaster()` == player | Start/finish/cancel rolls, award loot, broadcast sheet |
+| Loot runner (anyone) | whoever opens the corpse — solo, any loot method, ML or not | Collect loot, start/finish/cancel rolls, award loot |
+| Master Looter (ML) | `GetLootMethod()` returns `"master"` + `GetLootMaster()` == player | As loot runner, plus group-chat announces + `ROLL_REQ` to rollers |
 | Raid leader / assistant | `IsRaidLeader()` / `IsRaidOfficer()` (fallback: party leader) | Import + broadcast sheet (same as ML) |
 | Raider | everyone else | View sheet, roll, auto-roll, sim |
 
@@ -207,7 +208,7 @@ Sheet = {
   at 20, deduped by raidID); every import, incoming broadcast, and activation
   archives the outgoing sheet first (pure `RaidArchive` module, tested).
 
-### 4.2 Master-looter console (`MasterLootUI.lua`) — RollFor-like
+### 4.2 Loot console (`MasterLootUI.lua`) — RollFor-like, universal
 
 - `/zl` shows console: loot list (current loot window items w/ SR badges + counts),
   session controls: `SR roll`, `All roll (/arf equivalent)`, `Raid roll`,
@@ -217,10 +218,25 @@ Roll sessions: triggered by `/zl rf <link>`, `/zl arf <link>`, `/zl rr <link>`,
 RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message
 (auto-roll path). Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`),
 first-roll-only per player; over-rolls flagged, ties auto re-roll.
-- **Loot window** (`LootWindow.lua`, RollFor modern-skin style): on
-  `LOOT_OPENED`, if you are the ML, the corpse is scanned for roll-worthy
-  items (quality ≥ `minLootQuality`, default rare+). Each is announced in group
-  chat + logged (`loot`/`seen`), and the **loot window
+- **Loot window** (`LootWindow.lua`, RollFor modern-skin style — always
+  ours, never Blizzard's): on
+  `LOOT_OPENED`, whoever opened the corpse (solo, any loot method, ML or
+  not), EVERY corpse slot gets a row (RollFor parity): coin first, then
+  roll-worthy items (quality ≥ `minLootQuality`, default rare+), then
+  below-threshold leftovers as one-click free rows. Blizzard's `LootFrame`
+  is DETACHED session-wide (RollFor `main.lua:on_player_login` parity:
+  `UnregisterAllEvents` + `OnHide` stripped at `ADDON_LOADED`, re-armed
+  per `LOOT_OPENED`) — one-shot hiding is NOT enough, FrameXML re-shows
+  the frame on every loot — so our rows are the loot window in every
+  looting situation. NOTHING falls back to Blizzard: coin/free rows loot
+  their slot on click, roll rows open the detail. Each roll-row item is
+  announced + logged (`loot`/`seen`), awarding loots the corpse slot
+  through Blizzard's APIs (`GiveMasterLoot` to another winner under
+  master loot, plain `LootSlot` otherwise), and the overview Close button
+  re-scans leftovers (empty list closes out). `LOOT_SLOT_CLEARED` while
+  open re-scans (slot-keyed, so duplicate itemIDs track correctly); the
+  last award closes the corpse out via `CloseLoot`.
+  The **loot window
   lists every drop as a numbered row: row number, item icon, quality-colored
   item name, and the SR/HR badge on the right** (resolution chain per row —
   same source the sheet list uses: `GetItemInfo(row link)`, then
@@ -279,10 +295,11 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
 
 ### 4.3 Raider loot window (`RaiderLootUI.lua`) — LootBlare-like
 
-- Appears when: (a) ML sends RAID_WARNING with an item link (sender verified as ML),
-  or (b) `ROLL_REQ` received, or (c) **group-loot mode**: loot method is group and
-  a roll-worthy item (quality ≥ threshold) is announced — same frame, so group
-  loot looks identical to master loot from the raider's side (per requirement).
+- Appears when: (a) a roll starts on this client (the local loot window
+  shows it, whoever runs the loot), or (b) `ROLL_REQ` received, or (c)
+  **group-loot mode**: loot method is group and a roll-worthy item
+  (quality ≥ threshold) is announced — same frame, so group loot looks
+  identical to master loot from the raider's side (per requirement).
 - Contents (LootBlare layout, 220×250): green countdown **status bar floating
   above the frame** with seconds text (green→orange→red, pulsing under 5s),
   big 40px item icon (hover = item tooltip, click = chat-link/dress-up) +

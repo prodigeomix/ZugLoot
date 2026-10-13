@@ -1,8 +1,11 @@
 -- ZugLoot/LootWindow.lua
--- RollFor-LootFrame-style (modern skin) loot list for the master looter:
--- a numbered list; each row shows the item icon, the item name
--- (quality-colored), and the SR/HR badge on the right. Clicking a row opens
--- the row detail, which STAYS OPEN as the roll window (RollFor preview ->
+-- RollFor-LootFrame-style (modern skin) loot list — universal: whoever
+-- opens the corpse runs it (solo, any loot method, ML or not):
+-- a numbered list covering EVERY corpse slot (RollFor parity): coin plus
+-- all qualities. Threshold+ items are roll rows (SR/HR badge on the right;
+-- clicking opens the row detail); coin and below-threshold items are free
+-- rows (one click loots the slot, no rolling). The detail STAYS OPEN as
+-- the roll window (RollFor preview ->
 -- rolling -> winners flow): choose SR (direct award on a single holder) /
 -- Roll / Close; while rolling it lists every valid roll with its kind
 -- (SR/MS/OS/TMOG); when the roll finishes it becomes the award window
@@ -65,9 +68,11 @@ function M.Clear()
 end
 
 -- Replace the list (loot scan / sim queue). Plain array of
--- { itemID, link, texture, quality, quantity, slot, badge, sr }; status
--- starts "open", index follows list order (RollFor modern skin numbering).
--- badge wins over sr; sr feeds the legacy badge derivation.
+-- { itemID, link, texture, quality, quantity, slot, badge, sr, coin, free };
+-- status starts "open", index follows list order (RollFor modern skin
+-- numbering). badge wins over sr; sr feeds the legacy badge derivation.
+-- Coin rows use itemID "Coin" (no link); free rows are below-threshold
+-- items looted with one click instead of rolled.
 function M.SetItems(list, source)
   M.items = {}
   local n = Z.Util.ArrayCount(list or {})
@@ -81,13 +86,15 @@ function M.SetItems(list, source)
       local row = {
         index = i,
         itemID = e.itemID,
-        link = e.link or ("item:" .. tostring(e.itemID)),
+        link = e.link or ((not e.coin) and ("item:" .. tostring(e.itemID)) or nil),
         name = e.name,
         texture = e.texture,
         quality = e.quality or 0,
         quantity = e.quantity,
         slot = e.slot,
         badge = badge or "",
+        coin = e.coin and true or false,
+        free = (not e.coin) and (e.free and true or false) or false,
         status = "open",
         source = source or "loot",
       }
@@ -115,15 +122,76 @@ function M.MarkRolling(itemID) M.SetStatus(itemID, "rolling") end
 function M.MarkDone(itemID) M.SetStatus(itemID, "done") end
 function M.MarkOpen(itemID) M.SetStatus(itemID, "open") end
 
+-- Blizzard frame takeover (RollFor parity): Blizzard's `LootFrame` is a
+-- real FrameXML window that pops itself on LOOT_OPENED. Hiding it once is
+-- not enough — it re-shows on every loot (page changes, re-opens, group
+-- updates). So on login we DETACH it for the whole session:
+-- UnregisterAllEvents (it never hears LOOT_OPENED again) + strip its
+-- OnHide script (FrameXML hides itself via that hook). From then on OUR
+-- loot window is the loot window, always, in every looting situation.
+-- All client-global access is nil-guarded so headless/tests never touch it.
+-- Session detach flag: once ADDON_LOADED fires the takeover is armed;
+-- re-armed per LOOT_OPENED (repeat detach is cheap and idempotent).
+M.blizzardTakeover = false
+function M.DetachBlizzardLoot()
+  local f = LootFrame -- client global; nil headless (tests never define it)
+  if f then
+    if f.UnregisterAllEvents then pcall(f.UnregisterAllEvents, f) end
+    if f.SetScript then pcall(f.SetScript, f, "OnHide", nil) end
+    if f.Hide then pcall(f.Hide, f) end
+  end
+  local pf = pfLootFrame -- pfQuest's loot skin, same treatment when present
+  if pf then
+    if pf.UnregisterAllEvents then pcall(pf.UnregisterAllEvents, pf) end
+    if pf.SetScript then pcall(pf.SetScript, pf, "OnHide", nil) end
+    if pf.Hide then pcall(pf.Hide, pf) end
+  end
+  M.blizzardTakeover = true
+end
+-- Per-loot safety net: keep Blizzard's frame down while OUR rows cover
+-- the corpse (post-detach this is normally already hidden; cheap to repeat).
+-- Safe headless (LootFrame is a client global that tests never define).
+function M.HideBlizzardLoot()
+  M.DetachBlizzardLoot()
+end
+-- NOTE: group-loot Need/Greed popups (GroupLootFrame1..N) are deliberately
+-- LEFT ALONE: detaching them without rewiring the dice to RollOnLoot would
+-- leave group-rolled items unrollable. The takeover scope is the corpse
+-- loot window (LootFrame), in every loot method — the master-loot frame
+-- replaces Blizzard's in all looting situations.
+
+-- Slot-kind check: coin slots carry no item link. Vanilla exposes
+-- LootSlotIsCoin; backported/retail clients expose GetLootSlotType
+-- (LOOT_SLOT_MONEY == 2). Nil-safe: false with no client APIs (headless).
+function M.IsCoinSlot(slot)
+  if LootSlotIsCoin then
+    local ok, v = pcall(LootSlotIsCoin, slot)
+    if ok and v == 1 then return true end
+  end
+  if GetLootSlotType then
+    local ok, t = pcall(GetLootSlotType, slot)
+    if ok and t ~= nil then
+      if t == 2 then return true end
+      if LOOT_SLOT_MONEY and t == LOOT_SLOT_MONEY then return true end
+    end
+  end
+  return false
+end
+
 -- Handed out = gone: drop the row from the list (by itemID; scanning the
 -- corpse again re-adds the odd leftover). Parked state for the item dies
 -- with it — awarded state is never resurrected. A list with zero rows
 -- left is not a record — history lives in the Sheet tab.
-function M.RemoveItem(itemID)
+-- slotHint narrows to the CLICKED row when duplicate itemIDs share the
+-- corpse (two of the same grey): looting one leaves the other listed.
+function M.RemoveItem(itemID, slotHint)
   local n = Z.Util.ArrayCount(M.items)
   for i = n, 1, -1 do
-    if M.items[i] and M.items[i].itemID == itemID then
+    local it = M.items[i]
+    if it and it.itemID == itemID
+        and (slotHint == nil or it.slot == slotHint) then
       table.remove(M.items, i)
+      if slotHint ~= nil then break end
     end
   end
   -- Renumber: rows are the 1-based RollFor modern-skin list order.
@@ -137,9 +205,13 @@ function M.RemoveItem(itemID)
     M.detailFrame = nil
   end
   M.Refresh()
-  -- Nothing left: close the ML window like a finished live session
-  -- (stale roll rows hide behind nothing and reads as a bug).
-  if Z.Util.ArrayCount(M.items) == 0 then M.Hide() end
+  -- Nothing left: the corpse is fully distributed. Close the window and
+  -- the loot (Clear() also fires on a fresh LOOT_OPENED, so the next
+  -- corpse starts clean). Every slot had a row, so nothing is stranded.
+  if Z.Util.ArrayCount(M.items) == 0 then
+    M.Hide()
+    if CloseLoot then pcall(CloseLoot) end
+  end
 end
 
 function M.AllDone()
@@ -154,6 +226,45 @@ function M.Hide()
   M.CloseDetail()
 end
 
+-- The overview Close button: re-scan the corpse so leftover (unawarded)
+-- loot comes back into view — through Blizzard's frame if we track no
+-- rows, through ours otherwise. Either way the ML never loses sight of
+-- undistributed loot by dismissing the window.
+function M.CloseOverview()
+  M.Hide()
+  if Z.Util.ArrayCount(M.items) == 0 then
+    if CloseLoot then pcall(CloseLoot) end
+    return "closed"
+  end
+  if Z.MasterLootUI and Z.MasterLootUI.OnLootOpened then
+    Z.MasterLootUI.OnLootOpened()
+  end
+  return "rescanned"
+end
+
+-- No Blizzard fallback: every corpse slot (coin, greys, green+) has a row
+-- in OUR window with a click-to-loot path, so Blizzard's frame is never
+-- needed and stays detached. Kept as no-op shims (callers/tests may
+-- reference them). Nil-safe headless.
+function M.MaybeBlizzardFallback() return false end
+
+function M.HideBlizzardFallback() end
+
+-- Corpse-side refresh: re-scan whatever is left. ONLY fires on
+-- LOOT_SLOT_CLEARED while our window is OPEN (someone looted a slot
+-- outside our rows — e.g. auto-loot). Rebuild keeps badge/state for
+-- tracked rows; LOOT_CLOSED with an empty tracked list hides the window.
+-- Nil-safe headless (no corpse APIs -> no-op).
+function M.OnEvent(event, arg1)
+  if event == "LOOT_CLOSED" then
+    if Z.Util.ArrayCount(M.items or {}) == 0 then M.Hide() end
+  elseif event == "LOOT_SLOT_CLEARED" then
+    if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
+      Z.MasterLootUI.RescanLeftovers()
+    end
+  end
+end
+
 function M.Show(title)
   if title then M.title = title end
   if not CreateFrame then return end
@@ -166,7 +277,7 @@ end
 function M.BuildFrame()
   if M.frame then return M.frame end
   if not CreateFrame then return nil end
-  local f = CreateFrame("Frame", "ZugLootLootFrame", UIParent)
+  local f = CreateFrame("Frame", "ZugLootMasterLootFrame", UIParent)
   if type(f) ~= "table" or type(f.SetWidth) ~= "function"
       or type(f.CreateFontString) ~= "function" then
     return nil -- no usable client frame (minimal test stubs)
@@ -191,7 +302,7 @@ function M.BuildFrame()
   closeB:SetWidth(70) closeB:SetHeight(20)
   closeB:SetPoint("BOTTOM", f, "BOTTOM", 0, 8)
   closeB:SetText("Close")
-  closeB:SetScript("OnClick", function() f:Hide() end)
+  closeB:SetScript("OnClick", function() M.CloseOverview() end)
   M.frame = f
   return f
 end
@@ -216,6 +327,7 @@ function M.DisplayName(it)
   local link = tostring(it.link or "")
   local nm = string.match(link, "%[(.-)%]")
   if nm and nm ~= "" then return nm end
+  if it.coin then return "Coin" end
   return "item:" .. tostring(it.itemID)
 end
 
@@ -460,9 +572,10 @@ function M.Refresh()
       -- needs anchor plumbing the mock stubs lack; width is enough).
       if name.SetWidth then name:SetWidth(150) end
     end
-    -- Whole row clicks through to the detail (RollFor: row click selects).
+    -- Row click: coin/free rows loot their slot at once (no detail, no
+    -- rolling); roll rows open the detail (RollFor: row click selects).
     if row.SetScript then
-      row:SetScript("OnClick", function() M.OpenDetail(id) end)
+      row:SetScript("OnClick", function() M.OnRowClick(id) end)
       -- Hover: item tooltip via the stashed link (never the raw scan link).
       row:SetScript("OnEnter", function()
         M.ShowTip(row, it._tipLink)
@@ -630,6 +743,25 @@ function M.ParkedDetail(itemID)
   local t = M.parked or (Z.LootWindow and Z.LootWindow.parked)
   if t then return t[itemID] end
   return nil
+end
+
+-- Row click entry: coin/free rows loot immediately through Blizzard's
+-- frame (the only path that moves the item) and leave the list; roll
+-- rows open the detail. Returns what happened (headless-testable).
+function M.OnRowClick(itemID)
+  local it = M.Find(itemID)
+  if it and (it.coin or it.free) then
+    if Z.MasterLootUI and Z.MasterLootUI.LootCorpseSlot then
+      local me = nil
+      if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
+      -- Slot-explicit: duplicate itemIDs across slots must loot the CLICKED
+      -- row's slot, not the first Find() match.
+      Z.MasterLootUI.LootCorpseSlot(it.link, itemID, me, it.slot)
+    end
+    M.RemoveItem(itemID, it.slot)
+    return "looted"
+  end
+  return M.OpenDetail(itemID) and "detail" or nil
 end
 
 function M.OpenDetail(itemID)

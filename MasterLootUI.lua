@@ -15,11 +15,10 @@ M.sessions = {} -- [itemID] = session (active one included)
 
 local sessionSeq = 0
 
+-- Loot console is universal: anyone who can SEE the loot runs the window
+-- (solo, party/raid of any loot method, master looter or not). Rolling and
+-- awarding never need master-looter rights — only sheet broadcast does.
 function M.RequireML()
-  if not Z.SRSecurity.AmML() then
-    Z.Print("Only the master looter can start rolls.")
-    return false
-  end
   return true
 end
 
@@ -728,6 +727,39 @@ local function showAwardPopup(itemLink, winnerName, onAccept)
   return true
 end
 
+-- Loot one corpse slot through Blizzard's loot frame (nil-safe: no-ops
+-- headless and when the slot can't be resolved). Master loot hands the
+-- corpse item to the winner; any other method loots it to us. Either way
+-- OUR window stays the visible loot window: the item leaves the corpse
+-- and our row drops (RemoveItem), never Blizzard's frame popping back.
+function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
+  local slot = slotHint or nil
+  if not slot and Z.LootWindow then
+    local it = Z.LootWindow.Find(itemID)
+    if it and it.slot then slot = it.slot end
+  end
+  if not slot and GetNumLootItems and GetLootSlotLink then
+    local n = GetNumLootItems() or 0
+    for s = 1, n do
+      local ok, l = pcall(GetLootSlotLink, s)
+      if ok and l and Z.Util.ItemID(l) == itemID then slot = s break end
+    end
+  end
+  if not slot then return end
+  local me = nil
+  if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
+  local method = nil
+  if GetLootMethod then local ok, m = pcall(GetLootMethod) if ok then method = m end end
+  if method == nil and Z.SRSecurity and Z.SRSecurity.LootMethod then
+    local ok, m = pcall(Z.SRSecurity.LootMethod) if ok then method = m end
+  end
+  if method == "master" and me and winnerName and winnerName ~= me then
+    if GiveMasterLoot then pcall(GiveMasterLoot, slot, winnerName) end
+  else
+    if LootSlot then pcall(LootSlot, slot) end
+  end
+end
+
 -- Direct award from the loot-window row detail: no roll, straight to the
 -- single SR/HR holder (RollFor: one SR = direct award, no rolling needed).
 -- source mirrors DoAward ("raid" live, "sim" for sim rows).
@@ -739,6 +771,9 @@ function M.AwardDirect(itemID, winnerName, source)
     if it and it.link then link = it.link end
   end
   M.DoAward(itemID, link, winnerName, source == "sim" and "sim" or "raid")
+  -- Loot the corpse slot through Blizzard's frame (the only path that
+  -- moves the item), then drop our row. Sim rows have no slot: skip.
+  if source ~= "sim" then M.LootCorpseSlot(link, itemID, winnerName) end
   -- Handed out = gone: the row leaves the list (live loot too, like the
   -- corpse running dry). Stays gone until the next LOOT_OPENED / simboss.
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
@@ -850,6 +885,7 @@ function M.AwardChosen(choice, itemID)
   showAwardPopup(link, name, function()
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
+    if source ~= "sim" then M.LootCorpseSlot(link, sess.itemID, name) end
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
@@ -870,6 +906,7 @@ function M.AwardChosen(choice, itemID)
   if not (StaticPopupDialogs and StaticPopup_Show) then
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
+    if source ~= "sim" then M.LootCorpseSlot(link, sess.itemID, name) end
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
@@ -906,46 +943,135 @@ function M.Award(itemID, itemLink, winnerEntry)
   M.AwardChosen({ name = winnerEntry.name, via = "winner" }, itemID)
 end
 
--- RollFor-style: when a boss is looted, the master looter picks it up.
--- Scans the corpse loot for roll-worthy items (quality threshold), shows
--- the sheet window, announces each item, and starts the first session.
+-- Universal loot scan: whoever opens a corpse runs the window — solo,
+-- party/raid, any loot method. EVERY corpse slot gets a row (RollFor
+-- parity): coin first, then roll-worthy items (quality >= threshold, SR/HR
+-- badge, announce + log `loot`/`seen`), then below-threshold leftovers as
+-- one-click free rows. No Blizzard fallback — our window IS the loot UI.
 -- Further items go through /rf (or the sim loot window in sim).
-function M.OnLootOpened()
-  if not Z.SRSecurity or not M.RequireML() then return end
-  if M.session then return end -- already rolling
-  if M.pendingAwardMenu then return end -- ML still deciding the award
-  if not GetNumLootItems or not GetLootSlotLink then return end
+-- Scan one corpse slot into a row entry (nil when the slot is empty or
+-- unreadable). Coin slots carry no link: { itemID="Coin" }.
+function M.ScanSlot(slot, threshold)
+  if not GetNumLootItems then return nil end
+  -- Coin first: no link, texture + amount text from the slot info.
+  if Z.LootWindow and Z.LootWindow.IsCoinSlot
+      and Z.LootWindow.IsCoinSlot(slot) then
+    local tex, slotName = nil, nil
+    if GetLootSlotInfo then
+      local a, b = GetLootSlotInfo(slot)
+      if type(a) == "string" then tex = a end
+      if type(b) == "string" then slotName = b end
+    end
+    return { itemID = "Coin", link = nil, quality = 0,
+      texture = tex, quantity = nil, slot = slot,
+      name = slotName or "Coin", coin = true }
+  end
+  if not GetLootSlotLink then return nil end
+  local link = GetLootSlotLink(slot)
+  if not link then return nil end
+  -- RollFor reads everything off the slot: GetLootSlotInfo gives
+  -- texture + quantity in one call, GetItemInfo gives quality.
+  local tex, qty, slotName = nil, nil, nil
+  if GetLootSlotInfo then
+    -- Vanilla: (texture, name, quantity, quality); retail adds args.
+    local a, b, c, d = GetLootSlotInfo(slot)
+    tex, slotName, qty = a, b, c
+    if type(qty) ~= "number" then qty = nil end
+    if type(tex) ~= "string" then tex = nil end
+  end
+  local q = nil
+  if GetItemInfo then
+    local _, _, qq = GetItemInfo(link)
+    q = qq
+  end
+  q = q or 0
+  local entry = { link = link, quality = q,
+    texture = tex, quantity = qty, slot = slot, name = slotName }
+  entry.itemID = Z.Util.ItemID(link)
+  if q >= (threshold or 3) then
+    return entry -- roll row (badge added below)
+  end
+  entry.free = true -- leftover: one click loots, no rolling
+  return entry
+end
+
+-- Re-scan the corpse and patch the tracked rows (LOOT_SLOT_CLEARED path):
+-- drop rows whose slots went empty, keep badge/status of the rest, append
+-- genuinely new slots. Returns the live row count. Nil-safe headless.
+function M.RescanLeftovers()
+  if not GetNumLootItems then return Z.Util.ArrayCount(M.items) end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
-  local found = {}
   local n = GetNumLootItems()
+  -- Slot-keyed (duplicate itemIDs across slots are distinct rows).
+  local seen = {}
+  local fresh = {}
   for slot = 1, n do
-    local link = GetLootSlotLink(slot)
-    if link then
-      -- RollFor reads everything off the slot: GetLootSlotInfo gives
-      -- texture + quantity in one call, GetItemInfo gives quality.
-      local tex, qty, slotName = nil, nil, nil
-      if GetLootSlotInfo then
-        -- Vanilla: (texture, name, quantity, quality); retail adds args.
-        local a, b, c, d = GetLootSlotInfo(slot)
-        tex, slotName, qty = a, b, c
-        if type(qty) ~= "number" then qty = nil end
-        if type(tex) ~= "string" then tex = nil end
+    local e = M.ScanSlot(slot, threshold)
+    if e then
+      local key = "slot:" .. slot
+      seen[key] = true
+      local tracked = false
+      if Z.LootWindow and Z.LootWindow.items then
+        for j = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
+          if Z.LootWindow.items[j].slot == slot then tracked = true break end
+        end
       end
-      local q = nil
-      if GetItemInfo then
-        local _, _, qq = GetItemInfo(link)
-        q = qq
-      end
-      if (q or 0) >= threshold then
-        table.insert(found, { link = link, quality = q or 0,
-          texture = tex, quantity = qty, slot = slot, name = slotName })
+      if not tracked then table.insert(fresh, e) end
+    end
+  end
+  -- Drop rows whose slot went empty (looted outside our rows).
+  for i = Z.Util.ArrayCount(M.items), 1, -1 do
+    local it = M.items[i]
+    if it then
+      local key = "slot:" .. tostring(it.slot or -1)
+      if not seen[key] then
+        table.remove(M.items, i)
       end
     end
   end
-  if Z.Util.ArrayCount(found) == 0 then return end
-  -- The sheet window stays closed: the ML works the loot window, and the
-  -- sheet opens only on player request (/zl sheet). An already-open sheet
-  -- still refreshes via the paths below.
+  -- Badge + append genuinely new slots (same shaping as OnLootOpened).
+  for i = 1, Z.Util.ArrayCount(fresh) do
+    local e = fresh[i]
+    local badge = ""
+    if not e.coin and not e.free and e.itemID
+        and Z.DB and Z.DB.sheet and Z.SRData.ReserveBadge then
+      badge = Z.SRData.ReserveBadge(Z.DB.sheet, e.itemID)
+    end
+    e.badge = badge
+    e.index = Z.Util.ArrayCount(M.items) + 1
+    e.status = "open"
+    e.source = "loot"
+    if Z.LootWindow and Z.LootWindow.EnsureResolved then
+      Z.LootWindow.EnsureResolved(e)
+    end
+    table.insert(M.items, e)
+  end
+  for i = 1, Z.Util.ArrayCount(M.items) do M.items[i].index = i end
+  if Z.LootWindow and Z.LootWindow.Refresh then Z.LootWindow.Refresh() end
+  return Z.Util.ArrayCount(M.items)
+end
+
+function M.OnLootOpened()
+  if M.session then return end -- already rolling
+  if M.pendingAwardMenu then return end -- still deciding the award
+  if not GetNumLootItems then return end
+  local threshold = (Z.DB and Z.DB.minLootQuality) or 3
+  local found, coin, free = {}, {}, {}
+  local n = GetNumLootItems()
+  for slot = 1, n do
+    local e = M.ScanSlot(slot, threshold)
+    if e then
+      if e.coin then table.insert(coin, e)
+      elseif e.free then table.insert(free, e)
+      else table.insert(found, e) end
+    end
+  end
+  if Z.Util.ArrayCount(found) == 0
+      and Z.Util.ArrayCount(coin) == 0
+      and Z.Util.ArrayCount(free) == 0 then
+    return -- corpse unreadable/empty: nothing to cover, stay out of the way
+  end
+  -- Announce + log the ROLL rows only (coin/free loot needs no roll call).
   for i = 1, Z.Util.ArrayCount(found) do
     local f = found[i]
     Z.Comm.WarnGroup("ZugLoot loot: " .. f.link)
@@ -953,21 +1079,36 @@ function M.OnLootOpened()
   end
   -- Fresh loot session: a new corpse must not inherit rows, done marks,
   -- open detail, sim queue or raider rolls from a previous loot/sim.
-  if Z.Sim and Z.Sim.ResetFresh then Z.Sim.ResetFresh() end
-  -- RollFor-style loot window: the ML works each row from the list.
+  -- Guarded: ResetFresh must never abort the scan (its pieces are
+  -- independently nil-safe, but a corpse with loot open takes priority).
+  if Z.Sim and Z.Sim.ResetFresh then pcall(Z.Sim.ResetFresh) end
+  -- Ours is the loot window now: (re-)detach Blizzard's frame — hiding
+  -- once is not enough, FrameXML re-shows it on every loot — while our
+  -- rows cover this corpse. Detach is idempotent (safe to repeat per loot).
+  if Z.LootWindow and Z.LootWindow.DetachBlizzardLoot then
+    pcall(Z.LootWindow.DetachBlizzardLoot)
+  end
+  -- RollFor-style loot window: coin first, roll rows next, free leftovers
+  -- last. The ML works each roll row from the list; coin/free rows loot
+  -- on click.
   if Z.LootWindow then
     local rows = {}
+    local function push(e, badge)
+      table.insert(rows, { itemID = e.itemID, link = e.link,
+        name = e.name, texture = e.texture,
+        quality = e.quality, quantity = e.quantity,
+        slot = e.slot, badge = badge or "", coin = e.coin, free = e.free })
+    end
+    for i = 1, Z.Util.ArrayCount(coin) do push(coin[i]) end
     for i = 1, Z.Util.ArrayCount(found) do
       local id = Z.Util.ItemID(found[i].link)
       local badge = ""
-      if Z.DB.sheet and id and Z.SRData.ReserveBadge then
+      if Z.DB and Z.DB.sheet and id and Z.SRData.ReserveBadge then
         badge = Z.SRData.ReserveBadge(Z.DB.sheet, id)
       end
-      table.insert(rows, { itemID = id, link = found[i].link,
-        name = found[i].name, texture = found[i].texture,
-        quality = found[i].quality, quantity = found[i].quantity,
-        slot = found[i].slot, badge = badge })
+      push(found[i], badge)
     end
+    for i = 1, Z.Util.ArrayCount(free) do push(free[i]) end
     Z.LootWindow.SetItems(rows, "loot")
     Z.LootWindow.Show("Boss loot")
   end
