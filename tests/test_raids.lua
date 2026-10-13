@@ -20,9 +20,9 @@ dofile("RaidArchive.lua")
 local SRData = ZugLoot.SRData
 local RA = ZugLoot.RaidArchive
 
-local function makeSheet(raidID, by)
+local function makeSheet(raidID, by, raidName)
   local s = SRData.NewSheet()
-  s.meta = { raidID = raidID, importedAt = 1000, importedBy = by or "ML", source = "paste" }
+  s.meta = { raidID = raidID, raidName = raidName, importedAt = 1000, importedBy = by or "ML", source = "paste" }
   s.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1, sr_plus = 10 } } }
   s.items[1002] = { quality = 4, rollers = { { name = "Bbb", rolls = 2, sr_plus = nil } } }
   return s
@@ -40,6 +40,11 @@ eq(snap.nRollers, 2, "snapshot roller count")
 eq(snap.nSessions, 1, "snapshot session count")
 eq(snap.nWon, 1, "snapshot won count")
 eq(snap.archivedAt, 2000, "snapshot archive time")
+-- raid name flows into snapshot + rows (nil when the sheet has none):
+local sNamed = makeSheet("RN", "ML", "Onyxia's Lair")
+local snapNamed = RA.SnapshotSheet(sNamed, 2000)
+eq(snapNamed.raidName, "Onyxia's Lair", "snapshot carries raid name")
+ok(snap.raidName == nil, "snapshot raid name nil when unknown")
 
 -- 2. Snapshot is isolated: later live edits don't leak in.
 s1.items[1003] = { quality = 4, rollers = {} }
@@ -79,12 +84,13 @@ db = {}
 db.sheet = makeSheet("Rlive")
 db.sheet.meta.importedAt = 1000 -- older raid
 RA.ArchiveActive(db, 3000)
-db.sheet = makeSheet("Rold")
+db.sheet = makeSheet("Rold", "ML", "Molten Core")
 db.sheet.meta.importedAt = 2000 -- newer raid (name sorts either way)
 RA.ArchiveActive(db, 3001)
 local rows = RA.ListSummaries(db)
 eq(#rows, 2, "two summaries")
 eq(rows[1].raidID, "Rold", "latest raid first by import time")
+eq(rows[1].raidName, "Molten Core", "row carries raid name")
 -- Rold is live now (we archived Rlive, then set Rold live? no: db.sheet IS Rold)
 ok(rows[1].active, "live sheet flagged active")
 ok(not rows[2].active, "other not active")

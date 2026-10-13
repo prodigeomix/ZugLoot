@@ -30,6 +30,7 @@ run("test_sim.lua")
 run("test_reset.lua")
 run("test_raids.lua")
 run("test_window_size.lua")
+run("test_settings_reset.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
 -- fake 1.12 frame API to catch typos/nil-globals outside the client.

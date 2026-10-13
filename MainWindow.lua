@@ -442,13 +442,15 @@ function M.RenderRaids()
     title:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
     title:SetWidth(BODY_WIDTH - 110) title:SetJustifyH("LEFT")
     local activeTag = r.active and "  |cFF00FF00[ACTIVE]|r" or ""
-    title:SetText(tostring(r.raidID) .. activeTag)
+    local rname = (r.raidName and r.raidName ~= "") and tostring(r.raidName) or "—"
+    title:SetText(rname .. activeTag)
     local sub = FS(row, "GameFontHighlightSmall", "")
     sub:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -22)
     sub:SetWidth(BODY_WIDTH - 110) sub:SetJustifyH("LEFT")
-    -- Raid date = sheet import time (raid start proxy), not archive time.
+    -- Raid start = sheet import time (raid start proxy), not archive time.
     local when = Z.Util.FormatTime(r.raidTime or r.importedAt)
-    sub:SetText("by " .. tostring(r.importedBy) .. " · " .. tostring(r.source or "?") .. " · " .. when
+    sub:SetText("ID " .. tostring(r.raidID) .. " · started " .. when
+      .. " · by " .. tostring(r.importedBy) .. " · " .. tostring(r.source or "?")
       .. "\n" .. tostring(r.nItems or 0) .. " items · " .. tostring(r.nRollers or 0) .. " players · "
       .. tostring(r.nSessions or 0) .. " sessions · " .. tostring(r.nWon or 0) .. " won")
     sub:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3])
@@ -604,13 +606,21 @@ function M.RenderSetup()
   b4:SetText("Clear won marks")
   b4:SetScript("OnClick", function() Z.SRImport.RequestResetRollLog() end)
   Tip(b4, "Clear won marks", "Same as Reset rolls: confirmation window first.")
+  local b5 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b5:SetWidth(150) b5:SetHeight(24)
+  b5:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -116)
+  b5:SetText("Reset all settings")
+  b5:SetScript("OnClick", function() Z.RequestResetAllSettings() end)
+  Tip(b5, "Reset all settings",
+    "Factory reset: sheet, raid history, drop log and all options back to defaults.",
+    "Confirmation window first. Local data only — anyone can use it.")
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (see Rolls tab)\n" ..
     "Simulate (needs sheet, writes back): /zl sim <link> — /zl simboss <boss>")
-  info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -118)
+  info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -148)
   info:SetWidth(BODY_WIDTH - 16) info:SetJustifyH("LEFT")
-  TrackRow(key, row, 200)
+  TrackRow(key, row, 232)
 end
 
 -------------------------------------------------------------------------------
@@ -633,8 +643,9 @@ function M.Refresh()
   local started = Z.Util.FormatTime(meta and meta.importedAt)
   -- Prominent active raid on the brand row.
   if sheet and meta and meta.raidID then
-    local nm = (meta.raidName and meta.raidName ~= "") and ("  " .. tostring(meta.raidName)) or ""
-    activeRaidFS:SetText("|cFF00FF00ACTIVE RAID:|r" .. nm .. "  |cFFFFD700" .. tostring(meta.raidID) .. "|r")
+    local nm = (meta.raidName and meta.raidName ~= "") and tostring(meta.raidName) or "—"
+    local st = Z.Util.FormatTime(meta.importedAt)
+    activeRaidFS:SetText("|cFF00FF00ACTIVE RAID:|r  " .. nm .. "  |cff888888started " .. st .. "|r")
   else
     activeRaidFS:SetText("|cff888888no active raid|r")
   end

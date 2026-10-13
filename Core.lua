@@ -27,6 +27,40 @@ function Z.InitDB()
   Z.CharDB = ZugLootCharDB
 end
 
+-- Factory reset: wipe all SavedVariables (account + character) and reapply
+-- defaults via InitDB. Clears session data too (active sheet, raid archive,
+-- drop log). Deliberately NOT permission-gated: everything touched is local
+-- client state (a raider must be able to recover a broken local setup, and
+-- the raid can always rebroadcast the sheet). Testable core.
+function Z.DoResetAllSettings()
+  if ZugLootDB then for k in pairs(ZugLootDB) do ZugLootDB[k] = nil end end
+  if ZugLootCharDB then for k in pairs(ZugLootCharDB) do ZugLootCharDB[k] = nil end end
+  Z.InitDB()
+  if Z.VersionGrid and Z.VersionGrid.seen then Z.VersionGrid.seen = {} end
+  if Z.MainWindow then Z.MainWindow.Refresh() end
+  if Z.SRView then Z.SRView.Refresh() end
+end
+
+-- Button/slash entry point with confirmation window. Outside the client
+-- (no StaticPopup API) the confirm is skipped so tests can use it directly.
+function Z.RequestResetAllSettings()
+  if not (StaticPopupDialogs and StaticPopup_Show) then
+    Z.DoResetAllSettings()
+    Z.Print("All ZugLoot settings reset to defaults (sheet, history, log and options cleared).")
+    return
+  end
+  StaticPopupDialogs["ZUGLOOT_RESET_ALL"] = StaticPopupDialogs["ZUGLOOT_RESET_ALL"] or {
+    text = "Reset ALL ZugLoot settings?\nActive sheet, raid history, drop log and all options return to defaults. This cannot be undone.",
+    button1 = "Reset all", button2 = "Cancel",
+    OnAccept = function()
+      Z.DoResetAllSettings()
+      Z.Print("All ZugLoot settings reset to defaults (sheet, history, log and options cleared).")
+    end,
+    timeout = 0, whileDead = 1,
+  }
+  StaticPopup_Show("ZUGLOOT_RESET_ALL")
+end
+
 local frame = nil
 function Z.OnEvent(event, arg1, arg2, arg3, arg4)
   if event == "ADDON_LOADED" and arg1 == "ZugLoot" then

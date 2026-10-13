@@ -99,10 +99,11 @@ assert(hdr and string.find(hdr, "ID MOCK-RAID-1", 1, true), "header shows raid I
 assert(string.find(hdr, "Molten Core", 1, true), "header shows raid name, got: " .. tostring(hdr));
 assert(string.find(hdr, "started 2024", 1, true), "header shows raid start, got: " .. tostring(hdr));
 assert(string.find(hdr, "items", 1, true), "header shows item count, got: " .. tostring(hdr));
--- prominent active raid line on the brand row
+-- prominent active raid line on the brand row: name + start (ID lives on sub-line)
 local act = Z.MainWindow.DebugActiveRaid();
 assert(act and string.find(act, "ACTIVE RAID", 1, true), "active raid label, got: " .. tostring(act));
 assert(string.find(act, "Molten Core", 1, true), "active raid name, got: " .. tostring(act));
-assert(string.find(act, "MOCK-RAID-1", 1, true), "active raid ID, got: " .. tostring(act));
+assert(string.find(act, "started 2024", 1, true), "active raid start, got: " .. tostring(act));
+assert(not string.find(act, "MOCK-RAID-1", 1, true), "ID stays on sub-line, got: " .. tostring(act));
 print("header invariant OK");
 print("MOCK UI RUN OK");

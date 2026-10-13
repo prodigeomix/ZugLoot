@@ -166,20 +166,24 @@ Sheet = {
 - Card data comes from pure `ItemCards.BuildCards(sheet)` (tested); roll
   sessions persist in `sheet.rolls[itemID]` (capped at 25/item), recorded by
   `MasterLootUI.AnnounceResult` for every finished session.
-- Header: brand row carries a prominent green `ACTIVE RAID: <name> <raidID>`
-  (grey `no active raid` when no sheet); sub-line `ID <raidID> | <raid name> |
-  started <date> | N items | M rolled` (raid name "—" for line sheets without
-  instance info). Setup tab: Import (paste),
-  Load from File, auto-roll toggle, clear won marks, roll-time/log stats.
+- Header: brand row carries a prominent green `ACTIVE RAID: <name> | started
+  <date>` (grey `no active raid` when no sheet; name "—" for line sheets
+  without instance info); sub-line `ID <raidID> | <raid name> | started <date>
+  | N items | M rolled`. Setup tab: Import (paste),
+  Load from File, auto-roll toggle, clear won marks, **Reset all settings**
+  (factory reset with confirmation: sheet, raid history, drop log and all
+  options back to defaults; local data only, no permission gate),
+  roll-time/log stats.
 - **Raids tab**: imported raids with the **latest raid at the top**, ordered
   by raid datetime = the sheet's `meta.importedAt` import timestamp (the
   closest thing to a raid start time the sheet carries; `archivedAt` is only
   a fallback for legacy snapshots). Archive position never affects order, so
   re-archiving an old raid can't shuffle it above newer ones. The live sheet
   is always listed too (synced on load and on every render, so a just-loaded
-  raid shows up even though it was never unloaded). Each row shows raidID
-  (+ green `[ACTIVE]` on the live one), importer, source, raid date, and
-  counts (items / players / sessions / won). **Activate** makes a raid the live
+  raid shows up even though it was never unloaded). Each row is titled with
+  the raid name (+ green `[ACTIVE]` on the live one; "—" when unknown) and
+  lists `ID <raidID>`, `started <date>`, importer, source, and counts
+  (items / players / sessions / won). **Activate** makes a raid the live
   sheet and continues it — won marks + roll history come along, and the
   outgoing sheet is archived first so no progress is lost (`/zl raid <raidID>`
   does the same from chat). History lives in `ZugLootDB.raidArchive` (capped
@@ -318,6 +322,7 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl simboss <boss>   simulate boss drops (BossData)
 /zl log | /zl logclear drop log
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
+                    (Setup tab "Reset all settings" = full factory reset with confirm)
 /zl help
 ```
 

@@ -74,6 +74,7 @@ function M.SnapshotSheet(sheet, now)
   local meta = sheet.meta or {}
   return {
     raidID = meta.raidID or ("unknown-" .. tostring(now or 0)),
+    raidName = meta.raidName,
     importedBy = meta.importedBy or "?",
     importedAt = meta.importedAt or 0,
     source = meta.source or "?",
@@ -172,8 +173,8 @@ end
 -- even if it was never unloaded. Ordering is by raid datetime
 -- (importedAt), NOT archive position, so re-archiving an old raid (e.g.
 -- activating it to peek) never shuffles it above newer raids.
--- Row: { raidID, importedBy, importedAt, archivedAt, raidTime, source,
---        nItems, nRollers, nSessions, nWon, active }
+-- Row: { raidID, raidName, importedBy, importedAt, archivedAt, raidTime,
+--        source, nItems, nRollers, nSessions, nWon, active }
 function M.ListSummaries(db, now)
   M.SyncActive(db, now)
   local out = {}
@@ -184,6 +185,7 @@ function M.ListSummaries(db, now)
     local s = arch[i]
     table.insert(out, {
       raidID = s.raidID,
+      raidName = s.raidName,
       importedBy = s.importedBy,
       importedAt = s.importedAt,
       archivedAt = s.archivedAt,
