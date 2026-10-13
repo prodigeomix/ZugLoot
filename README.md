@@ -24,10 +24,17 @@ No dependencies. Interface 11200.
   Sheet tab shows one card per item: hoverable icon, `Name xN (+SR+)`, `[HR]` /
   `[rolled xN]` badges, WON marks, and every roll session this raid one line
   per player.
-- ML: `/zl rf <itemlink>` starts an SR roll. `/zl sim <itemlink>` / `/zl simboss <boss>`
-  rehearse against the loaded sheet (sheet required): full live replay with timers,
-  both windows, and group-routed chat (raid→RAID, party→PARTY, solo→local) — boss
-  drops play one item at a time, results written back; `/zl simstop` stops the queue.
+- ML: `/zl rf <itemlink>` starts an SR roll; looting a boss lists corpse loot
+  as numbered icon/name rows with SR/HR badges — click a row to Award a lone
+  reserver directly, `...` for more choices, or roll it (`/zl roll <item>`). Nothing
+  auto-awards: on completion the award menu offers the winners, SR/MS/OS/TMOG
+  groups and a class-sorted roster — pick with `/zl award <name>` (TMOG wins
+  propose the pass-along). `/zl sim <itemlink>` / `/zl simboss <boss>` rehearse
+  against the loaded sheet (sheet required): full live replay with timers, both
+  windows, the shared loot window (simboss queues; you roll each), the award
+  menu, and group-routed chat (raid→RAID, party→PARTY, solo→local); results
+  written back; `/zl simstop` stops the queue. `/zl simtmog` demos the TMOG
+  pass-along choice; `/zl trade` records a live pass-along.
   The **Reset rolls** button at the top of
   the window (confirmation window first) or `/zl reset` clears sessions + won marks.
 - Raider: frame pops on ML warning / ROLL_REQ / group-loot drops. `/zl auto on` to auto-roll SRs.
@@ -57,4 +64,4 @@ lua tests/run_tests.lua
 
 ## Commands
 
-`/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simstop|log|logclear|reset|help`
+`/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|trade|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|help`

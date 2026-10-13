@@ -22,7 +22,8 @@ end
 -- (items rolled but never SR'd) at the bottom.
 -- card = { itemID, quality, hardres=bool, unsr=bool,
 --          rollers = { {name, rolls, sr_plus, won} }, -- sheet order
---          rollSessions = { {t, mode, winners={names}, lines={ {name, base, sr_plus, effective, missroll, excludedWon} }} },
+--          rollSessions = { {t, mode, winners={names}, lines={ {name, base, sr_plus, effective, missroll, excludedWon} },
+--                             trades={ {from, to, t} }} },
 --          rolled = bool (any session this raid), winnerNames = {latest winners} }
 function M.BuildCards(sheet)
   local cards = {}
@@ -55,7 +56,7 @@ function M.BuildCards(sheet)
           missroll = e.missroll, excludedWon = e.excludedWon,
         })
       end
-      table.insert(sessions, { t = h.t, mode = h.mode, winners = h.winners or {}, lines = lines })
+      table.insert(sessions, { t = h.t, mode = h.mode, winners = h.winners or {}, lines = lines, trades = h.trades or {} })
     end
     local rolled = Util.ArrayCount(sessions) > 0
     local winnerNames = {}

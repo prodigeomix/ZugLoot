@@ -308,6 +308,40 @@ function M.GetRollers(sheet, itemID)
   return sheet.items[itemID].rollers or {}
 end
 
+-- Hard reserve lookup: sheet.hardres[itemID] = { quality } (line HARDRES
+-- section or raidres hardreserves[]). Pure, nil-safe for tests.
+function M.IsHardres(sheet, itemID)
+  if not sheet or not sheet.hardres then return false end
+  return sheet.hardres[itemID] ~= nil
+end
+
+-- Loot-window badge for an item: "HR" beats everything; "SR" / "SR:n" when
+-- n players hold a soft reserve; "" when nobody reserved it.
+function M.ReserveBadge(sheet, itemID)
+  if M.IsHardres(sheet, itemID) then return "HR" end
+  local n = 0
+  if sheet and sheet.items and sheet.items[itemID] then
+    n = Util.ArrayCount(sheet.items[itemID].rollers or {})
+  end
+  if n <= 0 then return "" end
+  if n == 1 then return "SR" end
+  return "SR:" .. n
+end
+
+-- Players holding a soft reserve on an item, sorted. Powers the row
+-- detail's roller list and the single-SR direct-award shortcut.
+function M.SRNames(sheet, itemID)
+  local out = {}
+  if sheet and sheet.items and sheet.items[itemID] then
+    local rollers = sheet.items[itemID].rollers or {}
+    for i = 1, Util.ArrayCount(rollers) do
+      if rollers[i] and rollers[i].name then table.insert(out, rollers[i].name) end
+    end
+  end
+  table.sort(out)
+  return out
+end
+
 -- All unique player names across every item, sorted. Used for open-roll sims
 -- so unreserved items are rolled by players from the loaded sheet.
 function M.AllPlayerNames(sheet)

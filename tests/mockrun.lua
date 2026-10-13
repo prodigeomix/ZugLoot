@@ -48,6 +48,7 @@ getglobal = function() return nil end
 GetItemInfo = function(id) return "Test Sword "..id, "|cffa335ee|Hitem:"..id.."|h[Test]|h", 4, 0,0,0,0,0, "Interface\\Icons\\INV_Sword_01" end
 UnitName = function() return "SoloPlayer" end
 GetNumRaidMembers = function() return 0 end
+GetRaidRosterInfo = function() return nil end
 GetNumPartyMembers = function() return 0 end
 ChatFrameEditBox = { IsVisible=function() return false end };
 UIFrameFadeIn = function(f) if f then f:SetAlpha(1) end end
@@ -64,10 +65,13 @@ ZugLoot.CharDB = { autoRoll=false };
 dofile("SRData.lua"); dofile("Resolver.lua"); dofile("ItemCards.lua");
 dofile("RaidArchive.lua");
 dofile("SRSecurity.lua");
+dofile("Comm.lua");
 ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
 ZugLoot.AutoRoll = { Set=function() end };
 ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, ColorFor=function() return "GREEN" end, Request=function() end };
 dofile("MainWindow.lua");
+dofile("LootWindow.lua");
+dofile("MasterLootUI.lua");
 dofile("RaiderLootUI.lua");
 local Z = ZugLoot;
 Z.MainWindow.Build();
@@ -83,6 +87,36 @@ Z.SRData.RecordRolls(s, 9999, { t=2, mode="OPEN", winners={"SoloPlayer"}, entrie
 Z.SRData.MarkWon(s, 17063, "Carbon");
 Z.DB.sheet = s;
 Z.DB.drops = { { t=1, itemID=17063, link="[Test Sword]", source="raid", outcome="award", winner="Carbon" } };
+Z.DB.sheet = s;
+-- ML loot window + award menu render under the mock frame API.
+Z.LootWindow.SetItems({ { itemID=19137, link="[Test Dagger]", quality=4, sr=1 } }, "loot");
+Z.LootWindow.Show("Boss loot");
+assert(Z.LootWindow.Find(19137) ~= nil, "loot window lists the drop");
+local sess = { id=1, itemID=19137, itemLink="[Test Dagger]", mode="SR", rolls={ { name="Blackfang", roll=95, type="SR" } }, itemCount=1 };
+local res = Z.Resolver.ResolveItem(s, 19137, sess.rolls, { cap=100, requireSR=true });
+assert(type(Z.MasterLootUI.BuildAwardMenu) == "function", "menu builder loaded");
+local menu = Z.MasterLootUI.BuildAwardMenu(sess, res);
+assert(type(menu) == "table" and type(menu.winners) == "table", "menu shape");
+assert(menu.winners[1].name == "Blackfang", "menu top winner");
+assert(#menu.candidates >= 2, "candidate roster built");
+local lines = Z.MasterLootUI.AwardMenuLines(menu);
+assert(#lines >= 3, "menu lines render");
+print("loot window + award menu OK");
+-- client frames: overview rows + row detail under the mock frame API.
+Z.LootWindow.Show("Boss loot");
+assert(Z.LootWindow.frame ~= nil, "overview frame built");
+assert(#Z.LootWindow.rows == 1, "one overview row painted");
+Z.LootWindow.OpenDetail(19137);
+assert(Z.LootWindow.detail ~= nil, "detail data opened");
+assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
+-- ... dropdown builds under the mock API, rows clickable, closes cleanly.
+Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
+assert(Z.LootWindow.moreDropdown ~= nil, "more dropdown opened");
+assert(#Z.LootWindow.moreDropdown.rows >= 2, "dropdown rows painted");
+Z.LootWindow.CloseDetail();
+assert(Z.LootWindow.detail == nil, "detail closed");
+assert(Z.LootWindow.moreDropdown == nil, "dropdown closed with detail");
+print("loot frames OK");
 Z.RaidArchive.ArchiveActive(Z.DB, 2000);
 for _,tab in ipairs({"sheet","raids","rolls","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);

@@ -169,6 +169,7 @@ end
 
 -- Simulate rolls for testing/sim: rollers roll 1..cap, extras are miss-rolls.
 -- rng: function(lo,hi) default math.random. Returns rolls list.
+-- opts.tmog = {names}: extra TMOG-typed entries (cap 98) for pass-along demos.
 function M.FakeRolls(sheetLike, itemID, opts, rng)
   opts = opts or {}
   local cap = opts.cap or 100
@@ -193,6 +194,12 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
   -- miss-rollers: people without SR rolling on the SR item.
   for mm = 1, (fillers > 0 and 0 or missCount) do
     table.insert(rolls, { name = "Missroller" .. mm, roll = rng(1, cap), type = "MS" })
+  end
+  -- transmog rollers (cap 98): may win and pass the item along.
+  if type(opts.tmog) == "table" then
+    for t = 1, count(opts.tmog) do
+      table.insert(rolls, { name = opts.tmog[t], roll = rng(1, 98), type = "TMOG" })
+    end
   end
   return rolls
 end

@@ -101,7 +101,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simstop|log|logclear|reset|help")
+    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|trade|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|help")
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
   elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
   elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
@@ -122,7 +122,22 @@ function Z.Slash(msg)
   elseif cmd == "verlist" then Z.VersionGrid.PrintList()
   elseif cmd == "sim" then Z.Sim.SimItem(rest)
   elseif cmd == "simboss" then Z.Sim.SimBoss(rest)
+  elseif cmd == "simtmog" then Z.Sim.SimTmog(rest)
+  elseif cmd == "simroll" then Z.Sim.RequestRoll(Z.Util.ItemID(rest))
   elseif cmd == "simstop" then Z.Sim.Stop()
+  elseif cmd == "roll" then Z.MasterLootUI.StartItemRoll(rest)
+  elseif cmd == "award" then
+    if Z.MasterLootUI and Z.MasterLootUI.RequireML() then
+      Z.MasterLootUI.AwardChosen({ name = Z.Util.Trim(rest), via = "menu" })
+    end
+  elseif cmd == "trade" then
+    local link, from, to = string.match(rest or "", "(%S+)%s+(%S+)%s+(%S+)")
+    local itemID = Z.Util.ItemID(link or "")
+    if not itemID or not from or not to then
+      Z.Print("Usage: /zl trade <itemlink|itemID> <from> <to>")
+    elseif Z.MasterLootUI and Z.MasterLootUI.RequireML() then
+      Z.MasterLootUI.RecordTrade(itemID, link, from, to, false)
+    end
   elseif cmd == "log" then Z.MainWindow.Toggle("rolls")
   elseif cmd == "logclear" then Z.DropLog.Clear()
   elseif cmd == "reset" then Z.SRImport.ResetWon()

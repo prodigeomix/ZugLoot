@@ -387,6 +387,10 @@ function M.RenderSheet()
         end
         table.insert(lines, "    " .. RollLine(e, isW))
       end
+      for t = 1, Z.Util.ArrayCount(sess.trades or {}) do
+        local tr = sess.trades[t]
+        table.insert(lines, "    |cff00FFFF" .. tostring(tr.from) .. " traded to " .. tostring(tr.to) .. " (transmog)|r")
+      end
     end
     local body = FS(row, "GameFontHighlightSmall", table.concat(lines, "\n"))
     body:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -22)

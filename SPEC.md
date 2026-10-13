@@ -195,15 +195,46 @@ Sheet = {
 - `/zl` shows console: loot list (current loot window items w/ SR badges + counts),
   session controls: `SR roll`, `All roll (/arf equivalent)`, `Raid roll`,
   `2x top wins`, `Finish early`, `Cancel`, `Award`.
-- Roll sessions: triggered by `/zl rf <link>`, `/zl arf <link>`, `/zl rr <link>`,
-  `/zl 2x<link>`, or clicking a loot-list row. Announces via RAID_WARNING
-  (LootBlare trigger compatibility) + `ROLL_REQ` addon message (auto-roll path).
-- Accepts chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`), first-roll-only per
-  player; detects over-rolls, ties auto re-roll.
-- Award flow: click winner → confirmation popup → `GiveMasterLoot` + `AWARD`
-  broadcast + `won` marking + DropLog entry.
-- Master-loot window hardening: confirmation popup, class-sorted candidate list
-  (extension point; skeleton uses default UI + confirm).
+Roll sessions: triggered by `/zl rf <link>`, `/zl arf <link>`, `/zl rr <link>`,
+`/zl 2x<link>`, or the loot-window Roll button (`/zl roll <item>`). Announce via
+RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message
+(auto-roll path). Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`),
+first-roll-only per player; over-rolls flagged, ties auto re-roll.
+- **Loot window** (`LootWindow.lua`, RollFor modern-skin style): on
+  `LOOT_OPENED`, if you are the ML, the corpse is scanned for roll-worthy
+  items (quality ≥ `minLootQuality`, default rare+). Each is announced in group
+  chat + logged (`loot`/`seen`), the sheet window opens, and the **loot window
+  lists every drop as a numbered row: row number, item icon, quality-colored
+  item name, and the SR/HR badge on the right** (resolution chain per row —
+  same source the sheet list uses: `GetItemInfo(row link)`, then
+  `GetItemInfo(itemID)`, then the slot texture/name captured at scan time,
+  then `[Name]` parsed out of the link; rows never show bare `item:<id>` while
+  the client cache knows the item; tooltip on hover, shift-click links /
+  ctrl-click dress-up) (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
+  reserves). Nothing auto-starts — clicking a row opens the **row detail**
+  (320 wide, so `Award <name>` fits long names on one line): direct **Award**
+  when exactly one SR/HR holder exists (no rolling needed), **...** for a
+  real dropdown (RollFor parity: blue-hover rows — Roll, plus Award per
+  reserver), **Close** to dismiss and keep working the overview. `/zl cr`
+  returns the item to open. Non-ML clients ignore corpse loot.
+- **Award menu** (RollFor finish-popup style): on roll completion nothing is
+  auto-awarded — the ML gets winners (ranked, roll-typed) + SR/MS/OS/TMOG
+  loser groups + a **class-sorted candidate roster** (sheet + rollers + raid
+  roster, winners starred like RollFor's candidate grid), and picks who gets
+  the item: the SR winner, a main-spec / offspec / TMOG roller, or any raider
+  from the roster. In-client this is the menu frame; headless it prints and
+  the ML answers `/zl award <name>`. The pick fires the confirmation popup
+  (`Award <link> to <name>?`) → `GiveMasterLoot` + `AWARD` broadcast + `won`
+  marking + DropLog entry.
+- **TMOG winner choice**: when the top winner rolled TMOG, the menu proposes
+  the pass-along (TMOG roller → real winner, top SR/MS loser). The ML either
+  confirms the TMOG roller ("they get it") or the pass-along — the trade leg
+  lands on the session history, in the drop log (`trade`), and in group chat.
+- **Transmog pass-along**: when a TMOG roll wins, the holder may trade the
+  item to the real winner. `/zl trade <item> <from> <to>` (ML-only) records
+  the leg: recipient marked won too, trade note appended to the session
+  history (shown in the Sheet tab), `trade` drop-log entry, group-chat
+  announcement (`X traded [item] to Y (transmog pass-along)`).
 
 ### 4.3 Raider loot window (`RaiderLootUI.lua`) — LootBlare-like
 
@@ -251,17 +282,29 @@ Sim **replays the real live pipeline** (`MasterLootUI` session + timers +
 routed chat + both windows), one item at a time — it is a rehearsal of the
 actual roll flow, not a separate code path:
 
-- `/zl sim <itemLink> [N]` — fake session for the item. On-sheet item: mode
-  `SIM`, all its SR rollers roll (plus N optional MS fillers, flagged as
-  miss-rolls). Off-sheet item: mode `SIM-OPEN`, every player on the sheet
-  rolls (plus N fillers). The session opens the sheet window (ML view) and
-  the raider roller window, announces in group chat, feeds each fake roll on
-  short timers so the roller list fills live, then finishes on the normal
-  roll timer. Ties auto re-roll the tied subset (up to 3 rounds).
-- `/zl simboss <boss>` — queues the `BossData[boss]` loot table and plays it
-  drop by drop: the next item starts only after the previous session closes.
-  Winners are won-marked immediately, so the one-win rule chains across drops
-  exactly like a real raid night. `/zl simstop` clears the queue.
+- `/zl sim <itemLink> [N]` — one-shot: the ML chose it by typing, so it
+  auto-plays immediately (still through the real pipeline: silent session,
+  both windows, group-routed chat, fake rolls fed live, finish on the roll
+  timer, ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
+  rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
+  item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
+- `/zl simboss <boss>` — queues the `BossData[boss]` loot table into the
+  **same loot window** (title `Simulated loot: <boss>`, source `sim`) and
+  stops: the ML — you — initiates every roll from the list (Roll button or
+  `/zl simroll <item>`), in any order. After each finish the award menu
+  decides the winner (headless: `/zl award <name>`); won marks apply
+  immediately, so the one-win rule chains across drops exactly like a real
+  raid night. `/zl simstop` clears the queue; `/zl cr` mid-sim returns the
+  item to the queue head for a re-roll.
+- Nothing auto-awards, ever: the sim replays the live menu too. After the ML
+  picks, the confirm popup fires and the queue continues (in-client: as you
+  accept; headless: the harness's `AwardChosen`).
+- `/zl simtmog <itemLink>` — transmog pass-along demo: one roller rolls TMOG
+  instead of SR; the menu proposes the pass-along and the (headless) ML
+  choice passes it to the real winner, with the trade leg in chat
+  (`... (transmog pass-along)`), on the session history, in the drop log
+  (`trade`), and the recipient marked won. Live TMOG wins decide the same
+  way in the menu (or `/zl trade` afterwards).
 - Chat routing matches live rolls: raid → `RAID` + `RAID_WARNING`, party →
   `PARTY` (warnings have no party channel, so plain party text), solo → local
   chat frame. Sim sessions are silent on the addon channel (no
@@ -301,13 +344,14 @@ ZugLoot/
   SRSecurity.lua     IsML/IsLeader/CanImport/CanBroadcast
   SRImport.lua       paste frame + "Load from File" (CustomData/ZugLoot_SR.txt)
   SRView.lua         fancy sheet window (sorted by item, xN, +SR+, WON)
-  MasterLootUI.lua   ML console + session control + award confirm
+  MasterLootUI.lua   ML console + session control + award menu + confirm
+  LootWindow.lua     ML loot list (numbered icon/name/SR-HR rows + row detail)
   RaiderLootUI.lua   LootBlare-like frame incl. group-loot display
   AutoRoll.lua       auto-roll + auto-resolve eligibility
   VersionGrid.lua    squares grid + version request handling
   BossData.lua       tiny boss→items tables for simboss
   RaidArchive.lua    raid history snapshots: view / continue past raids
-  Sim.lua            /zl sim, /zl simboss (uses Resolver)
+  Sim.lua            /zl sim, /zl simboss, /zl simtmog, /zl simroll (uses Resolver)
   DropLog.lua        drop log store + window
   tests/
     run_tests.lua    stock-lua runner (lua tests/run_tests.lua)
@@ -333,14 +377,20 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl loadfile         import from CustomData/ZugLoot_SR.txt (ML/RL only)
 /zl rf <link>        start SR roll (ML)        /zl arf <link>  open roll
 /zl rr <link>        raid-roll                 /zl 2x<link>    two-top-win
-/zl fr | /zl cr      finish early | cancel session
+/zl roll <item>      roll one loot-window item (ML, live corpse loot)
+/zl award <name>     award the finished roll to <name> (ML, from the menu)
+/zl fr | /zl cr      finish early | cancel session (cr returns loot item to open)
 /zl show|hide        raider frame toggle
 /zl time N           roll window seconds       /zl autoclose on|off
 /zl auto on|off      auto-roll SR items (per char)
 /zl ver | /zl verlist version grid | text list
-/zl sim <link> [N]   simulate rolls for item (live replay, timers+windows)
-/zl simboss <boss>   simulate boss drops one at a time (BossData)
+/zl sim <link> [N]   simulate one item (auto-plays: the ML chose it)
+/zl simboss <boss>   queue boss drops in the loot window (ML rolls each)
+/zl simtmog <link>   transmog pass-along demo (menu choice passes it along)
+/zl simroll <item>   roll one queued sim item (ML)
+/zl simtmog <link>   transmog pass-along demo (TMOG win auto-trades)
 /zl simstop          stop a running sim (clears queue)
+/zl trade <item> <from> <to>  record transmog pass-along trade (ML)
 /zl log | /zl logclear drop log
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)

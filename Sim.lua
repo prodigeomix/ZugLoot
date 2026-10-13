@@ -1,6 +1,6 @@
 -- ZugLoot/Sim.lua
 -- In-game simulation: /zl sim <itemlink|itemID> [fillers], /zl simboss <boss>,
--- /zl simstop. Requires the loaded sheet (Z.DB.sheet): every roller is a
+-- /zl simtmog <itemlink>, /zl simroll <item>, /zl simstop. Requires the loaded sheet (Z.DB.sheet): every roller is a
 -- player from the sheet, and every simulated session is written back into the
 -- sheet (sheet.rolls history + won marks + drop log), exactly like a live roll.
 --
@@ -8,8 +8,9 @@
 -- MasterLootUI session + timers + group-routed chat + both windows, one item
 -- at a time. Fake rolls are precomputed, then fed through
 -- MasterLootUI.OnSystemRoll on short timers so the raider list fills live;
--- the session finishes on the normal roll timer and the boss queue advances
--- to the next drop only afterwards. RunSimSession() stays behind as the
+-- the session finishes on the normal roll timer; afterwards the ML picks
+-- the award from the menu and the queue advances (/zl sim one-shots
+-- auto-play; simboss waits for the ML's Roll per item). RunSimSession() stays behind as the
 -- synchronous core (tests, instant resolve).
 -- Uses the same Resolver pure module as real sessions and as tests/.
 ZugLoot = ZugLoot or {}
@@ -39,18 +40,28 @@ local function now()
 end
 
 function M.Busy()
-  return M.running or (Z.MasterLootUI and Z.MasterLootUI.session ~= nil)
+  if M.running then return true end
+  if Z.MasterLootUI then
+    if Z.MasterLootUI.session ~= nil then return true end
+    if Z.MasterLootUI.pendingAwardMenu ~= nil then
+      return true -- ML still deciding the award
+    end
+  end
+  return false
 end
 
 -- Stop a running sim: drop the queue (the live item, if any, plays out).
 function M.Stop()
   M.pending = {}
+  M.auto = false
+  M.tmogPassAlong = false
   if M.running then
     M.running = false
     Z.Print("Sim stopped (queue cleared; current item plays out).")
   else
     Z.Print("No sim running.")
   end
+  M.SyncLootWindow()
 end
 
 -- Print one simulated session (same lines the Sheet tab shows per player).
@@ -142,40 +153,73 @@ local function finishOpts(sess, sheet)
   return { cap = Z.Caps.SR, requireSR = (not openRoll and sheet ~= nil), itemCount = sess.itemCount or 1 }
 end
 
--- Names needing a tie re-roll for the live sim session (pre-resolve with the
--- same opts Finish uses). Empty when the session would finish cleanly.
-local function tieNames(sess, sheet)
-  local res = Z.Resolver.ResolveItem(sheet, sess.itemID, sess.rolls, finishOpts(sess, sheet))
-  local out = {}
-  local tied = res.tied or {}
-  for i = 1, Z.Util.ArrayCount(tied) do
-    table.insert(out, tied[i].name)
+-- Called after a sim award completes: fires the transmog trade leg when
+-- the ML passed a TMOG win to the real winner, then asks for the next roll.
+-- Continuation is timer-deferred so award confirmation never nests the
+-- next item inside this call stack.
+function M.afterAwards()
+  local ML = Z.MasterLootUI
+  local lastTrade = M.pendingTrade
+  M.pendingTrade = nil
+  if lastTrade and ML then
+    ML.RecordTrade(lastTrade.itemID, lastTrade.itemLink, lastTrade.from, lastTrade.to, true)
   end
-  return out
+  Z.Timer.After(1.0, function() M.RequestNextRoll() end)
+end
+
+-- Roll range per type (mirrors live caps): SR/MS 1-100, OS 1-99, TMOG 1-98.
+-- OnSystemRoll derives the roll type from maxR, so feeds must carry the
+-- right range or every fake roll reads as SR.
+function M.RangeFor(rtype)
+  local caps = Z.Caps or { SR = 100, MS = 100, OS = 99, TMOG = 98 }
+  if rtype == "OS" then return 1, caps.OS or 99 end
+  if rtype == "TMOG" then return 1, caps.TMOG or 98 end
+  return 1, caps.SR or 100
 end
 
 -- Feed one roll into the live sim session (timer callback).
-local function feedRoll(sess, rv, cap)
+local function feedRoll(sess, rv)
   if not Z.MasterLootUI or Z.MasterLootUI.session ~= sess then return end
-  Z.MasterLootUI.OnSystemRoll(rv.name, rv.roll, 1, cap)
+  local minR, maxR = M.RangeFor(rv.type)
+  Z.MasterLootUI.OnSystemRoll(rv.name, rv.roll, minR, maxR)
 end
 
--- Finish wrapper for the sim pump: resolves, re-rolls ties (up to
--- TIE_ROUNDS fresh rounds for the tied subset), then hands back to pump.
+-- Finish wrapper: resolves, re-rolls ties (up to TIE_ROUNDS fresh rounds
+-- for the tied subset), then the ML decides the award from the menu.
 local function finishSim(entry, round)
   round = round or 1
   local ML = Z.MasterLootUI
-  if not ML or not ML.session then M.pump() return end
+  if not ML or not ML.session then M.RequestNextRoll() return end
   local sheet = Z.DB and Z.DB.sheet
   local names = {}
-  if sheet then names = tieNames(ML.session, sheet) end
-  ML.Finish()
-  if ML.session then
-    -- Still open: tie at the top.
+  -- Pre-resolve (same opts Finish uses): tie subset + TMOG trade plan.
+  -- Finish re-resolves deterministically on identical inputs.
+  local pre = nil
+  if sheet then
+    pre = Z.Resolver.ResolveItem(sheet, ML.session.itemID, ML.session.rolls, finishOpts(ML.session, sheet))
+    local tied = pre.tied or {}
+    for i = 1, Z.Util.ArrayCount(tied) do table.insert(names, tied[i].name) end
+  end
+  M.pendingTrade = nil
+  M.pendingAward = nil
+  local outcome = ML.Finish()
+  if outcome == "awaiting" and not (StaticPopupDialogs and StaticPopup_Show) then
+    -- Headless ML (tests): the menu is pending; script only the simtmog
+    -- pass-along, everything else waits for the harness's AwardChosen
+    -- (the harness plays the ML, like the client does).
+    local pend = ML.pendingAwardMenu
+    local menu = pend and pend.data
+    local top = menu and menu.winners and menu.winners[1]
+    if top and menu.tradePlan and M.tmogPassAlong then
+      M.pendingAward = { name = menu.tradePlan.to, via = "trade" }
+      ML.AwardChosen(M.pendingAward)
+    end
+  end
+  if outcome == "tie" then
     if Z.Util.ArrayCount(names) == 0 or round > M.TIE_ROUNDS then
       Z.Print("SIM tie left unresolved — re-roll manually or /zl cr.")
       ML.Cancel()
-      M.pump()
+      Z.Timer.After(1.0, function() M.RequestNextRoll() end)
       return
     end
     Z.Print("SIM tie between " .. table.concat(names, ", ") .. " — re-rolling (round " .. round .. ").")
@@ -194,22 +238,37 @@ local function finishSim(entry, round)
     local cap = Z.Caps.SR
     for i = 1, Z.Util.ArrayCount(names) do
       local nm = names[i]
-      Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, { name = nm, roll = math.random(1, cap) }, cap) end)
+      Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, { name = nm, type = "SR", roll = math.random(1, cap) }) end)
     end
     Z.Timer.After((Z.Util.ArrayCount(names) + 1) * M.ROLL_GAP + 0.2, function() finishSim(entry, round + 1) end)
     return
   end
-  -- Session closed (winner, no winner, awards done): next item after a beat.
-  Z.Timer.After(1.0, function() M.pump() end)
+  if outcome == "awaiting" then
+    -- The ML decides: in-client the menu frame is on screen and
+    -- AwardChosen/popup continuations own what follows; headless the menu
+    -- stays pending for the harness's AwardChosen — except the scripted
+    -- simtmog pass-along above and the nobody-eligible close-out here.
+    local pend = ML.pendingAwardMenu
+    if pend and pend.data and pend.data.none then
+      ML.pendingAwardMenu = nil
+      if ML.session then ML.session = nil end
+      M.afterAwards()
+    end
+    return
+  end
+  -- "closed": nothing owns continuation (should not happen for sim).
 end
 
--- Play one queued entry through the real pipeline: silent session (no
+-- Start one queued entry through the real pipeline: silent session (no
 -- addon broadcast to other clients), both windows visible, rolls fed on
--- timers, finish on the normal roll timer.
+-- timers, finish on the normal roll timer. Only the ML starts entries —
+-- playOne runs from RequestRoll (loot-window Roll button), RequestNextRoll
+-- (auto mode), or the /zl sim one-shot.
 function M.playOne(entry)
   local ML = Z.MasterLootUI
   local rollTime = (Z.DB and Z.DB.rollTime) or 15
   ML.BeginSession(entry.itemID, entry.link, entry.mode, true)
+  if Z.LootWindow then Z.LootWindow.MarkRolling(entry.itemID) end
   -- ML view: make sure the sheet window is up (don't toggle it away).
   if Z.MainWindow and Z.MainWindow.Show then
     local f = Z.MainWindow.frame
@@ -217,30 +276,115 @@ function M.playOne(entry)
       Z.MainWindow.Show("sheet")
     end
   end
-  local cap = Z.Caps.SR
   for i = 1, Z.Util.ArrayCount(entry.rolls) do
     local rv = entry.rolls[i]
-    Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, rv, cap) end)
+    Z.Timer.After(i * M.ROLL_GAP, function() feedRoll(ML.session, rv) end)
   end
   Z.Timer.After(rollTime, function() finishSim(entry, 1) end)
 end
 
--- Queue worker: one item at a time; next starts only when no session is live.
-function M.pump()
-  if Z.MasterLootUI and Z.MasterLootUI.session then return end
-  local nextEntry = nil
-  if Z.Util.ArrayCount(M.pending) > 0 then
-    nextEntry = table.remove(M.pending, 1)
+-- Request the next roll: auto mode plays the queue head (the /zl sim
+-- one-shot always auto-plays); manual mode waits for the ML's Roll click.
+function M.RequestNextRoll()
+  if M.auto then
+    local head = M.pending[1]
+    if head then M.RequestRoll(head.itemID) return end
   end
-  if not nextEntry then
-    if M.running then
-      M.running = false
-      Z.Print("SIM done — see the Sheet tab.")
-    end
+  if Z.MasterLootUI and Z.MasterLootUI.session then return end -- roll live
+  if Z.MasterLootUI and Z.MasterLootUI.pendingAwardMenu then return end -- ML deciding
+  M.running = false
+  if Z.Util.ArrayCount(M.pending) == 0 then
+    Z.Print("SIM done — see the Sheet tab.")
+  else
+    Z.Print("SIM: waiting for the ML — click Roll in the loot window.")
+  end
+  M.SyncLootWindow()
+end
+
+-- The ML initiates one queued item (loot-window Roll button). Plays when
+-- idle; a live session blocks (finish or /zl cr first).
+function M.RequestRoll(itemID)
+  if Z.MasterLootUI and Z.MasterLootUI.session then
+    Z.Print("A roll is already running — finish or /zl cr first.")
     return
   end
-  M.running = true
-  M.playOne(nextEntry)
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    if M.pending[i].itemID == itemID then
+      local entry = table.remove(M.pending, i)
+      M.running = true
+      M.SyncLootWindow()
+      Z.Print("SIM: rolling " .. tostring(entry.link) .. " (ML pick).")
+      M.playOne(entry)
+      return
+    end
+  end
+  Z.Print("SIM: item " .. tostring(itemID) .. " is not in the loot queue.")
+end
+
+-- Backwards-compatible alias (tests + loot rows call RequestRoll).
+function M.RollNow(itemID) M.RequestRoll(itemID) end
+
+-- Push the queue (+live session marker) into the shared loot window.
+-- Finished items stay listed (marked done) so the window is a full record.
+function M.SyncLootWindow()
+  if not Z.LootWindow then return end
+  local rows = {}
+  M.doneRows = M.doneRows or {}
+  local have = {}
+  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
+    have[Z.LootWindow.items[i].itemID] = Z.LootWindow.items[i]
+  end
+  for id, prev in pairs(have) do
+    if prev and prev.status == "done" then M.doneRows[id] = prev end
+  end
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    local e = M.pending[i]
+    local sheet = Z.DB and Z.DB.sheet
+    local badge = ""
+    if sheet and Z.SRData.ReserveBadge then
+      badge = Z.SRData.ReserveBadge(sheet, e.itemID)
+    elseif sheet and Z.SRData.GetRollers then
+      local n = Z.Util.ArrayCount(Z.SRData.GetRollers(sheet, e.itemID))
+      if n == 1 then badge = "SR" elseif n > 1 then badge = "SR:" .. n end
+    end
+    table.insert(rows, { itemID = e.itemID, link = e.link,
+      quality = (sheet and sheet.items[e.itemID] and sheet.items[e.itemID].quality) or 0,
+      badge = badge })
+  end
+  -- Preserve known statuses (rolling/done) across the rebuild, and keep
+  -- finished rows appended so the window stays a full record of the run.
+  local keepStatus = {}
+  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
+    keepStatus[Z.LootWindow.items[i].itemID] = Z.LootWindow.items[i].status
+  end
+  Z.LootWindow.SetItems(rows, "sim")
+  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
+    local id = Z.LootWindow.items[i].itemID
+    local prev = have[id]
+    if prev and prev.status == "done" then
+      Z.LootWindow.items[i].status = "done"
+    elseif keepStatus[id] == "rolling" then
+      Z.LootWindow.items[i].status = "rolling"
+    end
+  end
+  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items or {}) do end -- noop
+  -- Re-append done rows that left the queue (played earlier this run).
+  -- Carry the resolved presentation (name/texture/badge), not just ids.
+  if M.doneRows then
+    for id, prev in pairs(M.doneRows) do
+      if not Z.LootWindow.Find(id) then
+        table.insert(Z.LootWindow.items,
+          { itemID = id, link = prev.link, name = prev.name,
+            texture = prev.texture, quality = prev.quality,
+            quantity = prev.quantity, badge = prev.badge,
+            status = "done", source = "sim" })
+      end
+    end
+  end
+  local live = Z.MasterLootUI and Z.MasterLootUI.session
+  if live and Z.LootWindow.Find(live.itemID) then
+    Z.LootWindow.MarkRolling(live.itemID)
+  end
 end
 
 function M.SimItem(argText)
@@ -254,10 +398,13 @@ function M.SimItem(argText)
   local itemID = Z.Util.ItemID(link or "")
   if not itemID then Z.Print("Usage: /zl sim <itemlink|itemID> [fillers]") return end
   local fillers = tonumber(n) or 0
+  M.tmogPassAlong = false
   local entry = M.BuildEntry(sheet, itemID, link, fillers)
   Z.Print("SIM " .. entry.mode .. " item " .. itemID .. " (" .. Z.Util.ArrayCount(entry.rolls) .. " rolls, replaying live with timers):")
   table.insert(M.pending, entry)
-  M.pump()
+  M.auto = true -- one-shot: ML chose it by typing the command
+  M.SyncLootWindow()
+  M.RequestRoll(entry.itemID)
 end
 
 function M.SimBoss(name)
@@ -280,5 +427,78 @@ function M.SimBoss(name)
     local itemID = table_[i]
     table.insert(M.pending, M.BuildEntry(sheet, itemID, tostring(itemID), 0))
   end
-  M.pump()
+  M.auto = false -- boss runs are ML-driven: Roll per item, like live loot
+  M.tmogPassAlong = false
+  M.doneRows = {}
+  M.lastEntries = {}
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    table.insert(M.lastEntries, { itemID = M.pending[i].itemID, link = M.pending[i].link })
+  end
+  M.running = true
+  M.SyncLootWindow()
+  if Z.LootWindow then Z.LootWindow.Show("Simulated loot: " .. tostring(name)) end
+  Z.Print("Loot window open — click Roll on an item (or /zl simroll <item>).")
+end
+
+-- Transmog pass-along demo: like /zl sim, but the first sheet roller also
+-- rolls TMOG, so a TMOG win ("might get item") auto-trades to the top MS
+-- roller with full chat + history + log reflection.
+function M.SimTmog(argText)
+  local sheet = M.RequireSheet()
+  if not sheet then return end
+  if M.Busy() then
+    Z.Print("A roll or sim is already running — wait or /zl simstop.")
+    return
+  end
+  local link = string.match((argText or ""), "(%S+)")
+  local itemID = Z.Util.ItemID(link or "")
+  if not itemID then Z.Print("Usage: /zl simtmog <itemlink|itemID>") return end
+  if sheet.items[itemID] == nil then
+    Z.Print("simtmog needs an SR'd item (got " .. tostring(itemID) .. ").")
+    return
+  end
+  local rollers = sheet.items[itemID].rollers or {}
+  if not rollers[1] then Z.Print("simtmog needs an SR'd item with rollers.") return end
+  local tmogName = rollers[1].name
+  -- That player rolls TMOG *instead of* SR (live first-roll-only rule
+  -- would drop their second roll, so the SR entry is replaced).
+  local all = Z.Resolver.FakeRolls(sheet, itemID,
+    { cap = Z.Caps.SR, sheetOnly = true, tmog = { tmogName } })
+  -- Everyone else rolls MS in this demo so a TMOG win has a "real winner"
+  -- to pass to (PickTradeRecipient targets the top MS roller).
+  local kept = {}
+  for i = 1, Z.Util.ArrayCount(all) do
+    local rv = all[i]
+    if rv.name == tmogName and rv.type == "SR" then
+      -- replaced by the TMOG entry below
+    else
+      if rv.type == "SR" then rv.type = "MS" end
+      table.insert(kept, rv)
+    end
+  end
+  local entry = { itemID = itemID, link = link, mode = "SIM", rolls = kept }
+  Z.Print("SIM-TMOG item " .. itemID .. " (" .. tostring(tmogName) .. " rolls TMOG instead of SR — watch for the pass-along):")
+  table.insert(M.pending, entry)
+  M.auto = true
+  M.tmogPassAlong = true -- headless ML passes the TMOG win to the real winner
+  M.SyncLootWindow()
+  M.RequestRoll(entry.itemID)
+end
+
+-- A cancelled sim item goes back to the queue head so the ML can re-roll
+-- it from the loot window (Cancel during a sim = "not this one, again").
+function M.Requeue(itemID)
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    if M.pending[i].itemID == itemID then return end -- still queued
+  end
+  local sheet = Z.DB and Z.DB.sheet
+  if not sheet then return end
+  local link = tostring(itemID)
+  for i = 1, Z.Util.ArrayCount(M.lastEntries or {}) do
+    if M.lastEntries[i].itemID == itemID then link = M.lastEntries[i].link end
+  end
+  table.insert(M.pending, 1, M.BuildEntry(sheet, itemID, link, 0))
+  M.running = true
+  M.SyncLootWindow()
+  Z.Print("SIM: item " .. tostring(itemID) .. " back in the loot window.")
 end

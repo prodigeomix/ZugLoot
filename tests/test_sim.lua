@@ -88,11 +88,19 @@ end
 local realRandom = math.random
 
 -- Fresh harness state per section.
+dofile("LootWindow.lua")
+
 local function resetHarness(rollTime)
   ZugLoot.Timer.CancelAll()
   Sim.pending = {}
   Sim.running = false
+  Sim.auto = false
+  Sim.tmogPassAlong = false
+  Sim.lastEntries = {}
+  Sim.pendingAward = nil
   ML.session = nil
+  ML.pendingAwardMenu = nil
+  ZugLoot.LootWindow.Clear()
   printed, dropAdds, chatSent, shownItems, fedRolls = {}, {}, {}, {}, {}
   hideCalls = 0
   grouping = "solo"
@@ -118,22 +126,27 @@ Sim.SimBoss("TestBoss")
 ok(string.find(printed[#printed], "requires a loaded sheet"), "simboss without sheet refuses")
 
 -- 2. SimItem replays live: session created silent, raider window shown,
--- rolls fed on timers, finish on roll timer, history + won + drop written.
+-- rolls fed on timers, finish on roll timer, then the ML picks the award
+-- from the menu; history + won + drop written.
 resetHarness()
 math.random = rigged({ 90, 80 }) -- Aaa 90(+10=100) beats Bbb 80
 Sim.SimItem("1001")
-math.random = realRandom
 ok(ML.session ~= nil, "live session created")
 eq(ML.session.mode, "SIM", "sim session mode")
 ok(ML.session.silent, "sim session silent (no broadcast)")
 eq(#shownItems, 1, "raider window shown once")
 ok(string.find(shownItems[1], "1001"), "raider window shows the item")
+math.random = realRandom
 -- Mid-roll: nothing resolved yet, no history.
 ZugLoot.Timer.Update(0.5)
 ok(ML.session ~= nil, "session still open mid-roll")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "no history before finish")
 ok(drain(), "timers drain")
-ok(ML.session == nil, "session closed after finish")
+ok(ML.session ~= nil, "session held for ML award decision")
+ok(ML.pendingAwardMenu ~= nil, "award menu pending")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain award")
+ok(ML.session == nil, "session closed after ML award")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "history recorded")
 local hist = SRData.GetRolls(ZugLoot.DB.sheet, 1001)[1]
 eq(hist.mode, "SIM", "history mode tagged SIM")
@@ -152,8 +165,10 @@ ok(names["Aaa"] and names["Bbb"] and names["Filler1"] == nil and names["Missroll
 resetHarness()
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
-math.random = realRandom
 ok(drain(), "drain solo")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain solo award")
+math.random = realRandom
 eq(#chatSent, 0, "no SendChatMessage while solo")
 local sawStart, sawResult, sawWinner = false, false, false
 for i = 1, #printed do
@@ -168,8 +183,10 @@ resetHarness()
 grouping = "raid"
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
-math.random = realRandom
 ok(drain(), "drain raid")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain raid award")
+math.random = realRandom
 local channels = {}
 for i = 1, #chatSent do channels[chatSent[i].channel] = true end
 ok(channels["RAID"], "raid traffic on RAID")
@@ -187,8 +204,10 @@ resetHarness()
 grouping = "party"
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
-math.random = realRandom
 ok(drain(), "drain party")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain party award")
+math.random = realRandom
 ok(#chatSent > 0, "party traffic sent")
 for i = 1, #chatSent do eq(chatSent[i].channel, "PARTY", "party-only routing") end
 
@@ -196,8 +215,10 @@ for i = 1, #chatSent do eq(chatSent[i].channel, "PARTY", "party-only routing") e
 resetHarness()
 math.random = rigged({ 10, 20, 30 })
 Sim.SimItem("9999")
-math.random = realRandom
 ok(drain(), "drain open")
+ML.AwardChosen({ name = "Ccc", via = "winner" })
+ok(drain(), "drain open award")
+math.random = realRandom
 local res3 = SRData.GetRolls(ZugLoot.DB.sheet, 9999)[1]
 eq(#res3.entries, 3, "open sim rolls all sheet players")
 eq(res3.winners[1], "Ccc", "open sim highest base wins")
@@ -207,32 +228,55 @@ local simCards = ZugLoot.ItemCards.BuildCards(ZugLoot.DB.sheet)
 eq(simCards[#simCards].itemID, 9999, "stub card at the bottom")
 ok(simCards[#simCards].unsr, "stub card flagged")
 
--- 7. SimBoss: one item at a time, one-win chains across drops.
+-- 7. SimBoss: queue only — the ML initiates each roll from the loot
+-- window; one-win chains across drops.
 resetHarness()
 -- 1001: Aaa 90(+10=100) beats Bbb 80 -> Aaa wins, marked won.
 -- 1002: Aaa 99(excluded), Ccc 50(+50=100) -> Ccc wins.
 math.random = rigged({ 90, 80, 99, 50 })
 Sim.SimBoss("TestBoss")
 math.random = realRandom
--- After a beat only the first item may have history: strict ordering.
+-- Queued, nothing rolling: ML must initiate.
+ok(ML.session == nil, "simboss starts nothing by itself")
+eq(#ZugLoot.LootWindow.items, 2, "loot window lists both drops")
+eq(ZugLoot.LootWindow.items[1].status, "open", "first drop open")
+-- ML rolls the first item: strict ordering while it plays.
+Sim.RequestRoll(1001)
+ok(ML.session ~= nil, "ML-initiated session live")
 ZugLoot.Timer.Update(0.5)
 ok(SRData.RollCount(ZugLoot.DB.sheet, 1001) <= 1, "first item in flight")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 0, "second item waits for first")
-ok(drain(), "drain boss")
-ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "boss sim: 1001 won by Aaa")
-ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "boss sim: 1002 won by Ccc (Aaa excluded)")
+-- Roll finishes -> award menu is on the ML: session held, auto nothing.
+ok(drain(), "drain first item")
+ok(ML.session ~= nil, "first session held for ML award decision")
+ok(ML.pendingAwardMenu ~= nil, "award menu pending")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "boss sim history 1001")
+-- ML awards: winner marked, next item still queued (no auto-play).
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain after award")
+ok(ML.session == nil, "session closed after ML award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "boss sim: 1001 won by Aaa")
+eq(#Sim.pending, 1, "second item still queued (ML-driven)")
+eq(#shownItems, 1, "roller window shown for played item only")
+-- ML rolls the second item; Aaa is excluded by the one-win rule.
+Sim.RequestRoll(1002)
+ok(drain(), "drain second item")
+ML.AwardChosen({ name = "Ccc", via = "winner" })
+ok(drain(), "drain after second award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "boss sim: 1002 won by Ccc (Aaa excluded)")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 1, "boss sim history 1002")
 eq(#dropAdds, 2, "boss sim logs both awards")
-eq(#shownItems, 2, "roller window shown per item")
+eq(#shownItems, 2, "roller window shown per played item")
 
 -- 8. Excluded re-roll visible with tag (async path via raid result line).
 resetHarness()
 SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Aaa")
 math.random = rigged({ 99, 10 })
 Sim.SimItem("1001")
-math.random = realRandom
 ok(drain(), "drain excluded")
+ML.AwardChosen({ name = "Bbb", via = "winner" })
+ok(drain(), "drain excluded award")
+math.random = realRandom
 local exclPrinted = false
 for i = 1, #printed do
   if string.find(printed[i], "Aaa") and string.find(printed[i], "already won") then exclPrinted = true end
@@ -260,7 +304,15 @@ math.random = rigged({ 50, 60, 70, 71 })
 Sim.SimItem("1001")
 ok(drain(), "drain tie")
 math.random = realRandom
-ok(ML.session == nil, "tied session closes after re-rolls")
+ok(ML.session ~= nil, "tied session closes to the ML award menu")
+ok(ML.pendingAwardMenu ~= nil, "menu pending after tie re-rolls")
+local tieMenu = ML.pendingAwardMenu and ML.pendingAwardMenu.data
+ok(tieMenu and tieMenu.winners and tieMenu.winners[1] ~= nil, "tie resolved to a winner")
+if tieMenu and tieMenu.winners and tieMenu.winners[1] then
+  ML.AwardChosen({ name = tieMenu.winners[1].name, via = "winner" })
+end
+ok(drain(), "drain tie award")
+ok(ML.session == nil, "session closed after ML award")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 2, "tie round + winning round recorded")
 eq(#dropAdds, 1, "exactly one award after tie")
 
@@ -274,14 +326,18 @@ ML.session = nil
 resetHarness()
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
-math.random = realRandom
 printed = {}
 Sim.SimBoss("TestBoss")
 ok(string.find(printed[#printed], "already running"), "second sim refused while running")
 Sim.Stop()
 eq(#Sim.pending, 0, "simstop clears queue")
 ok(drain(), "drain after stop")
+math.random = realRandom
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "current item still finishes")
+ok(ML.pendingAwardMenu ~= nil, "stopped item waits on the ML menu")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain stop award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "stopped item still awarded by ML")
 
 -- 12. ToHistoryEntry shape shared with live: winners/entries/missrolls/t sorted.
 local r = ZugLoot.Resolver.ResolveItem(makeSheet(), 1001,
@@ -306,10 +362,10 @@ printed = {}
 Sim.SimBoss("Nope")
 ok(string.find(printed[#printed], "TestBoss"), "unknown boss hint")
 
--- 15. Award popup shows without crashing (regression: solo sim died in
--- StaticPopup.lua with "bad argument #2"). The client is called exactly
--- like working addons call it — Show(name) with no data args — so the text
--- must arrive pre-formatted; emulate the client blowing up on raw %s.
+-- 15. In-client menu + confirm: with popup API present, ShowAwardMenu
+-- routes to the AwardMenuUI frame instead of printing, and AwardChosen
+-- fires the pre-formatted confirm (regression: solo sim died in
+-- StaticPopup.lua with "bad argument #2" — text must arrive formatted).
 resetHarness()
 StaticPopupDialogs = {}
 StaticPopup_Show = function(name)
@@ -323,15 +379,27 @@ StaticPopup_Show = function(name)
 end
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
+local menuShown = nil
+ZugLoot.AwardMenuUI = { Show = function(sess, data) menuShown = data end }
+ok(drain(), "drain to award menu")
 math.random = realRandom
-ok(drain(), "drain award popup")
+ok(ML.session ~= nil, "session held for ML award decision")
+ok(menuShown ~= nil, "in-client menu frame shown (not printed)")
+eq(menuShown.winners[1].name, "Aaa", "menu top winner")
+-- ML picks the winner row: confirm popup fires pre-formatted.
+printed = {}
+ML.AwardChosen({ name = "Aaa", via = "winner" })
 local sawPopup = false
 for i = 1, #printed do
   if string.find(printed[i], "POPUP: Award", 1, true) then sawPopup = true end
 end
-ok(sawPopup, "award popup shown with item + winner filled in")
+ok(sawPopup, "award confirm shown with item + winner filled in")
+-- ML clicks Award in the popup: award lands, session closes.
+StaticPopupDialogs["ZUGLOOT_AWARD"].OnAccept()
+ok(drain(), "drain after confirm")
 ok(ML.session == nil, "session closed after award")
-ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "winner marked despite popup")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "winner marked after confirm")
+ZugLoot.AwardMenuUI = nil
 StaticPopupDialogs = nil
 StaticPopup_Show = nil
 
