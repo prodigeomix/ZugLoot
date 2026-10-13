@@ -196,11 +196,19 @@ local resW3 = R.ResolveItem(sW, 81, {
 }, { cap = 100, requireSR = true })
 eq(resW3.winners[1].name, "A", "won SR roll excluded")
 
--- 8. FakeRolls + full SR resolution path incl. fillers as missrolls.
-math.randomseed(1234)
-local rolls = R.FakeRolls(s, 17063, { cap = 100, fillers = 2 })
+-- 8. FakeRolls: small group (3-7), SR rollers + rolls. Deterministic
+-- size via opts.count so the test doesn't depend on the seed.
+local rolls = R.FakeRolls(s, 17063, { cap = 100, count = 4 })
+eq(#rolls, 4, "pinned group size")
+eq(rolls[1].name, "A", "SR holder rolls first")
+eq(rolls[1].type, "SR", "holder rolls SR")
+eq(rolls[2].name, "B", "second holder rolls")
 local res8 = R.ResolveItem(s, 17063, rolls, { cap = 100, requireSR = true })
 ok(res8.winners[1].name == "A" or res8.winners[1].name == "B", "sim resolves to SR roller")
-ok(res8.perType.MS.entry ~= nil, "fillers contest MS (valid kind)")
+-- 8b. Small-group budget respected across roster sizes.
+local rolls3 = R.FakeRolls(s, 17063, { cap = 100, count = 3 })
+eq(#rolls3, 3, "budget of 3")
+local res8b = R.ResolveItem(s, 17063, rolls3, { cap = 100, requireSR = true })
+ok(res8b.winners[1].name == "A" or res8b.winners[1].name == "B", "budget-3 resolves to SR roller")
 
 return T

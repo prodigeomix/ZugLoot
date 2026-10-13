@@ -111,8 +111,8 @@ function Z.Slash(msg)
   elseif cmd == "arf" then Z.MasterLootUI.StartRoll(rest, "OPEN")
   elseif cmd == "rr" then Z.MasterLootUI.StartRoll(rest, "RAID")
   elseif cmd == "2x" then Z.MasterLootUI.StartRoll(rest, "TWO")
-  elseif cmd == "fr" then Z.MasterLootUI.FinishEarly()
-  elseif cmd == "cr" then Z.MasterLootUI.Cancel()
+  elseif cmd == "fr" then Z.MasterLootUI.FinishEarly(Z.Util.ItemID(rest))
+  elseif cmd == "cr" then Z.MasterLootUI.Cancel(Z.Util.ItemID(rest))
   elseif cmd == "show" then Z.RaiderLootUI.Show()
   elseif cmd == "hide" then Z.RaiderLootUI.Hide()
   elseif cmd == "time" then Z.RaiderLootUI.SetTime(tonumber(rest))
@@ -128,7 +128,11 @@ function Z.Slash(msg)
   elseif cmd == "roll" then Z.MasterLootUI.StartItemRoll(rest)
   elseif cmd == "award" then
     if Z.MasterLootUI and Z.MasterLootUI.RequireML() then
-      Z.MasterLootUI.AwardChosen({ name = Z.Util.Trim(rest), via = "menu" })
+      -- "/zl award Name [item]" — the item pins the decision when several
+      -- award menus are pending; without it the open item decides.
+      local nm, itemArg = string.match(rest, "^(%S+)%s*(.*)$")
+      local itemID = Z.Util.ItemID(itemArg or "")
+      Z.MasterLootUI.AwardChosen({ name = Z.Util.Trim(nm or ""), via = "menu" }, itemID)
     end
   elseif cmd == "log" then Z.MainWindow.Toggle("rolls")
   elseif cmd == "logclear" then Z.DropLog.Clear()

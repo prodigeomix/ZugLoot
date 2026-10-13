@@ -237,7 +237,13 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   SR (direct award on a single holder) / Roll / Close. Choosing **Roll keeps
   the window open** — it flips to the rolling view listing every valid roll
   with its kind (`SR: Aaa 90 (=100)`), SR > MS > OS > TMOG best-first, with
-  Finish (early) / Cancel / Close. **When the roll finishes the same window
+  Finish / Cancel / Close. **Finish ends the roll and parks it for award**
+  (the session leaves the live table with rolls + menu intact); the award
+  rows show in the loot list, where the parked view is the same award
+  window: **Award <winner> rows (kind winners), Award TMOG, ... for
+  anyone else** — plus **Continue to reopen the same roll for more
+  rolls** (same session, rolls append). **When the roll finishes the
+  same window
   becomes the award window**: TWO award buttons -- `Award <winner>` (kind
   winner by priority) and `Award TMOG (<name>)` whenever the TMOG kind was
   contested (floating bottom bar: each row justified, wraps when narrow,
@@ -246,8 +252,11 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   confirm popup names the item (`Award <name> to <who>?`, full link kept on
   the dialog) — never a bare `item:<id>`. Awarding closes it and the row
   leaves the list (done = gone; the last award closes the window, like a
-  finished live session). Cancel drops the window back to pick (re-roll / choose /
-  close). (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
+  finished live session). **Close parks the item's state**: a rolling or
+  finished-but-unawarded window saves its rolls + winner menu on close and
+  reopens exactly as left — roll A, close, roll and award B, then reopen
+  and award A off its saved rolls. Parked state dies only on award.
+  Cancel drops the window back to pick (re-roll / choose / close). (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
   reserves). Nothing auto-starts — clicking a row opens the **row detail**
   (320 wide, so `Award <name>` fits long names on one line): direct **Award**
   when exactly one SR/HR holder exists (no rolling needed), **...** for a
@@ -449,7 +458,8 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl rr <link>        raid-roll                 /zl 2x<link>    two-top-win
 /zl roll <item>      roll one loot-window item (ML, live corpse loot)
 /zl award <name>     award the finished roll to <name> (ML, from the menu)
-/zl fr | /zl cr      finish early | cancel session (cr returns loot item to open)
+/zl fr [item]      finish a roll early (parks it for award; Continue reopens)
+/zl cr [item]      cancel a roll (returns loot item to open)
 /zl show|hide        raider frame toggle
 /zl time N           roll window seconds       /zl autoclose on|off
 /zl auto on|off      auto-roll SR items (per char)

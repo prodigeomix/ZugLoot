@@ -20,6 +20,7 @@ dofile("Constants.lua")
 dofile("ClassColors.lua")
 dofile("SRData.lua")
 dofile("Resolver.lua")
+
 dofile("ItemCards.lua")
 dofile("Timer.lua")
 
@@ -107,10 +108,15 @@ local function resetHarness(rollTime)
   Sim.running = false
   Sim.auto = false
   Sim.lastEntries = {}
-  Sim.doneRows = {}
+  Sim.lives = {}
+  Sim.timers = {}
   Sim.pendingAward = nil
+  Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
+  ML.sessions = {}
+  ML.parkedSessions = nil
   ML.pendingAwardMenu = nil
+  ML.pendingAwardMenus = nil
   ZugLoot.LootWindow.Clear()
   printed, dropAdds, chatSent, shownItems = {}, {}, {}, {}
   grouping = "solo"
@@ -279,7 +285,7 @@ ML.Cancel()
 
 -- 6. simtmog end-to-end: TMOG roller is directly awardable from the menu.
 resetHarness()
--- rollers: Aaa(SR), Bbb(MS-converted); Aaa rolls TMOG high.
+Sim.FakeCount = 2 -- pinned: Bbb SR + Aaa TMOG (skip the small-group budget)
 -- FakeRolls order: Aaa SR, Bbb SR, Aaa TMOG -> rigged {5, 6, 97}.
 math.random = rigged({ 5, 6, 97 })
 Sim.SimTmog("1001")

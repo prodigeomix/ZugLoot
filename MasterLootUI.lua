@@ -5,7 +5,13 @@ local Z = ZugLoot
 local M = {}
 Z.MasterLootUI = M
 
-M.session = nil -- { id, itemID, itemLink, mode, rolls={}, t=0, itemCount=1 }
+-- Roll sessions, one per item: the ML works several items at once (roll A,
+-- close, roll B, award B, reopen A off its saved rolls). Exactly one
+-- session is ACTIVE (its item's rolls feed the session; chat/system rolls
+-- land there). M.session stays as the active-session alias so every
+-- existing reader keeps working; M.sessions holds the per-item rest.
+M.session = nil -- active { id, itemID, itemLink, mode, rolls={}, t=0, itemCount=1 }
+M.sessions = {} -- [itemID] = session (active one included)
 
 local sessionSeq = 0
 
@@ -20,14 +26,22 @@ end
 -- Shared session start for live rolls and sim. silent=true skips the
 -- addon-message broadcast (sim must not pop other clients' roller windows
 -- or trigger their auto-rolls); the local raider window still shows.
+-- One live roll at a time (sequential holds): starting a new roll while
+-- another runs is refused by StartItemRoll/Sim.RequestRoll — a roll must
+-- be finished, cancelled or stopped before the next starts. A finished
+-- roll parks its session for award/continue; the parked session (never
+-- the live table) is what survives across items.
 function M.BeginSession(itemID, itemLink, mode, silent)
   sessionSeq = sessionSeq + 1
   local itemCount = 1
   if mode == "TWO" then itemCount = 2 end
-  M.session = { id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
+  local sess = { id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
+  M.sessions = M.sessions or {}
+  M.sessions[itemID] = sess
+  M.session = sess -- this roll is the active one
   -- Chat-visible name, resolved once (never a bare item:id in chat).
-  M.session.dispName = M.DisplayItemLink(itemID, itemLink)
-  local label = M.session.dispName
+  sess.dispName = M.DisplayItemLink(itemID, itemLink)
+  local label = sess.dispName
   if mode == "OPEN" then label = label .. " (open roll)"
   elseif mode == "RAID" then label = label .. " (raid roll)"
   elseif mode == "TWO" then label = label .. " (2 top win)" end
@@ -44,7 +58,37 @@ function M.BeginSession(itemID, itemLink, mode, silent)
   if not silent and Z.AutoRoll and Z.AutoRoll.AllGreenAndAuto() then
     Z.Print("All SR rollers on auto — will auto-resolve on ROLL_ANS.")
   end
+  return sess
+end
+
+-- Look up a roll session: this item's own session when it has one
+-- (multi-roll: each item owns its rolls), else the active session.
+function M.SessionFor(itemID)
+  if itemID and M.sessions and M.sessions[itemID] then
+    return M.sessions[itemID]
+  end
   return M.session
+end
+
+-- Drop a session once its item is handed out. Active alias follows the
+-- remaining sessions (or nil when none are left).
+function M.DropSession(sess)
+  if not sess then return end
+  if M.parkedSessions and sess.itemID
+      and M.parkedSessions[sess.itemID] == sess then
+    M.parkedSessions[sess.itemID] = nil
+  end
+  if M.sessions and sess.itemID and M.sessions[sess.itemID] == sess then
+    M.sessions[sess.itemID] = nil
+  end
+  if M.session == sess then
+    M.session = nil
+    if M.sessions then
+      for _, other in pairs(M.sessions) do
+        if other then M.session = other break end
+      end
+    end
+  end
 end
 
 function M.StartRoll(linkText, mode)
@@ -55,15 +99,24 @@ function M.StartRoll(linkText, mode)
 end
 
 -- ML initiates a roll for one loot-window item (loot list Roll button or
--- /zl roll <itemID|link>). Live corpse rows only; sim rows go via Sim.
+-- /zl roll <item>). Live corpse rows only; sim rows go via Sim.
+-- Sequential holds: exactly one roll runs at a time. A finished roll is
+-- parked (not live), so rolling ANOTHER item is fine — but re-rolling the
+-- same item needs finish/cancel first.
 function M.StartItemRoll(itemIDorLink)
   if not M.RequireML() then return end
-  if M.session then
-    Z.Print("A roll is already running — finish or /zl cr first.")
-    return
-  end
   local itemID = Z.Util.ItemID(itemIDorLink)
   if not itemID then Z.Print("Usage: /zl roll <itemlink|itemID>") return end
+  if M.sessions and M.sessions[itemID] then
+    Z.Print("A roll is already running for this item — finish or /zl cr first.")
+    return
+  end
+  if M.session then
+    local liveID = M.session.itemID
+    Z.Print("A roll is already running (" .. tostring(liveID)
+      .. ") — finish, /zl cr, or close it first.")
+    return
+  end
   local link = itemIDorLink
   if Z.LootWindow then
     local it = Z.LootWindow.Find(itemID)
@@ -81,16 +134,47 @@ function M.StartItemRoll(itemIDorLink)
 end
 
 function M.OnRollAns(msg, sender)
-  if not M.session then return end
   -- ROLL_ANS:<session>:<name>:<rollType> — auto-roll path confirmation.
   local sid = tonumber(string.match(msg, "ROLL_ANS:(%d+):") or "")
-  if sid ~= M.session.id then return end
-  -- Auto answer counts as intent; real /roll still decides the number.
+  if not sid then return end
+  if M.sessions then
+    for _, sess in pairs(M.sessions) do
+      if sess and sess.id == sid then
+        -- Auto answer counts as intent; real /roll still decides the number.
+        return
+      end
+    end
+  end
+  if M.session and sid == M.session.id then return end
+end
+
+-- Route an incoming sim roll to its item's session: each roll feeds only
+-- its own item. `itemID` pins the target; exact session-id matching
+-- preferred. A finished (parked) session id is dead: never fall through
+-- to another item — Continue re-attaches it explicitly.
+function M.OnItemSystemRoll(itemID, player, roll, minR, maxR, sessionID)
+  if not M.sessions then return end
+  local sess = nil
+  if sessionID then
+    for _, s2 in pairs(M.sessions) do
+      if s2 and s2.id == sessionID then sess = s2 break end
+    end
+    if sess == nil then return end
+  end
+  if not sess and itemID and M.sessions[itemID] then
+    sess = M.sessions[itemID]
+  end
+  if not sess then return end
+  M.ApplySystemRoll(sess, player, roll, minR, maxR)
 end
 
 function M.OnSystemRoll(player, roll, minR, maxR)
   if not M.session then return end
-  local sess = M.session
+  M.ApplySystemRoll(M.session, player, roll, minR, maxR)
+end
+
+-- Core roll intake for ONE session (pure session target, no routing).
+function M.ApplySystemRoll(sess, player, roll, minR, maxR)
   -- First-roll-only.
   for i = 1, Z.Util.ArrayCount(sess.rolls) do
     if sess.rolls[i].name == player then return end
@@ -138,14 +222,30 @@ function M.OnSystemRoll(player, roll, minR, maxR)
   end
 end
 
-function M.FinishEarly() M.Finish(true) end
-function M.Cancel()
-  if not M.session then Z.Print("No active session.") return end
-  local wasSilent = M.session.silent
-  local itemID = M.session.itemID
-  local sessionID = M.session.id
-  M.pendingAwardMenu = nil
-  M.session = nil
+-- Finish/cancel target one item's roll without touching the others.
+-- No arg = the active (open) item; /zl fr|cr keep working untouched.
+-- After a finish the session parks (roll ended, award pending): Finish
+-- flips the rolling view to winners on that item's detail, parked or open.
+function M.ActiveItemID()
+  if Z.LootWindow and Z.LootWindow.detail then
+    return Z.LootWindow.detail.itemID
+  end
+  if M.session then return M.session.itemID end
+  return nil
+end
+
+function M.FinishEarly(itemID) M.Finish(true, itemID) end
+function M.Cancel(itemID)
+  local sess = (itemID and M.sessions and M.sessions[itemID])
+    or M.SessionFor(itemID) or M.session
+  if not sess then Z.Print("No active session.") return end
+  local wasSilent = sess.silent
+  local itemID = sess.itemID
+  local sessionID = sess.id
+  if M.pendingAwardMenus then M.pendingAwardMenus[itemID] = nil end
+  if not M.pendingAwardMenus then M.pendingAwardMenu = nil end
+  if Z.Sim and Z.Sim.KillItemTimers then Z.Sim.KillItemTimers(itemID) end
+  M.DropSession(sess)
   Z.Print("Roll cancelled.")
   if Z.LootWindow and itemID then Z.LootWindow.MarkOpen(itemID) end
   -- A rolling detail whose session just died can never receive rolls
@@ -169,12 +269,67 @@ function M.Cancel()
   if wasSilent and Z.Sim and Z.Sim.Requeue then Z.Sim.Requeue(itemID) end
 end
 
+-- Park a finished-but-unawarded roll: the session leaves the live table
+-- but keeps its rolls in M.parkedSessions; the award menu stays pending.
+-- Continue re-attaches it so more rolls append to the SAME list.
+M.parkedSessions = nil
+function M.ParkSession(sess)
+  if not sess then return end
+  M.parkedSessions = M.parkedSessions or {}
+  M.parkedSessions[sess.itemID] = sess
+  if M.sessions and sess.itemID and M.sessions[sess.itemID] == sess then
+    M.sessions[sess.itemID] = nil
+  end
+  if M.session == sess then
+    M.session = nil
+    if M.sessions then
+      for _, other in pairs(M.sessions) do
+        if other then M.session = other break end
+      end
+    end
+  end
+end
+
+-- The live session table, parked or not: parked sessions stay
+-- resolvable for award/continue decisions while collecting no rolls.
+function M.SessionAny(itemID)
+  if not itemID then return M.session end
+  if M.sessions and M.sessions[itemID] then return M.sessions[itemID] end
+  if M.parkedSessions and M.parkedSessions[itemID] then
+    return M.parkedSessions[itemID]
+  end
+  return nil
+end
+
+-- Re-attach a parked session so a continued roll appends to the same list.
+function M.UnparkSession(sess)
+  if not sess then return end
+  if M.parkedSessions and M.parkedSessions[sess.itemID] == sess then
+    M.parkedSessions[sess.itemID] = nil
+  end
+  M.sessions = M.sessions or {}
+  M.sessions[sess.itemID] = sess
+  M.session = sess
+end
+
+-- A parked session by item (nil once awarded/cancelled).
+function M.ParkedSession(itemID)
+  if itemID and M.parkedSessions then return M.parkedSessions[itemID] end
+  return nil
+end
+
 -- Returns "tie" (session left open for re-rolls), "awaiting" (sim awards
 -- pending ML confirmation), or "closed". Live callers ignore the result.
-function M.Finish(manual)
-  local sess = M.session
+-- Targets one item's session: no arg finishes the ACTIVE (open) item; pass
+-- an itemID to finish a held roll. A clean finish PARKS the session (roll
+-- ended, award pending): more rolls can't land on it, but Continue
+-- re-attaches it explicitly.
+function M.Finish(manual, itemID)
+  local sess = (itemID and M.sessions and M.sessions[itemID])
+    or M.SessionFor(itemID) or M.session
   if not sess then Z.Print("No active session.") return "closed" end
-  local sheet = Z.DB.sheet
+  M.session = sess
+  local sheet = Z.DB and Z.DB.sheet
   local openRoll = sess.mode == "OPEN" or sess.mode == "RAID" or sess.mode == "SIM-OPEN"
   local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} }, sess.itemID, sess.rolls,
     { cap = Z.Caps.SR, requireSR = (not openRoll and sheet ~= nil), itemCount = sess.itemCount })
@@ -184,6 +339,12 @@ function M.Finish(manual)
     return "tie" -- keep session open for tie re-rolls (extra rolls ignored for others)
   end
   local data = M.BuildAwardMenu(sess, res)
+  -- The roll is OVER for this item (early or on time): its sim feed/tie
+  -- chain must die here, or fake rolls keep landing after the finish.
+  if Z.Sim and Z.Sim.KillItemTimers then Z.Sim.KillItemTimers(sess.itemID) end
+  -- Park the finished session: award stays pending, but the roll is
+  -- closed for new rolls (Continue re-attaches it explicitly).
+  M.ParkSession(sess)
   -- The open row detail becomes the award window (RollFor: rolling view
   -- flips to winners). Falls back to the standalone menu when the roll
   -- was started outside the window (/rf etc.).
@@ -194,12 +355,11 @@ function M.Finish(manual)
     -- Sim: hand the menu to the ML (headless: auto-pick the top winner,
     -- like the old ConfirmAward chain); the award flow owns continuation.
     M.HandleSimAward(sess, data)
-    if M.session then return "awaiting" end
-    return "closed"
+    return "awaiting"
   end
   M.ShowAwardMenu(sess, data)
-  -- Session stays open ("awaiting"): the ML's menu choice closes it
-  -- (AwardChosen) or it is cancelled. Callers must check M.session.
+  -- Menu stays pending: the ML awards, continues, or cancels. Callers
+  -- must check M.session / the pending menus.
   return "awaiting"
 end
 
@@ -225,8 +385,9 @@ function M.AnnounceResult(sess, res)
   local parts = {}
   for i = 1, Z.Util.ArrayCount(res.ranked) do
     local e = res.ranked[i]
-    local s = ChatName(e.name) .. " " .. e.base
-    if e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. e.effective .. ")" end
+    local nm = (e and e.name) or "?"
+    local s = ChatName(nm) .. " " .. tostring(e and e.base)
+    if e and e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. e.effective .. ")" end
     table.insert(parts, s)
   end
   if Z.Util.ArrayCount(res.missrolls) > 0 then
@@ -252,7 +413,8 @@ function M.AnnounceResult(sess, res)
     end
     table.insert(parts, "excluded: " .. table.concat(xm, ", "))
   end
-  local resultText = "ZugLoot result [" .. (sess.dispName or sess.itemLink) .. "]: " .. table.concat(parts, " | ")
+  local itemTxt = sess.dispName or sess.itemLink or ("item:" .. tostring(sess.itemID))
+  local resultText = "ZugLoot result [" .. tostring(itemTxt) .. "]: " .. table.concat(parts, " | ")
   if Z.Comm and Z.Comm.SayGroup then
     Z.Comm.SayGroup(resultText)
   else
@@ -294,7 +456,7 @@ function M.AnnounceResult(sess, res)
   end
   -- Persist the session into per-item roll history (survives the session).
   -- Same shape the sim writes (Resolver.ToHistoryEntry).
-  if Z.DB.sheet and Z.SRData.RecordRolls then
+  if Z.DB and Z.DB.sheet and Z.SRData.RecordRolls then
     -- Item rolled but never SR'd: stub it onto the sheet so it shows at the
     -- bottom, flagged as not SR'd. Only when rolls actually happened.
     if Z.Util.ArrayCount(res.entries or {}) > 0 and Z.SRData.EnsureUnreserved then
@@ -501,9 +663,13 @@ end
 -- Show the award menu (RollFor finish-popup equivalent). Client builds the
 -- frame with winner buttons + roll-type rows + candidate grid; headless and
 -- text clients (tests, /zl text UIs) get the same rows printed so the ML
--- can answer with /zl award <name>. Stores the pending menu for AwardChosen.
+-- can answer with /zl award <name>. Stores the pending menu for AwardChosen
+-- PER ITEM (multi-roll: each finished item keeps its own decision point).
+-- M.pendingAwardMenu stays as the legacy alias of the active item's menu.
 function M.ShowAwardMenu(sess, data)
-  M.pendingAwardMenu = { sess = sess, data = data }
+  M.pendingAwardMenus = M.pendingAwardMenus or {}
+  M.pendingAwardMenus[sess.itemID] = { sess = sess, data = data }
+  M.pendingAwardMenu = M.pendingAwardMenus[sess.itemID]
   if Z.AwardMenuUI and Z.AwardMenuUI.Show then
     Z.AwardMenuUI.Show(sess, data)
     return
@@ -610,10 +776,13 @@ end
 -- slot. Headless (tests): the menu stays pending and the harness plays
 -- the ML via AwardChosen. A no-winner finish is NOT auto-closed: the ML
 -- awards the item to anyone (or re-rolls); the row stays until awarded.
-M.pendingAwardMenu = nil -- { sess, data } while the ML decides
+M.pendingAwardMenu = nil -- legacy alias: active item's { sess, data }
+M.pendingAwardMenus = nil -- per-item { [itemID] = { sess, data } } while the ML decides
 
 function M.HandleSimAward(sess, data)
-  M.pendingAwardMenu = { sess = sess, data = data }
+  M.pendingAwardMenus = M.pendingAwardMenus or {}
+  M.pendingAwardMenus[sess.itemID] = { sess = sess, data = data }
+  M.pendingAwardMenu = M.pendingAwardMenus[sess.itemID]
   local winners = data.winners or {}
   if Z.Util.ArrayCount(winners) == 0 then
     -- Nobody eligible: the item stays open for the ML to award anyone
@@ -635,8 +804,26 @@ end
 -- Works for live and sim; sim continuation runs through Sim.afterAwards.
 -- choice = { name=recipient, via="winner"|"menu"|"candidate"|"tmog",
 --            rollType=optional }
-function M.AwardChosen(choice)
-  local pend = M.pendingAwardMenu
+function M.AwardChosen(choice, itemID)
+  -- Award target: explicit itemID first (slash + preaward rows), else the
+  -- OPEN item's menu (the ML decides on screen), else the legacy alias.
+  local pend = nil
+  local openID = Z.LootWindow and Z.LootWindow.detail
+    and Z.LootWindow.detail.itemID or nil
+  if M.pendingAwardMenus then
+    if itemID and M.pendingAwardMenus[itemID] then
+      pend = M.pendingAwardMenus[itemID]
+    elseif openID and M.pendingAwardMenus[openID] then
+      pend = M.pendingAwardMenus[openID]
+    end
+  end
+  if not pend and itemID and M.session and M.session.itemID == itemID then
+    pend = { sess = M.session, data = M.BuildAwardMenu(M.session,
+      Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
+        M.session.itemID, M.session.rolls,
+        { cap = Z.Caps.SR, requireSR = true, itemCount = M.session.itemCount })) }
+  end
+  if not pend then pend = M.pendingAwardMenu end
   if not pend then
     -- Live path: no pending menu object, award the current session's item.
     local sess = M.session
@@ -666,8 +853,9 @@ function M.AwardChosen(choice)
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
+    if M.pendingAwardMenus then M.pendingAwardMenus[sess.itemID] = nil end
     M.pendingAwardMenu = nil
-    M.session = nil
+    M.DropSession(sess)
     if sess.silent then
       -- Awarded = done: only now does the row leave the rolling state.
       if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
@@ -685,8 +873,9 @@ function M.AwardChosen(choice)
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
+    if M.pendingAwardMenus then M.pendingAwardMenus[sess.itemID] = nil end
     M.pendingAwardMenu = nil
-    M.session = nil
+    M.DropSession(sess)
     if sess.silent then
       -- Awarded = done: only now does the row leave the rolling state.
       if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
@@ -698,17 +887,23 @@ end
 -- Legacy entry point (pre-menu auto-award). Kept for compatibility:
 -- routes through the menu choice so the ML still confirms.
 function M.Award(itemID, itemLink, winnerEntry)
-  local sess = M.session
+  local sess = (M.sessions and M.sessions[itemID]) or M.session
   if sess and sess.itemID == itemID then
-    M.pendingAwardMenu = { sess = sess, data = M.BuildAwardMenu(sess,
+    local menu = { sess = sess, data = M.BuildAwardMenu(sess,
       Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
         sess.itemID, sess.rolls, { cap = Z.Caps.SR, requireSR = true, itemCount = sess.itemCount })) }
+    M.pendingAwardMenus = M.pendingAwardMenus or {}
+    M.pendingAwardMenus[itemID] = menu
+    M.pendingAwardMenu = menu
   else
-    M.pendingAwardMenu = { sess = { itemID = itemID, itemLink = itemLink, id = 0, silent = false, itemCount = 1 },
+    local menu = { sess = { itemID = itemID, itemLink = itemLink, id = 0, silent = false, itemCount = 1 },
       data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
         candidates = {}, perType = {}, none = false, itemID = itemID, itemLink = itemLink } }
+    M.pendingAwardMenus = M.pendingAwardMenus or {}
+    M.pendingAwardMenus[itemID] = menu
+    M.pendingAwardMenu = menu
   end
-  M.AwardChosen({ name = winnerEntry.name, via = "winner" })
+  M.AwardChosen({ name = winnerEntry.name, via = "winner" }, itemID)
 end
 
 -- RollFor-style: when a boss is looted, the master looter picks it up.

@@ -329,33 +329,96 @@ function M.ToHistoryEntry(res, mode, t)
     missrolls = count(miss), excluded = excl }
 end
 
--- Simulate rolls for testing/sim: rollers roll 1..cap, extras are miss-rolls.
+-- Roll-size budgets for sims: a crowded window is unreadable, so each
+-- simulated roll involves 3-7 players total (clamped against the roster).
+M.SIM_ROLLERS_MIN = 3
+M.SIM_ROLLERS_MAX = 7
+
+-- Pick n distinct names from a list (order-preserving, 5.0-safe).
+local function takeNames(names, n, skip)
+  local out = {}
+  local i = 1
+  while names[i] ~= nil and count(out) < n do
+    local nm = names[i]
+    if nm and nm ~= "" and not (skip and skip[nm]) then
+      table.insert(out, nm)
+    end
+    i = i + 1
+  end
+  return out
+end
+
+-- Simulate rolls for testing/sim. Keeps the rolling group small (3-7
+-- total): all SR holders roll SR, then a few extra sheet members roll
+-- TMOG or an invalid (over-cap MS) roll for flavor; off-sheet items get
+-- 3-7 sheet members rolling MS/OS/TMOG (caps 100/99/98).
 -- rng: function(lo,hi) default math.random. Returns rolls list.
 -- opts.tmog = {names}: extra TMOG-typed entries (cap 98) for TMOG demos.
+-- opts.count = exact roller total (tests pin the size deterministically).
 function M.FakeRolls(sheetLike, itemID, opts, rng)
   opts = opts or {}
   local cap = opts.cap or 100
-  -- sheetOnly: roll just the sheet's own players (used by /zl sim so boss
-  -- sims use players from the loaded sheet, no fake Filler/Missroller names).
-  local fillers = opts.sheetOnly and 0 or (opts.fillers or 0)
-  local missCount = opts.sheetOnly and 0 or (opts.missrolls or 1)
   rng = rng or function(lo, hi) return math.random(lo, hi) end
+  local players = {}
+  -- Roster source: the live SRData module when loaded (client + most
+  -- tests), else the sheet's own rollers straight off the passed sheet
+  -- (pure harness: Resolver.lua alone under stock lua).
+  local SRD = (Z and Z.SRData) or ZugLoot.SRData
+  if SRD and SRD.AllPlayerNames then
+    players = SRD.AllPlayerNames(sheetLike) or {}
+  end
+  if count(players) == 0 and sheetLike and sheetLike.items then
+    local seen = {}
+    for _, item in pairs(sheetLike.items) do
+      local rr = (item or {}).rollers or {}
+      local j = 1
+      while rr[j] ~= nil do
+        local nm = rr[j].name
+        if nm and nm ~= "" and not seen[nm] then
+          seen[nm] = true
+          table.insert(players, nm)
+        end
+        j = j + 1
+      end
+    end
+  end
+  local total = opts.count
+  if total == nil then
+    total = rng(M.SIM_ROLLERS_MIN, M.SIM_ROLLERS_MAX)
+  end
+  if total < 1 then total = 1 end
   local rolls = {}
   local rollers = {}
   if sheetLike and sheetLike.items and sheetLike.items[itemID] then
     rollers = sheetLike.items[itemID].rollers or {}
   end
   local i = 1
-  while rollers[i] ~= nil do
+  local skip = {}
+  while rollers[i] ~= nil and count(rolls) < total do
     table.insert(rolls, { name = rollers[i].name, roll = rng(1, cap), type = "SR" })
+    skip[rollers[i].name] = true
     i = i + 1
   end
-  for f = 1, fillers do
-    table.insert(rolls, { name = "Filler" .. f, roll = rng(1, cap), type = "MS" })
-  end
-  -- miss-rollers: people without SR rolling on the SR item.
-  for mm = 1, (fillers > 0 and 0 or missCount) do
-    table.insert(rolls, { name = "Missroller" .. mm, roll = rng(1, cap), type = "MS" })
+  -- Sheet too small to fill the budget: wrap around the roster again so
+  -- the headcount still lands in 3-7 (names stay unique via suffix).
+  -- Deterministic pick order: TMOG, invalid (over-cap MS), then plain MS.
+  local n = 1
+  while count(rolls) < total and count(players) > 0 do
+    local nm = players[((n - 1) % count(players)) + 1]
+    local tag = nm
+    if skip[nm] then tag = nm .. n end
+    skip[tag] = true
+    local pick = ((n - 1) % 3) + 1
+    if pick == 1 then
+      table.insert(rolls, { name = tag, roll = rng(1, 98), type = "TMOG" })
+    elseif pick == 2 then
+      -- invalid: over-cap MS (flagged, never wins) for visible
+      -- invalid-roll flavor.
+      table.insert(rolls, { name = tag, roll = cap + rng(1, 20), type = "MS" })
+    else
+      table.insert(rolls, { name = tag, roll = rng(1, cap), type = "MS" })
+    end
+    n = n + 1
   end
   -- transmog rollers (cap 98): may win and pass the item along.
   if type(opts.tmog) == "table" then

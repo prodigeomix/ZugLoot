@@ -199,10 +199,14 @@ LW.OpenDetail(1001)
 local liveSessions = {}
 ML.StartItemRoll = function(id)
   table.insert(liveSessions, id)
-  ML.session = { id = 7, itemID = id, itemLink = "item:" .. id, mode = "SR",
+  ML.sessions = ML.sessions or {}
+  ML.sessions[id] = { id = 7, itemID = id, itemLink = "item:" .. id, mode = "SR",
     rolls = {}, itemCount = 1 }
+  ML.session = ML.sessions[id]
 end
-ML.FinishEarly = function() ML.Finish(true) end
+ML.FinishEarly = function(itemID)
+  ML.Finish(true, itemID)
+end
 eq(LW.doAction(1001, "roll"), "rolling", "roll starts from detail")
 ok(LW.detail ~= nil, "detail STAYS OPEN on roll (not closed)")
 eq(LW.detail.phase, "rolling", "detail phase rolling")
@@ -230,10 +234,48 @@ eq(sorted[#sorted].rollType, "TMOG", "TMOG last")
 local racts = LW.DetailActions()
 eq(racts[1].id, "finish", "rolling offers Finish")
 eq(racts[2].id, "cancel", "rolling offers Cancel")
--- A second roll while one is live is refused, window untouched.
-ML.session = { id = 7, itemID = 1001 }
-eq(LW.doAction(1001, "roll"), "roll failed", "second roll refused")
+-- A second roll of the SAME item while its session is live is refused.
+ML.sessions = { [1001] = { id = 7, itemID = 1001 } }
+ML.session = ML.sessions[1001]
+eq(LW.doAction(1001, "roll"), "roll failed", "same-item reroll refused")
 eq(LW.detail.phase, "rolling", "phase untouched by refused roll")
+eq(LW.ParkedDetail(1001), nil, "refused reroll parks nothing new")
+-- 6a. SEQUENTIAL HOLDS: while A's roll runs, B's roll is refused.
+-- Roll A, then hold it (Finish parks it for award), then roll B.
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+  { itemID = 1002, link = "item:1002", badge = "SR" },
+}, "loot")
+ML.sessions = {}
+ML.parkedSessions = nil
+ML.session = nil
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "roll"), "rolling", "A starts its own session")
+LW.OpenDetail(1002)
+ok(LW.ParkedDetail(1001) ~= nil, "A parked when B opened")
+eq(LW.doAction(1002, "roll"), "roll failed", "B refused while A runs")
+-- Hold A (Finish parks it for award), then B rolls.
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "finish"), "finished", "A finished, parked for award")
+ok(ML.sessions[1001] == nil, "A session parked out of live table")
+ok(ML.ParkedSession(1001) ~= nil, "A session kept for award/continue")
+LW.OpenDetail(1002)
+eq(LW.doAction(1002, "roll"), "rolling", "B rolls while A parked")
+ok(ML.sessions[1002] ~= nil, "B session tracked")
+-- Rolls still land on the right item (open vs parked).
+ok(LW.DetailOnRoll(1002, 7, "Solo", 70, "SR", 70), "B roll lands open")
+ok(LW.ParkedDetail(1001) ~= nil, "A detail parked on switch")
+-- Award B: list + parked A intact.
+ML.session = ML.sessions[1002]
+LW.RemoveItem(1002)
+ML.sessions[1002] = nil
+ML.session = nil
+ok(LW.Find(1002) == nil, "B awarded and gone")
+ok(ML.ParkedSession(1001) ~= nil, "A session untouched by B award")
+-- Back to item 1: reopen shows A's parked award rows (preaward phase).
+local rBack = LW.OpenDetail(1001)
+ok(rBack ~= nil and rBack.phase == "preaward", "A reopens parked for award")
+ML.sessions = {}
 ML.session = nil
 -- Finish: the same window becomes the award window (menu handed over).
 local menu6 = ML.BuildAwardMenu(
@@ -254,6 +296,70 @@ ok(sawWinner, "award window names the winner with kind")
 local aacts = LW.DetailActions()
 eq(aacts[1].id, "award-name", "award offers winner rows")
 eq(aacts[1].name, "Aaa", "top winner first")
+-- 6d. Continue: reopen a parked roll for more rolls on the SAME list.
+-- Parked session re-attaches (same id), phase flips to rolling, the
+-- primary button offers Continue while parked for award.
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+}, "loot")
+LW.OpenDetail(1001)
+ZugLoot.DB = { sheet = makeSheet() }
+ML.sessions = { [1001] = { id = 31, itemID = 1001, itemLink = "item:1001",
+  mode = "SR", silent = false, rolls = {}, t = 0, itemCount = 1,
+  dispName = "item:1001" } }
+ML.session = ML.sessions[1001]
+LW.detail.phase = "rolling"
+LW.detail.sessionID = 31
+table.insert(LW.detail.rolls, { name = "Aaa", roll = 90, rollType = "SR", effective = 100 })
+eq(LW.doAction(1001, "close"), "closed", "rolling close finishes+parks")
+ok(LW.ParkedDetail(1001) ~= nil, "parked after close")
+eq(LW.ParkedDetail(1001).phase, "preaward", "close finished into award rows")
+ok(LW.ParkedDetail(1001).menu ~= nil, "award menu built on close")
+-- Simulate an early finish while closed: the finished window parks for
+-- award (preaward rows + menu), the session parks for continue.
+ML.ParkSession(ML.sessions[1001])
+ok(ML.sessions[1001] == nil, "session parked out of live table")
+ok(ML.ParkedSession(1001) ~= nil, "session kept for continue")
+local parkedMenu = { winners = { { name = "Aaa", rollType = "SR", effective = 100 } },
+  groups = { SR = {}, MS = {}, OS = {}, TMOG = {} }, perType = {},
+  candidates = {}, none = false, itemID = 1001 }
+ML.pendingAwardMenus = { [1001] = { sess = ML.ParkedSession(1001), data = parkedMenu } }
+ML.pendingAwardMenu = ML.pendingAwardMenus[1001]
+local savedDetail = LW.ParkedDetail(1001)
+savedDetail.phase = "preaward"
+savedDetail.menu = parkedMenu
+LW.OpenDetail(1001)
+eq(LW.detail.phase, "preaward", "reopen shows preaward rows")
+local pacts = LW.DetailActions()
+eq(pacts[1].id, "award-name", "preaward offers the top winner first")
+eq(pacts[1].name, "Aaa", "preaward winner named")
+local hasContinue = false
+for i = 1, #pacts do
+  if pacts[i].id == "continue" then hasContinue = true end
+end
+ok(hasContinue, "preaward also offers Continue")
+-- Preaward award rows use the ROLLED path (menu confirm), not the direct
+-- no-roll shortcut: stub AwardChosen like the award window does and award
+-- straight from the parked view.
+local gotPre, gotVia = nil, nil
+local realChosen = ML.AwardChosen
+ML.AwardChosen = function(choice, itemID)
+  gotPre, gotVia = choice.name, choice.via
+  eq(itemID, 1001, "preaward award pins its item")
+end
+eq(LW.doAction(1001, "award-name", { name = "Aaa", via = "winner" }),
+  "awarded Aaa", "preaward award uses rolled path")
+eq(gotPre, "Aaa", "preaward recipient forwarded")
+eq(gotVia, "winner", "preaward via forwarded")
+ML.AwardChosen = realChosen
+eq(LW.doAction(1001, "continue"), "continuing", "Continue re-attaches")
+eq(LW.detail.phase, "rolling", "rolling again after Continue")
+eq(ML.sessions[1001].id, 31, "same session id continued")
+eq(LW.detail.sessionID, 31, "detail tracks the continued session")
+ok(LW.DetailOnRoll(1001, 31, "Late", 42, "MS", 42), "late roll appends")
+ok(not LW.DetailOnRoll(1001, 31, "Late", 10, "MS", 10), "first-roll-only kept")
+-- Continuing twice is refused; finishing twice resolves again cleanly.
+eq(LW.doAction(1001, "continue"), "already rolling", "no double continue")
 -- Award from the window: the rolled-award path (menu confirm). The real
 -- AwardChosen marks done + closes; emulate the harness playing the ML.
 local pickName = aacts[1].name
@@ -355,6 +461,67 @@ eq(LW.doAction(1001, "cancel"), "cancelled", "cancel from window")
 eq(LW.detail.phase, "pick", "detail back to pick after cancel")
 eq(#LW.detail.rolls, 0, "rolls cleared after cancel")
 ok(LW.detail ~= nil, "window stays for re-roll choice")
+
+-- 7b. Close parks, reopen restores: roll -> close -> other rows -> reopen.
+-- The exact scenario: item A rolled, closed, item B rolled AND awarded,
+-- then A reopened with its rolls/menu intact and awarded with them.
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+  { itemID = 1002, link = "item:1002", badge = "SR" },
+}, "loot")
+LW.OpenDetail(1001)
+ML.sessions = ML.sessions or {}
+ML.sessions[1001] = { id = 21, itemID = 1001, silent = false }
+ML.session = ML.sessions[1001]
+LW.detail.phase = "rolling"
+LW.detail.sessionID = 21
+ok(LW.DetailOnRoll(1001, 21, "Aaa", 90, "SR", 100), "Aaa lands on A")
+ok(LW.DetailOnRoll(1001, 21, "Bbb", 80, "SR", 80), "Bbb lands on A")
+-- Close A mid-roll: FINISHES the roll into parked award rows (Close =
+-- Finish then close). Session parks for award, rolls + menu saved.
+eq(LW.doAction(1001, "close"), "closed", "A closed mid-roll")
+ok(LW.detail == nil, "no open detail after close")
+ok(LW.ParkedDetail(1001) ~= nil, "A parked")
+eq(LW.ParkedDetail(1001).phase, "preaward", "A parked for award")
+ok(LW.ParkedDetail(1001).menu ~= nil, "A award menu built on close")
+ok(ML.ParkedSession(1001) ~= nil, "A session parked for award/continue")
+-- B rolls and is awarded while A is parked.
+LW.OpenDetail(1002)
+ML.sessions[1002] = { id = 22, itemID = 1002, silent = false }
+ML.session = ML.sessions[1002]
+LW.detail.phase = "rolling"
+LW.detail.sessionID = 22
+ok(LW.DetailOnRoll(1002, 22, "Solo", 70, "SR", 70), "Solo lands on B")
+ML.sessions[1002] = nil
+ML.session = ML.sessions[1001]
+LW.RemoveItem(1002)
+ok(LW.Find(1002) == nil, "B awarded and gone")
+ok(LW.ParkedDetail(1001) ~= nil, "A still parked after B award")
+-- Reopen A: award rows intact (rolls shown via Continue), then award.
+local rA = LW.OpenDetail(1001)
+ok(rA ~= nil and rA.phase == "preaward", "A reopens parked for award")
+eq(LW.doAction(1001, "continue"), "continuing", "A continues for more rolls")
+ok(LW.detail.phase == "rolling", "A rolling again after Continue")
+ok(LW.DetailOnRoll(1001, 21, "Late", 42, "MS", 42), "late roll appends")
+ok(LW.ParkedDetail(1001) == nil, "reopen consumes the snapshot")
+lwAwards = lwAwards or {}
+local realDirect = ML.AwardDirect
+ML.AwardDirect = function(id, who, src) table.insert(lwAwards, who) end
+eq(LW.doAction(1001, "award-name", "Aaa"), "awarded Aaa", "A awarded off saved state")
+eq(lwAwards[1], "Aaa", "A recipient from saved rolls")
+ML.AwardDirect = realDirect
+LW.RemoveItem(1001)
+ok(LW.Find(1001) == nil and LW.ParkedDetail(1001) == nil,
+  "A distributed: list and parked state both gone")
+-- A plain pick window never parks (nothing to save).
+ML.sessions = {}
+ML.parkedSessions = nil
+ML.session = nil
+LW.parked = {}
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "close"), "closed", "pick close")
+ok(LW.ParkedDetail(1001) == nil, "pick close parks nothing")
 
 -- 8. Flow layout: one row when wide, wrap when narrow, justified.
 -- Wide bar: all four share one justified row (even side margins).

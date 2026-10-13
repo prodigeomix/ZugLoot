@@ -137,6 +137,20 @@ assert(string.find(df2.tmogB.label or "", "SoloPlayer", 1, true) ~= nil,
 Z.LootWindow.detail.menu.perType.TMOG = {};
 Z.LootWindow.RefreshDetail();
 assert(df2.tmogB.hidden == true, "Award TMOG hidden without a TMOG roll");
+-- preaward (parked award view): same winner rows as the award window.
+Z.LootWindow.detail.phase = "preaward";
+Z.LootWindow.RefreshDetail();
+local preActs = Z.LootWindow.DetailActions();
+assert(preActs[1].id == "award-name", "preaward primary is the top winner");
+assert(preActs[1].name == "Blackfang", "preaward winner named");
+local preContinue = false
+for _, a in ipairs(preActs) do
+  if a.id == "continue" then preContinue = true end
+end
+assert(preContinue, "preaward offers Continue");
+assert(df2.awardB.hidden ~= true, "preaward primary button visible");
+assert(string.find(df2.awardB.label or "", "Blackfang", 1, true) ~= nil,
+  "preaward primary names the winner, got: " .. tostring(df2.awardB.label));
 -- button bar geometry: flow-layout invariants — every VISIBLE button
 -- inside the frame, no two buttons on the same row overlap, rows stack
 -- on the 10 + k*30 grid (wraps when narrow, shares one row when wide).
