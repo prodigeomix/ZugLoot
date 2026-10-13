@@ -184,12 +184,17 @@ end
 
 function M.Award(itemID, itemLink, winnerEntry)
   -- Confirmation popup (1.12 StaticPopup). Skipped outside the client.
+  -- The text is pre-formatted here (proven pattern on this client, cf.
+  -- Bagshui): relying on the client to fill %s from Show args crashes in
+  -- StaticPopup.lua with "bad argument #2".
   if StaticPopupDialogs and StaticPopup_Show then
     StaticPopupDialogs["ZUGLOOT_AWARD"] = StaticPopupDialogs["ZUGLOOT_AWARD"] or {
-      text = "Award %s to %s?",
+      text = "",
       button1 = "Award", button2 = "Cancel",
       OnAccept = function() end, timeout = 0, whileDead = 1,
     }
+    StaticPopupDialogs["ZUGLOOT_AWARD"].text =
+      string.format("Award %s to %s?", tostring(itemLink), tostring(winnerEntry.name))
     StaticPopup_Show("ZUGLOOT_AWARD")
   end
   -- Skeleton: award immediately + confirm text (full popup wiring is UI polish).

@@ -306,4 +306,33 @@ printed = {}
 Sim.SimBoss("Nope")
 ok(string.find(printed[#printed], "TestBoss"), "unknown boss hint")
 
+-- 15. Award popup shows without crashing (regression: solo sim died in
+-- StaticPopup.lua with "bad argument #2"). The client is called exactly
+-- like working addons call it — Show(name) with no data args — so the text
+-- must arrive pre-formatted; emulate the client blowing up on raw %s.
+resetHarness()
+StaticPopupDialogs = {}
+StaticPopup_Show = function(name)
+  local dlg = StaticPopupDialogs[name]
+  assert(dlg, "dialog registered")
+  -- what StaticPopup.lua:1603 does with a text that still holds %s:
+  if string.find(dlg.text, "%s", 1, true) then
+    error("bad argument #2 to 'format' (no value)")
+  end
+  table.insert(printed, "POPUP: " .. dlg.text)
+end
+math.random = rigged({ 90, 80 })
+Sim.SimItem("1001")
+math.random = realRandom
+ok(drain(), "drain award popup")
+local sawPopup = false
+for i = 1, #printed do
+  if string.find(printed[i], "POPUP: Award", 1, true) then sawPopup = true end
+end
+ok(sawPopup, "award popup shown with item + winner filled in")
+ok(ML.session == nil, "session closed after award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "winner marked despite popup")
+StaticPopupDialogs = nil
+StaticPopup_Show = nil
+
 return T
