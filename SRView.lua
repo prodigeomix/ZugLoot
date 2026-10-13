@@ -10,7 +10,10 @@ local content = nil
 local lines = {}
 
 local function classColor(name)
-  -- Skeleton: neutral; full client maps name->class via roster.
+  if Z.ClassColors and Z.ClassColors.ColoredName then
+    local c = Z.ClassColors.ClassOf(name)
+    if c then return "|c" .. (Z.ClassColors.COLORS[c] or "FFFFFFFF") end
+  end
   return "|cFFFFFFFF"
 end
 

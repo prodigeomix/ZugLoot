@@ -28,6 +28,7 @@ DEFAULT_CHAT_FRAME = nil
 ZugLoot = {}
 dofile("Util.lua")
 dofile("Constants.lua")
+dofile("ClassColors.lua")
 dofile("SRData.lua")
 dofile("Core.lua")
 local Z = ZugLoot

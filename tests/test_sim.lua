@@ -16,6 +16,7 @@ end
 ZugLoot = {}
 dofile("Util.lua")
 dofile("Constants.lua")
+dofile("ClassColors.lua")
 dofile("SRData.lua")
 dofile("Resolver.lua")
 dofile("ItemCards.lua")
@@ -213,6 +214,9 @@ for _, g in ipairs({
     for ch in pairs(g.want) do ok(channels[ch], g.mode .. " uses " .. ch) end
     for i = 1, #chatSent do
       ok(g.want[chatSent[i].channel], g.mode .. " stays on expected channels")
+      -- Group chat carries no color codes: names stay plain in SendChatMessage.
+      ok(not string.find(chatSent[i].msg, "|c", 1, true),
+        g.mode .. " chat has no color codes: " .. tostring(chatSent[i].msg))
     end
   end
 end

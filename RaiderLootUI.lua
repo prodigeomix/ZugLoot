@@ -27,7 +27,9 @@ local active = false
 
 M.rolls = {}
 
-local RAID_CLASS_COLORS = {
+-- Class table + colors live in ClassColors (shared with every name
+-- display). Kept as a local alias so this file loads standalone in tests.
+local RAID_CLASS_COLORS = (Z.ClassColors and Z.ClassColors.COLORS) or {
   ["Warrior"] = "FFC79C6E",
   ["Mage"]    = "FF69CCF0",
   ["Rogue"]   = "FFFFF569",
@@ -64,10 +66,14 @@ local function rangeFor(rtype)
   return 1, (c.SR or 100)
 end
 
--- Class name for roll-list coloring: raid roster first, then self.
--- Anything missing (solo, tests) falls back to nil = white.
+-- Class name for roll-list coloring: raid roster first, then self, then
+-- the SR sheet fallback (ClassColors.ClassOf). Anything missing falls
+-- back to nil = white.
 function M.PlayerClass(name)
   if not name then return nil end
+  if Z.ClassColors and Z.ClassColors.ClassOf then
+    return Z.ClassColors.ClassOf(name)
+  end
   if GetNumRaidMembers and GetRaidRosterInfo and GetNumRaidMembers() > 0 then
     for i = 1, GetNumRaidMembers() do
       local n, _, _, _, class = GetRaidRosterInfo(i)
@@ -82,6 +88,9 @@ function M.PlayerClass(name)
 end
 
 local function classColorHex(class)
+  if Z.ClassColors and Z.ClassColors.ClassColorHex then
+    return Z.ClassColors.ClassColorHex(class)
+  end
   return RAID_CLASS_COLORS[class] or "FFFFFFFF"
 end
 

@@ -89,6 +89,7 @@ function M.SnapshotSheet(sheet, now)
       hardres = M.DeepCopy(sheet.hardres or {}),
       won = M.DeepCopy(sheet.won or {}),
       rolls = M.DeepCopy(sheet.rolls or {}),
+      players = M.DeepCopy(sheet.players or {}),
     },
   }
 end
@@ -219,6 +220,7 @@ function M.RestoreSheet(db, raidID)
     hardres = M.DeepCopy(snap.data.hardres or {}),
     won = M.DeepCopy(snap.data.won or {}),
     rolls = M.DeepCopy(snap.data.rolls or {}),
+    players = M.DeepCopy(snap.data.players or {}),
   }
   db.sheet = sheet
   return sheet

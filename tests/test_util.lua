@@ -14,6 +14,7 @@ end
 
 ZugLoot = {}
 dofile("Util.lua")
+dofile("ClassColors.lua")
 local Util = ZugLoot.Util
 
 -- Empty / zero / nil timestamps render as "?".

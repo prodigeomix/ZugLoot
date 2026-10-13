@@ -10,6 +10,7 @@ end
 
 ZugLoot = {}
 dofile("Util.lua")
+dofile("ClassColors.lua")
 dofile("MainWindow.lua")
 local MW = ZugLoot.MainWindow
 

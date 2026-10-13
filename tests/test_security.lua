@@ -14,6 +14,7 @@ end
 
 ZugLoot = {}
 dofile("Util.lua")
+dofile("ClassColors.lua")
 
 -- Mock group state: upvalues the security module reads via globals.
 local raidMembers, partyMembers = 0, 0

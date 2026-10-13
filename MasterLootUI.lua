@@ -203,17 +203,35 @@ function M.Finish(manual)
   return "awaiting"
 end
 
+-- Class-colored display name. Chat-bound lines stay PLAIN (no color
+-- codes in addon chat), everything rendered in a frame/text UI is colored.
+local function PName(name)
+  if Z.ClassColors and Z.ClassColors.ColoredName then
+    return Z.ClassColors.ColoredName(name)
+  end
+  return tostring(name or "")
+end
+
+-- Chat carries no color codes: strip any "|c..name|r" wrap the resolver
+-- may hand back (defensive; stored data is raw by contract).
+local function ChatName(name)
+  local s = tostring(name or "")
+  local inner = string.match(s, "^|c%x%x%x%x%x%x%x%x(.+)|r$")
+  if inner then return inner end
+  return s
+end
+
 function M.AnnounceResult(sess, res)
   local parts = {}
   for i = 1, Z.Util.ArrayCount(res.ranked) do
     local e = res.ranked[i]
-    local s = e.name .. " " .. e.base
+    local s = ChatName(e.name) .. " " .. e.base
     if e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. e.effective .. ")" end
     table.insert(parts, s)
   end
   if Z.Util.ArrayCount(res.missrolls) > 0 then
     local mm = {}
-    for i = 1, Z.Util.ArrayCount(res.missrolls) do table.insert(mm, res.missrolls[i].name) end
+    for i = 1, Z.Util.ArrayCount(res.missrolls) do table.insert(mm, ChatName(res.missrolls[i].name)) end
     table.insert(parts, "missrolls: " .. table.concat(mm, ","))
   end
   -- Already-won rollers can't win again but stay visible.
@@ -228,7 +246,7 @@ function M.AnnounceResult(sess, res)
     local xm = {}
     for i = 1, Z.Util.ArrayCount(excl) do
       local e = excl[i]
-      local s = e.name .. " " .. tostring(e.base)
+      local s = ChatName(e.name) .. " " .. tostring(e.base)
       if e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. (e.effective or e.base) .. ")" end
       table.insert(xm, s .. " [already won]")
     end
@@ -247,7 +265,7 @@ function M.AnnounceResult(sess, res)
     local row = pt[kind]
     if row and row.entry then
       local e = row.entry
-      local s = tag .. " winner: " .. e.name .. " (" .. tostring(e.effective) .. ")"
+      local s = tag .. " winner: " .. ChatName(e.name) .. " (" .. tostring(e.effective) .. ")"
       if Z.Comm and Z.Comm.WarnGroup then Z.Comm.WarnGroup(s) else Z.Print(s) end
       return e
     end
@@ -259,12 +277,12 @@ function M.AnnounceResult(sess, res)
   local tmogRow = pt.TMOG
   if tmogRow and tmogRow.entry then
     local e = tmogRow.entry
-    local line = "TMOG winner: " .. e.name .. " (" .. tostring(e.effective) .. ")"
+    local line = "TMOG winner: " .. ChatName(e.name) .. " (" .. tostring(e.effective) .. ")"
     if Z.Comm and Z.Comm.WarnGroup then Z.Comm.WarnGroup(line) else Z.Print(line) end
   end
   if Z.Util.ArrayCount(res.winners) > 0 then
     local w = {}
-    for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(w, res.winners[i].name .. " (" .. res.winners[i].effective .. ")") end
+    for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(w, PName(res.winners[i].name) .. " (" .. res.winners[i].effective .. ")") end
     -- LootBlare-style top-screen banner for the local player.
     if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
       Z.RaiderLootUI.ShowResult("The winner is " .. table.concat(w, ", ") .. " !")
@@ -308,7 +326,13 @@ end
 -- candidates: class-sorted full roster the ML can award any raider from
 --   when something is wrong with the rolls.
 -- none: true when nobody eligible rolled.
+-- Live name -> raw class map: raid roster, party units, self (shared with
+-- the roll window via ClassColors). Values are client-reported; callers
+-- normalize. Nil-safe: {} with no client APIs.
 function M.RosterClasses()
+  if Z.ClassColors and Z.ClassColors.RosterMap then
+    return Z.ClassColors.RosterMap()
+  end
   local map = {}
   if GetNumRaidMembers and GetNumRaidMembers() > 0 and GetRaidRosterInfo then
     for i = 1, GetNumRaidMembers() do
@@ -373,7 +397,16 @@ function M.BuildCandidates(sheet, sessRolls)
   for n in pairs(classes) do add(n) end
   local out = {}
   for i = 1, Z.Util.ArrayCount(names) do
-    table.insert(out, { name = names[i], class = classes[names[i]] })
+    local raw = classes[names[i]]
+    local canon = raw
+    if Z.ClassColors and Z.ClassColors.NormalizeClass then
+      canon = Z.ClassColors.NormalizeClass(raw)
+    end
+    -- Sheet fallback: the live roster may not know everyone.
+    if not canon and sheet and Z.SRData and Z.SRData.PlayerClass then
+      canon = Z.SRData.PlayerClass(sheet, names[i])
+    end
+    table.insert(out, { name = names[i], class = canon })
   end
   -- Class first (unknown last), then name — RollFor's roster ordering.
   table.sort(out, function(a, b)
@@ -430,24 +463,26 @@ function M.AwardMenuLines(data)
   end
   table.insert(lines, "Award " .. tostring(menuName) .. " to?")
   -- Each kind judged by itself (ranges: SR 100, MS 100, OS 99, TMOG 98).
+  -- Names render in class color (plain in addon chat — the client chat
+  -- frame has no FontString coloring, so colored lines would show codes).
   for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
     local row = (data.perType or {})[gt]
     if row and row.entry then
       local e = row.entry
-      table.insert(lines, "  " .. gt .. " winner: " .. e.name .. " (" .. tostring(e.effective) .. ")")
+      table.insert(lines, "  " .. gt .. " winner: " .. PName(e.name) .. " (" .. tostring(e.effective) .. ")")
       for t = 1, Z.Util.ArrayCount(row.tied or {}) do
-        table.insert(lines, "    tied: " .. row.tied[t].name .. " (" .. tostring(row.tied[t].effective) .. ")")
+        table.insert(lines, "    tied: " .. PName(row.tied[t].name) .. " (" .. tostring(row.tied[t].effective) .. ")")
       end
     end
   end
   for i = 1, Z.Util.ArrayCount(data.winners or {}) do
     local w = data.winners[i]
-    table.insert(lines, "  overall: " .. w.name .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
+    table.insert(lines, "  overall: " .. PName(w.name) .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
   end
   for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
     local g = (data.groups or {})[gt] or {}
     for j = 1, Z.Util.ArrayCount(g) do
-      table.insert(lines, "  " .. gt .. ": " .. g[j].name .. " (" .. tostring(g[j].effective) .. ")")
+      table.insert(lines, "  " .. gt .. ": " .. PName(g[j].name) .. " (" .. tostring(g[j].effective) .. ")")
     end
   end
   if data.none then table.insert(lines, "  (no eligible rolls — pick anyone or cancel)") end
@@ -455,7 +490,7 @@ function M.AwardMenuLines(data)
   local names = {}
   for i = 1, Z.Util.ArrayCount(cands) do
     local c = cands[i]
-    table.insert(names, c.name .. (c.class and (" [" .. c.class .. "]") or ""))
+    table.insert(names, PName(c.name))
   end
   if Z.Util.ArrayCount(names) > 0 then
     table.insert(lines, "  candidates: " .. table.concat(names, ", "))
@@ -520,7 +555,7 @@ local function showAwardPopup(itemLink, winnerName, onAccept)
     display = Z.MasterLootUI.DisplayItemLink(id, itemLink)
   end
   StaticPopupDialogs["ZUGLOOT_AWARD"].text =
-    string.format("Award %s to %s?", display, tostring(winnerName))
+    string.format("Award %s to %s?", display, PName(winnerName))
   StaticPopupDialogs["ZUGLOOT_AWARD"].itemLink = itemLink
   StaticPopupDialogs["ZUGLOOT_AWARD"].OnAccept = onAccept or function() end
   StaticPopup_Show("ZUGLOOT_AWARD")
@@ -555,6 +590,8 @@ function M.AwardDirect(itemID, winnerName, source)
 end
 
 -- Award core: marks won, broadcasts, logs, prints. No UI.
+-- Data stays raw everywhere (sheet, addon messages, history); the local
+-- confirmation print colors the winner for the ML's own chat frame.
 function M.DoAward(itemID, itemLink, winnerName, source)
   if not Z.DB.sheet then Z.DB.sheet = Z.SRData.NewSheet() end
   source = source or "raid"
@@ -563,7 +600,7 @@ function M.DoAward(itemID, itemLink, winnerName, source)
   if Z.DropLog then Z.DropLog.Add(itemID, itemLink, source, "award", winnerName) end
   local disp = tostring(itemLink)
   if M.DisplayItemLink then disp = M.DisplayItemLink(itemID, itemLink) end
-  Z.Print("Awarded " .. disp .. " to " .. winnerName)
+  Z.Print("Awarded " .. disp .. " to " .. PName(winnerName))
   if Z.SRView then Z.SRView.Refresh() end
 end
 

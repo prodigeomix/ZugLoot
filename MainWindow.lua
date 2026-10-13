@@ -297,8 +297,17 @@ end
 -------------------------------------------------------------------------------
 -- Sheet tab: item cards
 -------------------------------------------------------------------------------
+-- Class-colored name for display strings. Nil-safe headless (returns the
+-- plain name when the ClassColors module is absent, as in old tests).
+local function PName(name)
+  if Z.ClassColors and Z.ClassColors.ColoredName then
+    return Z.ClassColors.ColoredName(name)
+  end
+  return tostring(name or "")
+end
+
 local function RollerLine(r)
-  local s = r.name .. " x" .. tostring(r.rolls or 1)
+  local s = PName(r.name) .. " x" .. tostring(r.rolls or 1)
   if r.sr_plus and r.sr_plus > 0 then
     s = s .. " |cFFFFD700(+" .. r.sr_plus .. ")|r"
   end
@@ -307,7 +316,7 @@ local function RollerLine(r)
 end
 
 local function RollLine(e, isWinner)
-  local s = e.name .. " " .. tostring(e.base)
+  local s = PName(e.name) .. " " .. tostring(e.base)
   if e.sr_plus and e.sr_plus > 0 then
     s = s .. "(+" .. e.sr_plus .. "=" .. (e.effective or e.base) .. ")"
   end
@@ -376,7 +385,11 @@ function M.RenderSheet()
       local sess = card.rollSessions[s]
       local wtxt = ""
       if Z.Util.ArrayCount(sess.winners or {}) > 0 then
-        wtxt = " => " .. table.concat(sess.winners, ", ")
+        local wn = {}
+        for w = 1, Z.Util.ArrayCount(sess.winners) do
+          table.insert(wn, PName(sess.winners[w]))
+        end
+        wtxt = " => " .. table.concat(wn, ", ")
       end
       table.insert(lines, "|cFFFFD700— rolls #" .. s .. " (" .. tostring(sess.mode or "?") .. ")" .. wtxt .. "|r")
       for m = 1, Z.Util.ArrayCount(sess.lines) do
@@ -412,6 +425,7 @@ function M.RenderSheet()
       if r.sr_plus and r.sr_plus > 0 then t = t .. " (+" .. r.sr_plus .. ")" end
       table.insert(srNames, t)
     end
+    -- NOTE: tooltip bodies stay plain (no class colors) — out of scope.
     row:EnableMouse(true)
     Tip(row, "item:" .. tostring(card.itemID),
       card.hardres and "HARD RESERVED" or ("SR: " .. (table.concat(srNames, ", ") ~= "" and table.concat(srNames, ", ") or "none")),
@@ -503,7 +517,7 @@ function M.RenderRolls()
     title:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
     title:SetWidth(BODY_WIDTH - 16) title:SetJustifyH("LEFT")
     local linkTxt = d.link or ("item:" .. tostring(d.itemID or "?"))
-    local wtxt = d.winner and ("  |cFF00FF00-> " .. d.winner .. "|r") or ""
+    local wtxt = d.winner and ("  |cFF00FF00-> " .. PName(d.winner) .. "|r") or ""
     title:SetText(linkTxt .. "  |cff888888[" .. tostring(d.source or "?") .. " / " .. tostring(d.outcome or "?") .. "]|r" .. wtxt)
     row:SetHeight(28)
     TrackRow(key, row, 28)
@@ -529,7 +543,7 @@ function M.RenderVersions()
   local sq = 28
   local row = CreateFrame("Frame", nil, b.child)
   row:SetWidth(BODY_WIDTH) row:SetHeight(40)
-  local hint = FS(row, "GameFontHighlightSmall", "ZugLoot " .. tostring(Z.VERSION) .. " — green=current, yellow=outdated, red=no addon. (auto-refreshes on open)")
+  local hint = FS(row, "GameFontHighlightSmall", "ZugLoot " .. tostring(Z.VERSION) .. " — squares: raid roster, class-colored initials (green=current, yellow=outdated, red=no addon). (auto-refreshes on open)")
   hint:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
   hint:SetWidth(BODY_WIDTH - 16) hint:SetJustifyH("LEFT")
   TrackRow(key, row, 30)
@@ -548,12 +562,16 @@ function M.RenderVersions()
     local cc = VER_COLORS[col] or VER_COLORS.GREY
     t:SetTexture(cc[1], cc[2], cc[3], 1)
     t:SetAllPoints(cell)
-    local fs = FS(cell, "GameFontNormalSmall", string.sub(nm, 1, 2))
+    -- Initials in the member's class color on the status-colored square.
+    local initials = string.sub(nm, 1, 2)
+    if Z.ClassColors and Z.ClassColors.ClassColorHex and Z.ClassColors.ClassOf then
+      initials = "|c" .. Z.ClassColors.ClassColorHex(Z.ClassColors.ClassOf(nm)) .. initials .. "|r"
+    end
+    local fs = FS(cell, "GameFontNormalSmall", initials)
     fs:SetPoint("CENTER", cell, "CENTER", 0, 0)
-    fs:SetTextColor(0, 0, 0)
     cell:EnableMouse(true)
     local seen = Z.VersionGrid.seen[nm]
-    Tip(cell, nm, "v" .. tostring((seen and seen.version) or "no addon"), col == "GREEN" and "ready for auto-resolve" or "needs update / no addon")
+    Tip(cell, PName(nm), "v" .. tostring((seen and seen.version) or "no addon"), col == "GREEN" and "ready for auto-resolve" or "needs update / no addon")
     if i == Z.Util.ArrayCount(names) then ri = r end
   end
   local gh = 8 + (ri + 1) * (sq + 6)

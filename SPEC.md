@@ -258,7 +258,8 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   loser groups + a **class-sorted candidate roster** (sheet + rollers + raid
   roster, winners starred like RollFor's candidate grid), and picks who gets
   the item: the SR winner, a main-spec / offspec / TMOG roller, or any raider
-  from the roster. In-client this is the menu frame; headless it prints and
+  from the roster. Every name renders in its **class color** (see §4.8).
+  In-client this is the menu frame; headless it prints and
   the ML answers `/zl award <name>`. The pick fires the confirmation popup
   (`Award <link> to <name>?`) → `GiveMasterLoot` + `AWARD` broadcast + `won`
   marking + DropLog entry.
@@ -279,10 +280,30 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   digits, **two-column roll list** — class-colored names left, `roll (min-max)`
   in roll-type color right, grouped **SR > MS > OS > TMOG**, best-first, max 8
   rows — four **dice buttons** (SR/MS/OS/TM) with colored borders, hover glow
-  and tooltips, plus a top-screen huge-text **winner banner** (5s fade).
+  and tooltips, plus a top-screen huge-text **winner banner** (5s fade, winner
+  in class color). Roll-list class resolution is roster-first with the SR
+  sheet as fallback (see §4.8).
 - First-roll-only; extra rolls ignored with notice. Auto-close timer configurable
   (`/zl time N`, `/zl autoclose on|off`).
 - Draggable; `/zl show|hide`.
+
+### 4.8 Class-colored names (`ClassColors.lua`)
+
+- Every character name the addon renders — Sheet tab rollers/history,
+  Rolls tab winners, loot-window roll lists/award rows/`...` choices, award
+  menu + confirm, winner banner, version grid + `/zl verlist`, drop-log
+  lines — shows in its Blizzard **class color** (Paladin pink etc.).
+- Source order: the **live party/raid member list first** (raid roster,
+  then party units + self), **fallback to the class stored on the SR sheet**
+  at import (`sheet.players`, from raidres `character.class` / legacy `role`).
+  Unknown names stay plain white; solo/offline clients still get sheet colors.
+- Roles carry class+spec (`PaladinHoly`): the **class prefix colors the name**,
+  the spec is ignored. Case/abbreviation/file-name tolerant
+  (`paladin`, `PALADIN`, `War` all resolve).
+- Display-only: stored data (sheet, history, `PLAYERS` broadcast line,
+  archive snapshots) keeps raw class strings, and **addon chat carries no
+  color codes** — result/kind lines print plain names. Pure + headless-safe
+  (nil-guarded roster APIs) with `tests/test_classcolors.lua` coverage.
 
 ### 4.4 Version grid (`VersionGrid.lua`)
 

@@ -21,9 +21,10 @@ No dependencies. Interface 11200.
   The Raids tab lists all raids including the live one — **Activate**
   (or `/zl raid <id>`) switches the active sheet and continues it with won
   marks + history intact.
-  Sheet tab shows one card per item: hoverable icon, `Name xN (+SR+)`, `[HR]` /
-  `[rolled xN]` badges, WON marks, and every roll session this raid one line
-  per player.
+  Sheet tab shows one card per item: hoverable icon, class-colored
+  `Name xN (+SR+)`, `[HR]` / `[rolled xN]` badges, WON marks, and every roll
+  session this raid one line per player (class resolved roster-first, sheet
+  fallback; solo still gets sheet colors).
 - ML: `/zl rf <itemlink>` starts an SR roll; looting a boss lists corpse loot
   as numbered icon/name rows with SR/HR badges — click a row to Award a lone
   reserver directly, `...` for more choices, or roll it (`/zl roll <item>`). Nothing

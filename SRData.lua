@@ -20,7 +20,59 @@ if not Util then
 end
 
 function M.NewSheet()
-  return { meta = { raidID = nil, importedAt = 0, importedBy = "?", source = "?" }, items = {}, hardres = {}, won = {}, rolls = {} }
+  return { meta = { raidID = nil, importedAt = 0, importedBy = "?", source = "?" }, items = {}, hardres = {}, won = {}, rolls = {}, players = {} }
+end
+
+-- Class fallback store: players[name] = { class = <canonical> }.
+-- Filled at import from raidres character.class / legacy role strings and
+-- used whenever the live party/raid roster does not know a name.
+-- NormalizeClass lives in ClassColors (loaded after SRData in the toc),
+-- so matching here is local: canonical names + longest class+spec prefix.
+local SHEET_CLASSES = {
+  "Warrior", "Paladin", "Hunter", "Rogue", "Priest",
+  "Shaman", "Mage", "Warlock", "Druid",
+}
+
+local function sheetNormalizeClass(s)
+  s = tostring(s or "")
+  s = (string.gsub(s, "^%s*(.-)%s*$", "%1"))
+  if s == "" then return nil end
+  local lower = string.lower(s)
+  for i = 1, 9 do
+    if lower == string.lower(SHEET_CLASSES[i]) then return SHEET_CLASSES[i] end
+  end
+  local best = nil
+  for i = 1, 9 do
+    local canon = string.lower(SHEET_CLASSES[i])
+    if string.sub(lower, 1, string.len(canon)) == canon then
+      if not best or string.len(canon) > string.len(string.lower(best)) then
+        best = SHEET_CLASSES[i]
+      end
+    end
+  end
+  return best
+end
+
+function M.SetPlayerClass(sheet, name, rawClass)
+  if not sheet or not name or tostring(name) == "" then return nil end
+  local c = sheetNormalizeClass(rawClass)
+  if not c then return nil end
+  sheet.players = sheet.players or {}
+  local p = sheet.players[tostring(name)]
+  if type(p) ~= "table" then
+    p = {}
+    sheet.players[tostring(name)] = p
+  end
+  -- First truth wins: imports are additive across items, classes agree.
+  if not p.class then p.class = c end
+  return p.class
+end
+
+function M.PlayerClass(sheet, name)
+  if not sheet or not sheet.players then return nil end
+  local p = sheet.players[tostring(name or "")]
+  if type(p) == "table" then return p.class end
+  return nil
 end
 
 M.ROLLS_PER_ITEM_MAX = 25
@@ -129,6 +181,11 @@ function M.ParseLineFormat(text)
           if not id then return nil, "line " .. lineNo .. ": bad hardres id '" .. Util.Trim(parts[i]) .. "'" end
           sheet.hardres[id] = { quality = 5 }
         end
+      elseif string.upper(head) == "PLAYERS" then
+        for i = 1, Util.ArrayCount(parts) do
+          local nm, cls = string.match(Util.Trim(parts[i]), "^([^=]+)=([^=]+)$")
+          if nm and cls then M.SetPlayerClass(sheet, Util.Trim(nm), Util.Trim(cls)) end
+        end
       else
         if head == "" then return nil, "line " .. lineNo .. ": missing player name" end
         for i = 1, Util.ArrayCount(parts) do
@@ -203,6 +260,7 @@ function M.TransformRaidRes(data)
         if nm and id then
           local bonus = M.ExtractSRPlus(e) or M.ExtractSRPlus(ch)
           addRoller(sheet, tonumber(id), e.quality or 4, tostring(nm), 1, bonus)
+          M.SetPlayerClass(sheet, tostring(nm), ch.class or e.class)
         end
       end
     end
@@ -213,6 +271,7 @@ function M.TransformRaidRes(data)
       local sr = data.softreserves[i]
       if type(sr) == "table" and sr.name then
         local pbonus = M.ExtractSRPlus(sr)
+        M.SetPlayerClass(sheet, tostring(sr.name), sr.role or sr.class)
         local items = sr.items or {}
         for j = 1, Util.ArrayCount(items) do
           local it = items[j]

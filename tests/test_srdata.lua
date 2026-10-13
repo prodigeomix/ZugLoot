@@ -18,6 +18,7 @@ end
 
 ZugLoot = {}
 dofile("Util.lua")
+dofile("ClassColors.lua")
 dofile("SRData.lua")
 local SRData = ZugLoot.SRData
 

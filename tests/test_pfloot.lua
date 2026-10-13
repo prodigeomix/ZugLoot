@@ -15,6 +15,7 @@ end
 
 ZugLoot = {}
 dofile("Util.lua")
+dofile("ClassColors.lua")
 ZugLoot.Util = ZugLoot.Util or dofile("Util.lua")
 dofile("pfLoot.lua")
 local P = ZugLoot.pfLoot

@@ -27,6 +27,14 @@ M.title = "ZugLoot Loot"
 M.frame = nil
 M.rows = {}
 
+-- Class-colored display name (data stays raw everywhere).
+local function PName(name)
+  if Z.ClassColors and Z.ClassColors.ColoredName then
+    return Z.ClassColors.ColoredName(name)
+  end
+  return tostring(name or "")
+end
+
 -- Row detail state (plain data): { itemID, link, badge, rollers={names},
 -- single=bool (exactly one SR/HR holder), status, source }.
 M.detail = nil
@@ -571,7 +579,7 @@ function M.DetailLines(d)
           eff = " (=" .. tostring(r.effective) .. ")"
         end
         table.insert(lines, "  " .. tostring(r.rollType) .. ": "
-          .. tostring(r.name) .. " " .. tostring(r.roll) .. eff)
+          .. PName(r.name) .. " " .. tostring(r.roll) .. eff)
       end
     end
   elseif d.phase == "award" and d.menu then
@@ -579,7 +587,7 @@ function M.DetailLines(d)
     local winners = d.menu.winners or {}
     for i = 1, Z.Util.ArrayCount(winners) do
       local w = winners[i]
-      table.insert(lines, "  winner: " .. tostring(w.name)
+      table.insert(lines, "  winner: " .. PName(w.name)
         .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
     end
     if Z.Util.ArrayCount(winners) == 0 then
@@ -587,7 +595,11 @@ function M.DetailLines(d)
     end
   else
     if Z.Util.ArrayCount(d.rollers) > 0 then
-      table.insert(lines, "  reserved by: " .. table.concat(d.rollers, ", "))
+      local rn = {}
+      for i = 1, Z.Util.ArrayCount(d.rollers) do
+        table.insert(rn, PName(d.rollers[i]))
+      end
+      table.insert(lines, "  reserved by: " .. table.concat(rn, ", "))
     else
       table.insert(lines, "  no reserves — open roll")
     end
@@ -618,10 +630,12 @@ function M.DetailActions(d)
     -- each contested kind (SR/MS/OS/TMOG) not already listed. The ML
     -- awards the SR, MS, OS or TMOG winner directly; ... covers anyone
     -- else (e.g. when something is wrong with the rolls).
+    -- Labels color the name (buttons render FontStrings); the raw name
+    -- rides along for the award call.
     local listed = {}
     for i = 1, Z.Util.ArrayCount(d.menu.winners or {}) do
       local w = d.menu.winners[i]
-      table.insert(actions, { id = "award-name", label = "Award " .. w.name
+      table.insert(actions, { id = "award-name", label = "Award " .. PName(w.name)
         .. " (" .. tostring(w.rollType) .. ")", name = w.name, via = "winner" })
       listed[w.name] = true
     end
@@ -631,7 +645,7 @@ function M.DetailActions(d)
         listed[trow.entry.name] = true
         local via = (gt == "TMOG") and "tmog" or "winner"
         table.insert(actions, { id = "award-name",
-          label = "Award " .. trow.entry.name .. " (" .. gt .. ")",
+          label = "Award " .. PName(trow.entry.name) .. " (" .. gt .. ")",
           name = trow.entry.name, via = via })
       end
     end
@@ -640,7 +654,7 @@ function M.DetailActions(d)
     return actions
   end
   if d.single then
-    table.insert(actions, { id = "award", label = "Award " .. d.rollers[1] })
+    table.insert(actions, { id = "award", label = "Award " .. PName(d.rollers[1]) })
   end
   table.insert(actions, { id = "more", label = "..." })
   table.insert(actions, { id = "close", label = "Close" })
@@ -763,7 +777,7 @@ function M.MoreLines(d)
   table.insert(lines, "Award " .. tostring(d.name or d.link or ("item:" .. d.itemID)) .. " to?")
   if Z.Util.ArrayCount(d.rollers) > 0 then
     for i = 1, Z.Util.ArrayCount(d.rollers) do
-      table.insert(lines, "  SR: " .. d.rollers[i])
+      table.insert(lines, "  SR: " .. PName(d.rollers[i]))
     end
   end
   table.insert(lines, "  Roll: start a roll for this item")
@@ -909,7 +923,7 @@ function M.PaintDetailFrame()
       if Z.Util.ArrayCount(winners) > 0 then
         local w = {}
         for i = 1, Z.Util.ArrayCount(winners) do
-          table.insert(w, winners[i].name .. " (" .. tostring(winners[i].rollType)
+          table.insert(w, PName(winners[i].name) .. " (" .. tostring(winners[i].rollType)
             .. " " .. tostring(winners[i].effective) .. ")")
         end
         f.sub:SetText("Winner: " .. table.concat(w, ", "))
@@ -917,7 +931,11 @@ function M.PaintDetailFrame()
         f.sub:SetText("No eligible rolls — pick anyone (...)")
       end
     elseif Z.Util.ArrayCount(d.rollers) > 0 then
-      f.sub:SetText("Reserved by: " .. table.concat(d.rollers, ", "))
+      local rn = {}
+      for i = 1, Z.Util.ArrayCount(d.rollers) do
+        table.insert(rn, PName(d.rollers[i]))
+      end
+      f.sub:SetText("Reserved by: " .. table.concat(rn, ", "))
     else
       f.sub:SetText("No reserves — open roll")
     end
@@ -938,7 +956,7 @@ function M.PaintDetailFrame()
           if r.effective and r.effective ~= r.roll then
             eff = " (=" .. tostring(r.effective) .. ")"
           end
-          table.insert(t, tostring(r.rollType) .. ": " .. tostring(r.name)
+          table.insert(t, tostring(r.rollType) .. ": " .. PName(r.name)
             .. " " .. tostring(r.roll) .. eff)
         end
         if Z.Util.ArrayCount(t) == 0 then
@@ -971,7 +989,7 @@ function M.PaintDetailFrame()
       end
       -- no eligible winners: primary hides, ... picks anyone
     elseif d.single then
-      show, label = true, "Award " .. d.rollers[1]
+      show, label = true, "Award " .. PName(d.rollers[1])
     end
     if show then showBtn(f.awardB, label)
     elseif f.awardB.Hide then f.awardB:Hide() end
@@ -984,7 +1002,7 @@ function M.PaintDetailFrame()
         if not (trow and trow.entry) then trow = nil end
       end
       if trow then
-        showBtn(f.tmogB, "Award TMOG (" .. trow.entry.name .. ")")
+        showBtn(f.tmogB, "Award TMOG (" .. PName(trow.entry.name) .. ")")
       elseif f.tmogB.Hide then f.tmogB:Hide() end
     end
   end
@@ -1030,7 +1048,7 @@ function M.MoreChoices(d)
   local function addAward(nm)
     if nm and nm ~= "" and not seen[nm] then
       seen[nm] = true
-      table.insert(out, { id = "award-name", label = "Award " .. nm, name = nm })
+      table.insert(out, { id = "award-name", label = "Award " .. PName(nm), name = nm })
     end
   end
   for i = 1, Z.Util.ArrayCount(d.rollers or {}) do addAward(d.rollers[i]) end

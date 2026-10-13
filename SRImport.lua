@@ -26,6 +26,22 @@ function M.SerializeSheet(sheet)
   if Z.Util.ArrayCount(hr) > 0 then
     table.insert(lines, "HARDRES;" .. table.concat(hr, ","))
   end
+  -- Class fallback store: one PLAYERS line keeps name->class across the
+  -- broadcast (line format has no other place for it). ParseLineFormat
+  -- consumes it back into sheet.players; unknown classes are skipped.
+  if sheet.players then
+    local pl = {}
+    for name, p in pairs(sheet.players) do
+      local c = type(p) == "table" and p.class or p
+      if name and name ~= "" and c and c ~= "" then
+        table.insert(pl, tostring(name) .. "=" .. tostring(c))
+      end
+    end
+    if Z.Util.ArrayCount(pl) > 0 then
+      table.sort(pl)
+      table.insert(lines, "PLAYERS;" .. table.concat(pl, ","))
+    end
+  end
   -- NOTE: SerializeSheet lines are "Name;id:count+plus" single-entry lines.
   return table.concat(lines, "|")
 end

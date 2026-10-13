@@ -32,13 +32,21 @@ function M.Clear()
   Z.Print("Drop log cleared.")
 end
 
+-- Class-colored name for display strings (nil-safe headless).
+local function PName(name)
+  if Z.ClassColors and Z.ClassColors.ColoredName then
+    return Z.ClassColors.ColoredName(name)
+  end
+  return tostring(name or "")
+end
+
 function M.Lines()
   local out = {}
   local n = Z.Util.ArrayCount(Z.DB.drops or {})
   for i = n, 1, -1 do
     local d = Z.DB.drops[i]
     table.insert(out, tostring(d.t) .. " [" .. tostring(d.source) .. "] " .. tostring(d.link or d.itemID) ..
-      " " .. tostring(d.outcome) .. (d.winner and (" -> " .. d.winner) or ""))
+      " " .. tostring(d.outcome) .. (d.winner and (" -> " .. PName(d.winner)) or ""))
   end
   if Z.Util.ArrayCount(out) == 0 then table.insert(out, "(log empty)") end
   return out

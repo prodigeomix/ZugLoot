@@ -17,6 +17,7 @@ end
 ZugLoot = {}
 dofile("Util.lua")
 dofile("Constants.lua")
+dofile("ClassColors.lua")
 dofile("SRData.lua")
 dofile("Resolver.lua")
 dofile("ItemCards.lua")
@@ -123,6 +124,46 @@ local function drain(step)
   end
   return guard < 500
 end
+
+-- 2b. Class colors via the sheet fallback: no roster APIs here, so the
+-- sheet's stored classes paint the award menu, detail lines and banner.
+resetHarness()
+SRData.SetPlayerClass(ZugLoot.DB.sheet, "Aaa", "PaladinHoly")
+SRData.SetPlayerClass(ZugLoot.DB.sheet, "Bbb", "Mage")
+SRData.SetPlayerClass(ZugLoot.DB.sheet, "Ccc", "Druid")
+local res2b = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
+  { { name = "Aaa", roll = 90, type = "SR" }, { name = "Bbb", roll = 80, type = "SR" } },
+  { cap = 100, requireSR = true })
+local menu2b = ML.BuildAwardMenu(
+  { itemID = 1001, itemLink = "item:1001", id = 1 }, res2b)
+ok(menu2b.candidates[1] ~= nil, "candidates built")
+local cclass = {}
+for i = 1, #menu2b.candidates do cclass[menu2b.candidates[i].name] = menu2b.candidates[i].class end
+eq(cclass["Aaa"], "Paladin", "sheet fallback class on candidate")
+eq(cclass["Bbb"], "Mage", "sheet fallback class on candidate")
+local mlines = ML.AwardMenuLines(menu2b)
+local sawPink, sawMage = false, false
+for i = 1, #mlines do
+  if string.find(mlines[i], "|cFFF58CBAAaa|r", 1, true) then sawPink = true end
+  if string.find(mlines[i], "|cFF69CCF0Bbb|r", 1, true) then sawMage = true end
+end
+ok(sawPink, "award menu colors Paladin pink")
+ok(sawMage, "award menu colors Mage")
+-- Winner banner (FontString) carries the same color.
+local bannerShown = {}
+ZugLoot.RaiderLootUI.ShowResult = function(m) table.insert(bannerShown, m) end
+ML.AnnounceResult({ itemID = 1001, itemLink = "item:1001", dispName = "item:1001" }, res2b)
+local sawBannerPink = false
+for i = 1, #bannerShown do
+  if string.find(bannerShown[i], "|cFFF58CBAAaa|r", 1, true) then sawBannerPink = true end
+end
+ok(sawBannerPink, "result banner colors the winner")
+ZugLoot.RaiderLootUI.ShowResult = nil
+-- ClassColors resolves the sheet class directly (the roll window routes
+-- through the same ClassOf; RaiderLootUI is not loaded in this suite).
+eq(ZugLoot.ClassColors.ClassOf("Aaa"), "Paladin", "sheet class resolves")
+eq(ZugLoot.ClassColors.ColoredName("Aaa"), "|cFFF58CBAAaa|r", "roll-window color path")
+
 
 -- 1. Boss looted: ML scans corpse, announces loot, loot window opens;
 -- nothing auto-starts — the ML initiates each roll.

@@ -63,7 +63,7 @@ UnitClass = function() return "Warrior", "WARRIOR" end
 IsControlKeyDown = function() return false end
 IsShiftKeyDown = function() return false end
 math.mod = math.mod or function(a,b) return a % b end;
-ZugLoot = {}; dofile("Util.lua"); dofile("Constants.lua");
+ZugLoot = {}; dofile("Util.lua"); dofile("Constants.lua"); dofile("ClassColors.lua");
 ZugLoot.Print = function() end
 ZugLoot.DB = { sheet=nil, drops={}, rollTime=15 };
 ZugLoot.CharDB = { autoRoll=false };
@@ -234,6 +234,11 @@ Z.RaiderLootUI.OnRoll("Varian", 45, "OS");
 Z.RaiderLootUI.OnRoll("Anduin", 98, "TMOG");
 Z.RaiderLootUI.OnRoll("Guldan", 35, "SR");
 assert(#Z.RaiderLootUI.rolls == 5, "roll window collected 5 rolls");
+-- sheet fallback colors the roll list: Thrall is a Paladin on the sheet.
+s.players = s.players or {};
+s.players["Thrall"] = { class = "PaladinHoly" };
+assert(Z.ClassColors.ClassOf("Thrall") == "Paladin", "roll window sheet class");
+assert(Z.ClassColors.ColoredName("Thrall") == "|cFFF58CBAThrall|r", "roll window pink");
 Z.RaiderLootUI.ShowResult("The winner is Jaina (50) !");
 print("roll window OK");
 print("MOCK UI RUN OK");

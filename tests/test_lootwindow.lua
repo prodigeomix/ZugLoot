@@ -16,6 +16,7 @@ end
 ZugLoot = {}
 dofile("Util.lua")
 dofile("Constants.lua")
+dofile("ClassColors.lua")
 dofile("SRData.lua")
 dofile("Resolver.lua")
 dofile("ItemCards.lua")

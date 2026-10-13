@@ -80,6 +80,10 @@ end
 
 function M.PrintList()
   for _, n in ipairs(M.RosterNames()) do
-    Z.Print(n .. ": " .. M.ColorFor(n) .. ((M.seen[n] and M.seen[n].version) or "no addon"))
+    local disp = n
+    if Z.ClassColors and Z.ClassColors.ColoredName then
+      disp = Z.ClassColors.ColoredName(n)
+    end
+    Z.Print(disp .. ": " .. M.ColorFor(n) .. ((M.seen[n] and M.seen[n].version) or "no addon"))
   end
 end
