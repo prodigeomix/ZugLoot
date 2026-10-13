@@ -423,11 +423,11 @@ ZugLoot.AwardMenuUI = nil
 StaticPopupDialogs = nil
 StaticPopup_Show = nil
 
--- 16. Fresh loot session: a second simboss starts clean — no done rows,
--- queue, detail, menu, raider rolls or trailing timers from the first run.
--- (Ragnaros regression: the second run showed stale done/rolling rows.)
+-- 16. Fresh loot session: a second simboss starts clean — leftover
+-- detail, menu, raider rolls and trailing timers from the first run do not
+-- carry over. Awarded items are GONE (no done rows kept anywhere).
 resetHarness()
-math.random = rigged({ 2, 2, 2, 90, 80, 50, 50 }) -- identity shuffle, no double
+math.random = rigged({ 2, 2, 2, 90, 80, 50, 50, 1, 1 }) -- identity, no double
 Sim.SimBoss("TestBoss")
 Sim.RequestRoll(1001)
 ok(drain(), "drain fresh-run item 1")
@@ -435,34 +435,45 @@ ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(drain(), "drain fresh-run award")
 math.random = realRandom
 eq(#Sim.pending, 1, "first run leaves one item queued")
-ok(Sim.doneRows[1001] ~= nil, "first run records a done row")
--- Leftover detail + raider rolls + a stray timer, as a live client has.
-ZugLoot.LootWindow.OpenDetail(1001)
-ZugLoot.RaiderLootUI = ZugLoot.RaiderLootUI or {}
-ZugLoot.RaiderLootUI.rolls = { { player = "Aaa" } }
-local hideCalls2 = 0
-local origHide = ZugLoot.RaiderLootUI.Hide
-ZugLoot.RaiderLootUI.Hide = function() hideCalls2 = hideCalls2 + 1 end
-ZugLoot.Timer.After(99, function() end)
-ok(ZugLoot.Timer.Pending() >= 1, "stray timer present")
--- Sheet history/won marks persist (raid-night state); session state resets.
-local histBefore = SRData.RollCount(ZugLoot.DB.sheet, 1001)
-ok(histBefore >= 1, "history recorded by first run")
+ok(ZugLoot.LootWindow.Find(1001) == nil, "awarded item left the list")
+-- A second run rebuilds ONLY its own queue; awarded rows never come back.
+-- (Second run while the first still has an item queued is refused — the ML
+-- finishes or stops the first run first; so stop it, then start fresh.)
+Sim.Stop()
 math.random = rigged({ 2, 2, 2, 1, 1, 1, 1 }) -- identity shuffle, no double
 Sim.SimBoss("TestBoss")
 math.random = realRandom
-eq(Sim.doneRows[1001], nil, "done rows forgotten")
 eq(#Sim.pending, 2, "queue rebuilt fresh (no leftovers)")
-eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), histBefore, "history kept")
-ok(ML.session == nil, "no live session carried over")
-ok(ML.pendingAwardMenu == nil, "no pending menu carried over")
-ok(ZugLoot.LootWindow.detail == nil, "open detail closed")
-ok(ZugLoot.Timer.Pending() == 0, "trailing timers cancelled")
-ok(hideCalls2 >= 1, "raider window hidden (rolls cleared)")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "rebuilt list has the new run's rows")
+eq(ZugLoot.LootWindow.Find(1001).status, "open", "rebuilt row starts open")
 eq(#ZugLoot.LootWindow.items, 2, "loot window lists only the new drops")
-ok(not ZugLoot.LootWindow.Find(1001) or ZugLoot.LootWindow.Find(1001).status == "open",
-  "rebuilt row starts open, not done")
-ZugLoot.RaiderLootUI.Hide = origHide
+-- Sheet history carries the record instead of the list.
+ok(SRData.RollCount(ZugLoot.DB.sheet, 1001) >= 1, "history recorded by first run")
+
+-- 16b. Awarded items leave the list; last award closes the window.
+resetHarness()
+math.random = rigged({ 2, 2, 2, 90, 80, 50, 50, 1, 1 })
+Sim.SimBoss("TestBoss")
+eq(#ZugLoot.LootWindow.items, 2, "both queued items listed")
+Sim.RequestRoll(1001)
+ok(drain(), "drain 16b item")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain 16b award")
+ok(ZugLoot.LootWindow.Find(1001) == nil, "awarded item left the list")
+ok(ZugLoot.LootWindow.Find(1002) ~= nil, "unrolled item still listed")
+math.random = realRandom
+-- Roll and award the last one: window closes, run ends.
+Sim.RequestRoll(1002)
+ok(drain(), "drain 16b last item")
+ML.AwardChosen({ name = "Ccc", via = "winner" })
+ok(drain(), "drain 16b last award")
+eq(#ZugLoot.LootWindow.items, 0, "list empty after last award")
+ok(Sim.running == false, "sim run ended")
+ok(ZugLoot.LootWindow.frame == nil or ZugLoot.LootWindow.frame.hidden ~= false,
+  "loot window closed when nothing left")
+-- Sheet history carries the record instead of the list.
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "1001 session in history")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 1, "1002 session in history")
 
 -- 17. No item may vanish: the row stays (rolling) while the roll runs and
 -- after a no-winner finish; only the ML's award (or direct award) marks
@@ -492,9 +503,7 @@ ML.AwardChosen({ name = "Stranger", via = "menu" })
 ok(drain(), "drain no-winner award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Stranger"), "ML pick awarded")
 ok(Sim.live == nil, "item no longer live after award")
-local doneRow = ZugLoot.LootWindow.Find(1001)
-ok(doneRow ~= nil, "awarded row still listed")
-eq(doneRow and doneRow.status, "done", "awarded row marked done")
+ok(ZugLoot.LootWindow.Find(1001) == nil, "awarded row left the list")
 
 -- 18. Roller-less on-sheet items fall back to an open roll of the sheet
 -- (instead of finishing with zero rolls and no winner).
@@ -512,6 +521,6 @@ ok(ZugLoot.LootWindow.Find(1001) ~= nil, "fallback item still listed")
 ML.AwardChosen({ name = hr.winners[1], via = "winner" })
 ok(drain(), "drain fallback award")
 ok(Sim.live == nil, "fallback item cleared on award")
-eq(ZugLoot.LootWindow.Find(1001).status, "done", "fallback item done on award")
+ok(ZugLoot.LootWindow.Find(1001) == nil, "fallback award left the list")
 
 return T

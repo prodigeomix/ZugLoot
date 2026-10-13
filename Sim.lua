@@ -70,7 +70,6 @@ function M.ResetFresh()
   if Z.Timer and Z.Timer.CancelAll then Z.Timer.CancelAll() end
   M.pending = {}
   M.live = nil
-  M.doneRows = {}
   M.lastEntries = {}
   M.pendingAward = nil
   M.auto = false
@@ -98,6 +97,7 @@ function M.Stop()
         or Z.MasterLootUI.pendingAwardMenu ~= nil))
       or (M.pending and Z.Util.ArrayCount(M.pending) > 0)
   M.ResetFresh() -- cancels timers, session, menu; clears queue + loot rows
+  M.MaybeFinish() -- prints + hides windows (no "SIM done" print needed here)
   if Z.LootWindow then
     if Z.LootWindow.Hide then
       Z.LootWindow.Hide() -- hides frame AND closes the detail
@@ -357,6 +357,8 @@ end
 
 -- Request the next roll: auto mode plays the queue head (the /zl sim
 -- one-shot always auto-plays); manual mode waits for the ML's Roll click.
+-- When the queue is empty AND nothing is live/deciding, the run is over:
+-- the loot window closes (nothing left to hand out is not a record).
 function M.RequestNextRoll()
   if M.auto then
     local head = M.pending[1]
@@ -364,13 +366,12 @@ function M.RequestNextRoll()
   end
   if Z.MasterLootUI and Z.MasterLootUI.session then return end -- roll live
   if Z.MasterLootUI and Z.MasterLootUI.pendingAwardMenu then return end -- ML deciding
-  M.running = false
-  if Z.Util.ArrayCount(M.pending) == 0 then
-    Z.Print("SIM done — see the Sheet tab.")
+  M.SyncLootWindow()
+  if Z.Util.ArrayCount(M.pending) == 0 and M.live == nil then
+    M.MaybeFinish()
   else
     Z.Print("SIM: waiting for the ML — click Roll in the loot window.")
   end
-  M.SyncLootWindow()
 end
 
 -- The ML initiates one queued item (loot-window Roll button). Plays when
@@ -402,83 +403,62 @@ end
 function M.RollNow(itemID) M.RequestRoll(itemID) end
 
 -- Push the queue (+live session marker) into the shared loot window.
--- Finished items stay listed (marked done) so the window is a full record.
+-- Awarded items LEAVE the list: a handed-out item is done, not a trophy.
+-- The window always shows exactly what still needs the ML: the queued
+-- entries plus the live (rolling) one. Nothing else.
 function M.SyncLootWindow()
   if not Z.LootWindow then return end
-  local rows = {}
-  M.doneRows = M.doneRows or {}
-  local have = {}
-  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
-    have[Z.LootWindow.items[i].itemID] = Z.LootWindow.items[i]
-  end
-  for id, prev in pairs(have) do
-    if prev and prev.status == "done" then M.doneRows[id] = prev end
-  end
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    local e = M.pending[i]
-    local sheet = Z.DB and Z.DB.sheet
+  local W = Z.LootWindow
+  local sheet = Z.DB and Z.DB.sheet
+  local function badgeFor(itemID)
     local badge = ""
     if sheet and Z.SRData.ReserveBadge then
-      badge = Z.SRData.ReserveBadge(sheet, e.itemID)
+      badge = Z.SRData.ReserveBadge(sheet, itemID)
     elseif sheet and Z.SRData.GetRollers then
-      local n = Z.Util.ArrayCount(Z.SRData.GetRollers(sheet, e.itemID))
+      local n = Z.Util.ArrayCount(Z.SRData.GetRollers(sheet, itemID))
       if n == 1 then badge = "SR" elseif n > 1 then badge = "SR:" .. n end
     end
+    return badge
+  end
+  local function qualityFor(itemID)
+    return (sheet and sheet.items[itemID] and sheet.items[itemID].quality) or 0
+  end
+  local rows = {}
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    local e = M.pending[i]
     table.insert(rows, { itemID = e.itemID, link = e.link,
-      quality = (sheet and sheet.items[e.itemID] and sheet.items[e.itemID].quality) or 0,
-      badge = badge })
+      quality = qualityFor(e.itemID), badge = badgeFor(e.itemID) })
   end
   -- The live (rolling) item left the queue at Roll time but is only done
   -- once the ML awards it: keep it listed as rolling. No item may vanish
-  -- mid-roll or on a no-winner finish.
+  -- mid-roll or on a no-winner finish; handed-out items never come back.
   if M.live then
     local lv = M.live
-    local lsheet = Z.DB and Z.DB.sheet
-    local lbadge = ""
-    if lsheet and Z.SRData.ReserveBadge then
-      lbadge = Z.SRData.ReserveBadge(lsheet, lv.itemID)
-    elseif lsheet and Z.SRData.GetRollers then
-      local ln = Z.Util.ArrayCount(Z.SRData.GetRollers(lsheet, lv.itemID))
-      if ln == 1 then lbadge = "SR" elseif ln > 1 then lbadge = "SR:" .. ln end
-    end
     table.insert(rows, { itemID = lv.itemID, link = lv.link,
-      quality = (lsheet and lsheet.items[lv.itemID] and lsheet.items[lv.itemID].quality) or 0,
-      badge = lbadge })
+      quality = qualityFor(lv.itemID), badge = badgeFor(lv.itemID) })
   end
-  -- Preserve known statuses (rolling/done) across the rebuild, and keep
-  -- finished rows appended so the window stays a full record of the run.
-  local keepStatus = {}
-  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
-    keepStatus[Z.LootWindow.items[i].itemID] = Z.LootWindow.items[i].status
-  end
-  Z.LootWindow.SetItems(rows, "sim")
-  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
-    local id = Z.LootWindow.items[i].itemID
-    local prev = have[id]
-    if prev and prev.status == "done" then
-      Z.LootWindow.items[i].status = "done"
-    elseif keepStatus[id] == "rolling" then
-      Z.LootWindow.items[i].status = "rolling"
-    end
-  end
-  for i = 1, Z.Util.ArrayCount(Z.LootWindow.items or {}) do end -- noop
-  -- Re-append done rows that left the queue (played earlier this run).
-  -- Carry the resolved presentation (name/texture/badge), not just ids.
-  if M.doneRows then
-    for id, prev in pairs(M.doneRows) do
-      if not Z.LootWindow.Find(id) then
-        table.insert(Z.LootWindow.items,
-          { itemID = id, link = prev.link, name = prev.name,
-            texture = prev.texture, quality = prev.quality,
-            quantity = prev.quantity, badge = prev.badge,
-            status = "done", source = "sim" })
-      end
-    end
-  end
+  W.SetItems(rows, "sim")
   local live = Z.MasterLootUI and Z.MasterLootUI.session
-  if live and Z.LootWindow.Find(live.itemID) then
-    Z.LootWindow.MarkRolling(live.itemID)
+  if live and W.Find(live.itemID) then
+    W.MarkRolling(live.itemID)
   end
+end
+
+-- Nothing left to loot: close the ML loot window and end the run.
+-- A window with zero rows is not a record — the Sheet tab holds history.
+function M.MaybeFinish()
+  if Z.Util.ArrayCount(M.pending) > 0 then return end
+  if M.live ~= nil then return end
+  if Z.MasterLootUI and (Z.MasterLootUI.session ~= nil
+      or Z.MasterLootUI.pendingAwardMenu ~= nil) then
+    return
+  end
+  if M.running then
+    M.running = false
+    Z.Print("SIM done — window closed, see the Sheet tab.")
+  end
+  if Z.LootWindow and Z.LootWindow.Hide then Z.LootWindow.Hide() end
+  if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
 end
 
 function M.SimItem(argText)

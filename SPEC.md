@@ -244,8 +244,9 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   rolls text always clears it) — `...` for anyone else (menu candidates: any raider, for when
   something is wrong with the rolls), Close. The
   confirm popup names the item (`Award <name> to <who>?`, full link kept on
-  the dialog) — never a bare `item:<id>`. Awarding closes it; the overview
-  row shows done. Cancel drops the window back to pick (re-roll / choose /
+  the dialog) — never a bare `item:<id>`. Awarding closes it and the row
+  leaves the list (done = gone; the last award closes the window, like a
+  finished live session). Cancel drops the window back to pick (re-roll / choose /
   close). (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
   reserves). Nothing auto-starts — clicking a row opens the **row detail**
   (320 wide, so `Award <name>` fits long names on one line): direct **Award**
@@ -359,8 +360,9 @@ actual roll flow, not a separate code path:
   **same loot window** (title `Simulated loot: <boss>`, source `sim`) and
   stops: the ML — you — initiates every roll from the list (Roll button or
   `/zl simroll <item>`), in any order. After each finish the award menu
-  decides the winner (headless: `/zl award <name>`); won marks apply
-  immediately, so the one-win rule chains across drops exactly like a real
+  decides the winner (headless: `/zl award <name>`); the awarded item leaves
+  the list and stays gone, won marks apply immediately, so the one-win rule
+  chains across drops exactly like a real
   raid night. `/zl simstop` is a full stop: kills the live session and
   all sim timers, drops the queue, clears the award menu, and closes the
   loot window (+ detail) and raider window — a fresh `/zl sim` can start

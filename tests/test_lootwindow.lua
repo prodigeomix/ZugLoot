@@ -142,10 +142,11 @@ local acts = LW.DetailActions(d)
 eq(acts[1].id, "award", "Award first on single")
 eq(acts[2].id, "more", "... second")
 eq(acts[3].id, "close", "Close last")
--- direct award: won mark + row done + detail closed, no session.
+-- direct award: won mark + row GONE + detail closed, no session.
 eq(LW.doAction(1002, "award"), "awarded Solo", "direct award returns")
 ok(SRData.HasWon(sheet, 1002, "Solo"), "direct award won-marks")
-eq(LW.Find(1002).status, "done", "awarded row done")
+ok(LW.Find(1002) == nil, "awarded row left the list")
+ok(LW.Find(1001) ~= nil, "unawarded row still listed")
 ok(LW.detail == nil, "detail closed after award")
 ok(ML.session == nil, "direct award starts no session")
 -- multi holder: no direct Award, ... offers the choice list.
@@ -260,14 +261,14 @@ ML.pendingAwardMenu = { sess = { itemID = 1001, itemLink = "item:1001",
     id = 7, silent = false, itemCount = 1 }, data = menu6 }
 ML.AwardChosen = function(choice)
   SRData.MarkWon(ZugLoot.DB.sheet, 1001, choice.name)
-  LW.MarkDone(1001)
+  LW.RemoveItem(1001)
   ML.pendingAwardMenu = nil
   ML.session = nil
   LW.CloseDetail()
 end
 eq(LW.doAction(1001, "award-name", pickName), "awarded Aaa", "award in window")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "window award won-marks")
-eq(LW.Find(1001).status, "done", "row done after window award")
+ok(LW.Find(1001) == nil, "awarded row left the list")
 ok(LW.detail == nil, "window closed after award")
 
 -- 6b. TMOG 15 vs SR 58: SR wins outright; the TMOG kind row awards the
@@ -298,7 +299,7 @@ ML.pendingAwardMenu = { sess = { itemID = 1001, itemLink = "item:1001",
 ML.AwardChosen = function(choice)
   gotTmog = choice
   SRData.MarkWon(ZugLoot.DB.sheet, 1001, choice.name)
-  LW.MarkDone(1001)
+  LW.RemoveItem(1001)
   ML.pendingAwardMenu = nil
   LW.CloseDetail()
 end

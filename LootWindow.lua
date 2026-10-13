@@ -110,6 +110,27 @@ function M.MarkRolling(itemID) M.SetStatus(itemID, "rolling") end
 function M.MarkDone(itemID) M.SetStatus(itemID, "done") end
 function M.MarkOpen(itemID) M.SetStatus(itemID, "open") end
 
+-- Handed out = gone: drop the row from the list (by itemID; scanning the
+-- corpse again re-adds the odd leftover). A list with zero rows left is
+-- not a record — history lives in the Sheet tab.
+function M.RemoveItem(itemID)
+  local n = Z.Util.ArrayCount(M.items)
+  for i = n, 1, -1 do
+    if M.items[i] and M.items[i].itemID == itemID then
+      table.remove(M.items, i)
+    end
+  end
+  -- Renumber: rows are the 1-based RollFor modern-skin list order.
+  for i = 1, Z.Util.ArrayCount(M.items) do
+    M.items[i].index = i
+  end
+  if M.detail and M.detail.itemID == itemID then M.CloseDetail() end
+  M.Refresh()
+  -- Nothing left: close the ML window like a finished live session
+  -- (stale roll rows hide behind nothing and reads as a bug).
+  if Z.Util.ArrayCount(M.items) == 0 then M.Hide() end
+end
+
 function M.AllDone()
   for i = 1, Z.Util.ArrayCount(M.items) do
     if M.items[i].status ~= "done" then return false end

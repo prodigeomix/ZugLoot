@@ -218,7 +218,8 @@ ML.AwardChosen({ name = "Ccc", via = "winner" })
 ok(drain(), "drain picked award")
 math.random = realRandom
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "picked item resolves")
-eq(ZugLoot.LootWindow.Find(1002).status, "done", "loot row marked done")
+ok(ZugLoot.LootWindow.Find(1002) == nil, "awarded item left the list")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "unrolled item still listed")
 -- Then the ML rolls the remaining item.
 Sim.RequestRoll(1001)
 ok(drain(), "drain rest")

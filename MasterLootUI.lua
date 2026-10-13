@@ -573,9 +573,11 @@ function M.AwardDirect(itemID, winnerName, source)
     if it and it.link then link = it.link end
   end
   M.DoAward(itemID, link, winnerName, source == "sim" and "sim" or "raid")
-  if Z.LootWindow then Z.LootWindow.MarkDone(itemID) end
-  -- A directly-awarded sim row leaves the roll queue (the done row
-  -- stays): it must not be rollable after being handed out.
+  -- Handed out = gone: the row leaves the list (live loot too, like the
+  -- corpse running dry). Stays gone until the next LOOT_OPENED / simboss.
+  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
+  -- A directly-awarded sim row leaves the roll queue as well: it must not
+  -- be rollable after being handed out.
   if source == "sim" and Z.Sim then
     if Z.Sim.pending then
       for i = Z.Util.ArrayCount(Z.Sim.pending), 1, -1 do
@@ -658,27 +660,12 @@ function M.AwardChosen(choice)
   end
   local link = sess.itemLink
   local source = sess.silent and "sim" or "raid"
-  if Z.LootWindow then Z.LootWindow.MarkDone(sess.itemID) end
-  if Z.Sim and sess.silent then
-    -- Snapshot the finished row: queue rebuilds may drop it from the
-    -- window before SyncLootWindow re-appends it.
-    Z.Sim.doneRows = Z.Sim.doneRows or {}
-    local prev = Z.LootWindow and Z.LootWindow.Find(sess.itemID)
-    if prev then
-      -- Full resolved row so the re-append keeps name/texture/badge.
-      Z.Sim.doneRows[sess.itemID] = {
-        itemID = sess.itemID, link = prev.link or link, name = prev.name,
-        texture = prev.texture, quality = prev.quality,
-        quantity = prev.quantity, badge = prev.badge,
-        status = "done", source = "sim" }
-    else
-      Z.Sim.doneRows[sess.itemID] = { itemID = sess.itemID, link = link,
-        status = "done", source = "sim" }
-    end
-  end
   showAwardPopup(link, name, function()
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
+    if Z.LootWindow and Z.LootWindow.RemoveItem then
+      Z.LootWindow.RemoveItem(sess.itemID)
+    end
     M.pendingAwardMenu = nil
     M.session = nil
     if sess.silent then
@@ -693,23 +680,11 @@ function M.AwardChosen(choice)
   -- DoAward inside... only when the popup fires. Without a client there is
   -- no OnAccept, so apply directly.
   if not (StaticPopupDialogs and StaticPopup_Show) then
-    if Z.LootWindow then Z.LootWindow.MarkDone(sess.itemID) end
-    if Z.Sim and sess.silent then
-      Z.Sim.doneRows = Z.Sim.doneRows or {}
-      local prev = Z.LootWindow and Z.LootWindow.Find(sess.itemID)
-      if prev then
-        Z.Sim.doneRows[sess.itemID] = {
-          itemID = sess.itemID, link = prev.link or link, name = prev.name,
-          texture = prev.texture, quality = prev.quality,
-          quantity = prev.quantity, badge = prev.badge,
-          status = "done", source = "sim" }
-      else
-        Z.Sim.doneRows[sess.itemID] = { itemID = sess.itemID, link = link,
-          status = "done", source = "sim" }
-      end
-    end
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
+    if Z.LootWindow and Z.LootWindow.RemoveItem then
+      Z.LootWindow.RemoveItem(sess.itemID)
+    end
     M.pendingAwardMenu = nil
     M.session = nil
     if sess.silent then
