@@ -284,7 +284,10 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   distributes per corpse. Restore takes (no stale copies); fully-looted
   corpses are forgotten; abandoned ones evict oldest-first past a cap of
   5. Sim flows never touch the cache. Rolls land on the ACTIVE corpse's
-  session; parked corpses collect no chat while parked.
+  session; parked corpses collect no chat while parked. Roll state is
+  keyed by (corpse, item) — never bare itemID — so the SAME item on two
+  corpses owns two sessions, two parked details, two award menus and two
+  sim chains; one twin's finish/award can never overwrite the other's.
   Each roll-row item is
   announced + logged (`loot`/`seen`), awarding loots the corpse slot
   through Blizzard's APIs (master loot hands to another winner by

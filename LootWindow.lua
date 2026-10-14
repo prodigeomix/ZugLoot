@@ -40,9 +40,10 @@ end
 
 -- Row detail state (plain data): { itemID, link, badge, rollers={names},
 -- single=bool (exactly one SR/HR holder), status, source }.
--- Parked states: one saved detail per item (M.parked[itemID]) so the ML can
--- close an item after a roll and come back later — rolls, winner menu and
--- all. Deleted on award, never resurrected.
+-- Parked states: one saved detail per (corpse, item) roll key
+-- (M.parked[RollKey]) so the ML can close an item after a roll and come
+-- back later — rolls, winner menu and all. Same item on two corpses
+-- parks two snapshots. Deleted on award, never resurrected.
 M.detail = nil
 M.detailFrame = nil
 M.parked = {}
@@ -782,10 +783,12 @@ end
 -- Returns true when the roll landed on a detail.
 function M.DetailOnRoll(itemID, sessionID, player, roll, rollType, effective)
   -- Multi-roll: timed rolls land on the closed item's saved state when
-  -- the open detail is tracking a different item.
+  -- the open detail is tracking a different item. Parked lookup prefers
+  -- the active corpse's snapshot (same item, two corpses), then any lone
+  -- snapshot for the item.
   local d = M.detail
   if not d or d.itemID ~= itemID then
-    d = M.parked and M.parked[itemID] or nil
+    d = M.ParkedDetail(itemID)
   end
   if not d or d.itemID ~= itemID then return false end
   if d.phase ~= "rolling" then return false end
@@ -808,7 +811,7 @@ function M.DetailOnFinish(itemID, menu)
   -- another row is open: hand the menu to whichever copy tracks it.
   local d = M.detail
   if not d or d.itemID ~= itemID then
-    d = M.parked and M.parked[itemID] or nil
+    d = M.ParkedDetail(itemID)
   end
   if not d or d.itemID ~= itemID then return false end
   d.menu = menu
@@ -846,8 +849,9 @@ end
 -- the saved state.
 local function snapshotDetail(d)
   if not d then return nil end
-  local liveSess = Z.MasterLootUI and Z.MasterLootUI.sessions
-    and Z.MasterLootUI.sessions[d.itemID] or nil
+  local liveSess = Z.MasterLootUI and Z.MasterLootUI.SessionFor
+    and Z.MasterLootUI.SessionFor(d.itemID) or nil
+  if liveSess and liveSess.itemID ~= d.itemID then liveSess = nil end
   local hasState = (d.phase or "pick") == "rolling"
     or (d.phase or "pick") == "award"
     or (d.rolls and Z.Util.ArrayCount(d.rolls) > 0)
@@ -870,17 +874,43 @@ function M.ParkDetail()
   local d = M.detail
   if not d then return end
   local snap = snapshotDetail(d)
-  if snap then M.parked = M.parked or {} M.parked[d.itemID] = snap end
+  if snap then
+    M.parked = M.parked or {}
+    local MLUI = Z.MasterLootUI
+    local pk = MLUI and MLUI.RollKey(d.itemID) or d.itemID
+    M.parked[pk] = snap
+  end
 end
 
 function M.DropParked(itemID)
-  if M.parked then M.parked[itemID] = nil end
+  if not M.parked then return end
+  local MLUI = Z.MasterLootUI
+  -- Scoped to THIS corpse's snapshot (+ the legacy bare key): a twin
+  -- corpse's parked window is its own state and survives. No phantom
+  -- risk — snapshots are only ever read through the keyed path
+  -- (OpenDetail/ParkedDetail), so a twin copy can never open here.
+  local kk = MLUI and MLUI.RollKey(itemID) or itemID
+  M.parked[kk] = nil
+  M.parked[itemID] = nil
 end
 
-function M.ParkedDetail(itemID)
+-- Parked snapshot for an item: the active corpse's copy first (same item
+-- on two corpses), else the lone copy, else nil (ambiguous twins need
+-- the pinned corpse — callers with one pass it via the key form below).
+function M.ParkedDetail(itemID, key)
   local t = M.parked or (Z.LootWindow and Z.LootWindow.parked)
-  if t then return t[itemID] end
-  return nil
+  if not t then return nil end
+  local MLUI = Z.MasterLootUI
+  local kk = key or (MLUI and MLUI.RollKey(itemID)) or itemID
+  if t[kk] then return t[kk] end
+  local found = nil
+  for _, v in pairs(t) do
+    if v and v.itemID == itemID then
+      if found then return nil end
+      found = v
+    end
+  end
+  return found
 end
 
 -- Row click entry: coin/free rows loot immediately through Blizzard's
@@ -1056,17 +1086,20 @@ function M.OpenDetail(itemID)
   -- rolls, kind rows, winner menu, all intact. Stale IDLE pick snapshots
   -- (no session, no rolls, no menu) are dropped: the row rebuilds an
   -- identical pick window from live data.
-  if M.parked and M.parked[itemID] then
-    local psnap = M.parked[itemID]
+  local MLUI = Z.MasterLootUI
+  local okey = MLUI and MLUI.RollKey(itemID) or itemID
+  local psnap = M.parked and M.parked[okey] or nil
+  if psnap then
     if (psnap.phase or "pick") == "pick" and (psnap.sessionID == nil or psnap.sessionID == 0)
         and (psnap.rolls == nil or Z.Util.ArrayCount(psnap.rolls) == 0)
         and psnap.menu == nil then
-      M.parked[itemID] = nil
+      M.parked[okey] = nil
+      psnap = nil
     end
   end
-  if M.parked and M.parked[itemID] then
-    M.detail = M.parked[itemID]
-    M.parked[itemID] = nil
+  if psnap then
+    M.detail = psnap
+    M.parked[okey] = nil
     M.RefreshDetail()
     return M.detail
   end
@@ -1075,6 +1108,13 @@ function M.OpenDetail(itemID)
   M.detail = d
   M.RefreshDetail()
   return d
+end
+
+-- Detail-frame X button entry: the shared Close ACTION path. Headless-
+-- testable (frame clicks need a client); asserts the wiring, not just
+-- the action the wiring calls.
+function M.OnCloseButton()
+  if M.detail then return M.doAction(M.detail.itemID, "close") end
 end
 
 function M.CloseDetail()
@@ -1224,12 +1264,14 @@ function M.doAction(itemID, actionID, extra)
     -- rows (Continue reopens the roll). Idle pick windows just close.
     local MLUI = Z.MasterLootUI
     if (d.phase or "pick") == "rolling"
-        and MLUI and MLUI.sessions and MLUI.sessions[itemID] then
+        and MLUI and MLUI.SessionFor
+        and MLUI.SessionFor(itemID)
+        and MLUI.SessionFor(itemID).itemID == itemID then
       MLUI.Finish(true, itemID)
       -- DetailOnFinish retargeted the (possibly parked) detail; re-read.
       d = M.detail
       if not d or d.itemID ~= itemID then
-        d = M.ParkedDetail(itemID)
+        d = M.ParkedDetail(itemID, MLUI and MLUI.RollKey(itemID))
       end
       if d and (d.phase or "pick") == "award" and d.menu then
         d.phase = "preaward"
@@ -1257,7 +1299,8 @@ function M.doAction(itemID, actionID, extra)
     -- Sequential holds: refused when THIS item already rolls, or when
     -- ANOTHER item's roll is running (finish, cancel or close it first).
     local MLUI = Z.MasterLootUI
-    if MLUI and MLUI.sessions and MLUI.sessions[itemID] then
+    if MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
+        and MLUI.SessionFor(itemID).itemID == itemID then
       return "roll failed"
     end
     if MLUI and MLUI.session then
@@ -1295,6 +1338,10 @@ function M.doAction(itemID, actionID, extra)
       local sess = Z.MasterLootUI and Z.MasterLootUI.SessionFor
         and Z.MasterLootUI.SessionFor(itemID)
         or (Z.MasterLootUI and Z.MasterLootUI.session)
+      -- playOne (sim/rehearsal starters) owns the rolling flip and may
+      -- have replaced M.detail; re-fetch so the flip below lands on the
+      -- live object, never a stale snapshot. Idempotent either way.
+      if M.detail and M.detail.itemID == itemID then d = M.detail end
       d.phase = "rolling"
       d.sessionID = sess and sess.id or nil
       d.rolls = {}
@@ -1351,7 +1398,8 @@ function M.doAction(itemID, actionID, extra)
     -- object re-attaches, so new rolls append to the same list and the
     -- session id is unchanged (stale feed guards stay valid).
     local MLUI = Z.MasterLootUI
-    if MLUI and MLUI.sessions and MLUI.sessions[itemID] then
+    if MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
+        and MLUI.SessionFor(itemID).itemID == itemID then
       return "already rolling"
     end
     local sess = MLUI and MLUI.ParkedSession
@@ -1527,7 +1575,14 @@ function M.BuildDetailFrame()
   closeB:SetWidth(M.BTN_CLOSE_W) closeB:SetHeight(M.BTN_HEIGHT)
   closeB:SetText("Close")
   f.closeB = closeB
-  closeB:SetScript("OnClick", function() M.CloseDetail() end)
+  -- Close button shares the Close ACTION path (doAction "close"), not a
+  -- bare CloseDetail: closing a rolling window finishes it into parked
+  -- award rows first, so the session alias clears and the next item's
+  -- roll (plus live /roll intake) routes to the new session. A bare
+  -- dismiss would strand the old session as the alias and every later
+  -- roll — fakes and self-rolls alike — would land on the dead item.
+  -- Routed via OnCloseButton (named for tests) rather than inline.
+  closeB:SetScript("OnClick", function() M.OnCloseButton() end)
   M.detailFrame = f
   return f
 end

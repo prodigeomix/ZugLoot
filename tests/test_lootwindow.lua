@@ -526,6 +526,50 @@ LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
 LW.OpenDetail(1001)
 eq(LW.doAction(1001, "close"), "closed", "pick close")
 ok(LW.ParkedDetail(1001) == nil, "pick close parks nothing")
+-- 7b. X button == Close action on a rolling window: finishes into parked
+-- award rows and clears the session alias (regression: bare CloseDetail
+-- stranded the live session, so the next item's roll failed and all
+-- rolls — fakes and /roll alike — landed on the dead item).
+ML.sessions = {}
+ML.parkedSessions = nil
+ML.session = nil
+LW.parked = {}
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+  { itemID = 1002, link = "item:1002", badge = "SR" },
+}, "loot")
+LW.OpenDetail(1001)
+ML.sessions[1001] = { id = 41, itemID = 1001, itemLink = "item:1001",
+  mode = "SR", silent = false, rolls = {}, t = 0, itemCount = 1,
+  dispName = "item:1001" }
+ML.session = ML.sessions[1001]
+LW.detail.phase = "rolling"
+LW.detail.sessionID = 41
+-- The frame X button routes through the Close ACTION (finish+park),
+-- never a bare dismiss: emulate the handler via its named entry.
+LW.OnCloseButton()
+ok(ML.session == nil, "X close clears the session alias")
+ok(LW.ParkedDetail(1001) ~= nil, "X close parks award rows")
+eq(LW.ParkedDetail(1001).phase, "preaward", "X close finished first")
+ok(ML.ParkedSession(1001) ~= nil, "X close parks the session")
+-- Next item rolls clean on a fresh session; intake follows the alias.
+LW.OpenDetail(1002)
+ML.sessions[1002] = { id = 42, itemID = 1002, itemLink = "item:1002",
+  mode = "SR", silent = false, rolls = {}, t = 0, itemCount = 1,
+  dispName = "item:1002" }
+ML.session = ML.sessions[1002]
+LW.detail.phase = "rolling"
+LW.detail.sessionID = 42
+ok(LW.DetailOnRoll(1002, 42, "Solo", 70, "SR", 70), "roll lands on B")
+ZugLoot.DB = ZugLoot.DB or {}
+ML.OnSystemRoll("SoloPlayer", 55, 1, 100)
+eq(#ML.sessions[1002].rolls, 1, "self-roll lands on the new session")
+eq(ML.sessions[1002].rolls[1].name, "SoloPlayer", "self-roll named")
+ML.sessions = {}
+ML.parkedSessions = nil
+ML.session = nil
+LW.parked = {}
+LW.CloseDetail()
 
 -- 8. Flow layout: one row when wide, wrap when narrow, justified.
 -- Wide bar: all four share one justified row (even side margins).

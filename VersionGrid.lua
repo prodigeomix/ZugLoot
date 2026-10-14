@@ -28,21 +28,40 @@ function M.OnVersion(sender, version)
   if sender then M.seen[sender] = { version = Z.Util.Trim(version or "?"), online = true } end
 end
 
+-- Player name captured into a local FIRST: this client extends some
+-- name APIs with extra returns (cf. UnitExists -> guid), and a bare
+-- UnitName() as table.insert's last arg propagates every return
+-- (3-arg insert -> "number expected, got string"). Locals truncate.
+local function myName()
+  if not UnitName then return nil end
+  local me = UnitName("player")
+  if me and me ~= "" then return me end
+  return nil
+end
+
 function M.RosterNames()
   local names = {}
+  -- Solo: only me, no group APIs at all.
+  local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
+    and Z.SRSecurity.IsSolo()
+  if solo then
+    table.insert(names, myName() or "you")
+    return names
+  end
   if GetNumRaidMembers and GetNumRaidMembers() > 0 then
     for i = 1, GetNumRaidMembers() do
       local name = GetRaidRosterInfo(i)
       if name then table.insert(names, name) end
     end
   elseif GetNumPartyMembers then
-    table.insert(names, UnitName("player"))
+    local me = myName()
+    if me then table.insert(names, me) end
     for i = 1, GetNumPartyMembers() do
       local n = UnitName("party" .. i)
       if n then table.insert(names, n) end
     end
   else
-    table.insert(names, UnitName("player") or "you")
+    table.insert(names, myName() or "you")
   end
   return names
 end

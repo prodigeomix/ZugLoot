@@ -5,15 +5,52 @@ local Z = ZugLoot
 local M = {}
 Z.MasterLootUI = M
 
--- Roll sessions, one per item: the ML works several items at once (roll A,
--- close, roll B, award B, reopen A off its saved rolls). Exactly one
--- session is ACTIVE (its item's rolls feed the session; chat/system rolls
--- land there). M.session stays as the active-session alias so every
--- existing reader keeps working; M.sessions holds the per-item rest.
-M.session = nil -- active { id, itemID, itemLink, mode, rolls={}, t=0, itemCount=1 }
-M.sessions = {} -- [itemID] = session (active one included)
+-- Roll sessions, one per (corpse, item): the ML works several items at
+-- once (roll A, close, roll B, award B, reopen A off its saved rolls) --
+-- and the SAME item can roll on two corpses at once. Every roll table
+-- below is keyed by ROLL KEY (corpse + item), never bare itemID: a bare
+-- key lets corpse B's finish/award overwrite corpse A's parked session
+-- and menu, drops A's rolls, and routes every later feed to the dead
+-- item. Exactly one session is ACTIVE (its item's rolls feed the
+-- session; chat/system rolls land there). M.session stays as the
+-- active-session alias so every existing reader keeps working;
+-- M.sessions holds the per-key rest.
+M.session = nil -- active { key, corpse, id, itemID, itemLink, mode, rolls={}, t=0, itemCount=1 }
+M.sessions = {} -- [rollKey] = session (active one included)
 
 local sessionSeq = 0
+
+-- Corpse identity for ROLL state (sessions, menus, parked details, sim
+-- lives/timers): the PINNED corpse key (M.lootKey, guid: preferred, fp:
+-- fallback), else nil (sim rows, /rf rolls, headless -- bare itemID keys,
+-- as before). lootKey is pinned per open corpse and survives partial
+-- loots; identity must not shift under a live roll, so sessions stamp it
+-- once at BeginSession and lookups re-pin the same value while the corpse
+-- is open. After the corpse closes/pins elsewhere (walk-back gap), keyed
+-- lookups fall back: lone-copy resolution in ParkedDetail, keyless legacy
+-- sessions in SessionFor.
+function M.CorpseID()
+  return M.lootKey
+end
+
+-- Roll key: corpse-scoped when a corpse is pinned, bare itemID otherwise
+-- (numeric itemIDs stay numeric -- headless/sim/tests keep working).
+function M.RollKey(itemID, corpse)
+  if corpse == nil then corpse = M.CorpseID() end
+  if corpse and corpse ~= "" then
+    return tostring(corpse) .. "|" .. tostring(itemID)
+  end
+  return itemID
+end
+
+-- Key carried on a session table (stamped once at BeginSession, never
+-- recomputed -- identity must not shift under a live roll). Keyless
+-- sessions (legacy/test stubs) resolve against the given corpse.
+local function sessKey(sess, corpse)
+  if sess and sess.key ~= nil then return sess.key end
+  if sess and sess.itemID ~= nil then return M.RollKey(sess.itemID, corpse) end
+  return nil
+end
 
 -- Loot console is universal: anyone who can SEE the loot runs the window
 -- (solo, party/raid of any loot method, master looter or not). Rolling and
@@ -34,9 +71,9 @@ function M.BeginSession(itemID, itemLink, mode, silent)
   sessionSeq = sessionSeq + 1
   local itemCount = 1
   if mode == "TWO" then itemCount = 2 end
-  local sess = { id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
+  local sess = { key = M.RollKey(itemID), corpse = M.CorpseID(), id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
   M.sessions = M.sessions or {}
-  M.sessions[itemID] = sess
+  M.sessions[sess.key] = sess
   M.session = sess -- this roll is the active one
   -- Chat-visible name, resolved once (never a bare item:id in chat).
   sess.dispName = M.DisplayItemLink(itemID, itemLink)
@@ -60,11 +97,18 @@ function M.BeginSession(itemID, itemLink, mode, silent)
   return sess
 end
 
--- Look up a roll session: this item's own session when it has one
--- (multi-roll: each item owns its rolls), else the active session.
-function M.SessionFor(itemID)
-  if itemID and M.sessions and M.sessions[itemID] then
-    return M.sessions[itemID]
+-- Look up a roll session: this (corpse, item)'s own session when it has
+-- one (multi-roll: each item owns its rolls; same item on two corpses
+-- owns two), else the active session.
+function M.SessionFor(itemID, corpse)
+  if itemID and M.sessions then
+    local k = M.RollKey(itemID, corpse)
+    if M.sessions[k] then return M.sessions[k] end
+    -- Fallback: a live keyless session for this item (legacy /rf / sim
+    -- rows carry no corpse) is still this item's roll.
+    for _, s2 in pairs(M.sessions) do
+      if s2 and s2.key == nil and s2.itemID == itemID then return s2 end
+    end
   end
   return M.session
 end
@@ -73,12 +117,13 @@ end
 -- remaining sessions (or nil when none are left).
 function M.DropSession(sess)
   if not sess then return end
-  if M.parkedSessions and sess.itemID
-      and M.parkedSessions[sess.itemID] == sess then
-    M.parkedSessions[sess.itemID] = nil
+  local k = sessKey(sess)
+  if M.parkedSessions and k
+      and M.parkedSessions[k] == sess then
+    M.parkedSessions[k] = nil
   end
-  if M.sessions and sess.itemID and M.sessions[sess.itemID] == sess then
-    M.sessions[sess.itemID] = nil
+  if M.sessions and k and M.sessions[k] == sess then
+    M.sessions[k] = nil
   end
   if M.session == sess then
     M.session = nil
@@ -106,7 +151,7 @@ function M.StartItemRoll(itemIDorLink)
   if not M.RequireML() then return end
   local itemID = Z.Util.ItemID(itemIDorLink)
   if not itemID then Z.Print("Usage: /zl roll <itemlink|itemID>") return end
-  if M.sessions and M.sessions[itemID] then
+  if M.SessionFor(itemID) and M.SessionFor(itemID).itemID == itemID then
     Z.Print("A roll is already running for this item — finish or /zl cr first.")
     return
   end
@@ -160,8 +205,20 @@ function M.OnItemSystemRoll(itemID, player, roll, minR, maxR, sessionID)
     end
     if sess == nil then return end
   end
-  if not sess and itemID and M.sessions[itemID] then
-    sess = M.sessions[itemID]
+  if not sess and itemID and M.sessions then
+    -- Prefer the exact key (same item on two corpses: the feed carries
+    -- its session id, so ambiguous item-only feeds must NOT spray both
+    -- -- nil sessionID + two live same-item sessions = refuse to guess).
+    local k = M.RollKey(itemID)
+    if M.sessions[k] then
+      sess = M.sessions[k]
+    else
+      for _, s2 in pairs(M.sessions) do
+        if s2 and s2.key == nil and s2.itemID == itemID then
+          sess = s2 break
+        end
+      end
+    end
   end
   if not sess then return end
   M.ApplySystemRoll(sess, player, roll, minR, maxR)
@@ -239,13 +296,13 @@ end
 
 function M.FinishEarly(itemID) M.Finish(true, itemID) end
 function M.Cancel(itemID)
-  local sess = (itemID and M.sessions and M.sessions[itemID])
-    or M.SessionFor(itemID) or M.session
+  local sess = M.SessionFor(itemID) or M.session
   if not sess then Z.Print("No active session.") return end
   local wasSilent = sess.silent
   local itemID = sess.itemID
   local sessionID = sess.id
-  if M.pendingAwardMenus then M.pendingAwardMenus[itemID] = nil end
+  local ck = M.RollKey(itemID)
+  if M.pendingAwardMenus then M.pendingAwardMenus[ck] = nil end
   if not M.pendingAwardMenus then M.pendingAwardMenu = nil end
   if Z.Sim and Z.Sim.KillItemTimers then Z.Sim.KillItemTimers(itemID) end
   M.DropSession(sess)
@@ -283,10 +340,11 @@ end
 M.parkedSessions = nil
 function M.ParkSession(sess)
   if not sess then return end
+  local k = sessKey(sess)
   M.parkedSessions = M.parkedSessions or {}
-  M.parkedSessions[sess.itemID] = sess
-  if M.sessions and sess.itemID and M.sessions[sess.itemID] == sess then
-    M.sessions[sess.itemID] = nil
+  M.parkedSessions[k] = sess
+  if M.sessions and k and M.sessions[k] == sess then
+    M.sessions[k] = nil
   end
   if M.session == sess then
     M.session = nil
@@ -302,9 +360,10 @@ end
 -- resolvable for award/continue decisions while collecting no rolls.
 function M.SessionAny(itemID)
   if not itemID then return M.session end
-  if M.sessions and M.sessions[itemID] then return M.sessions[itemID] end
-  if M.parkedSessions and M.parkedSessions[itemID] then
-    return M.parkedSessions[itemID]
+  local k = M.RollKey(itemID)
+  if M.sessions and M.sessions[k] then return M.sessions[k] end
+  if M.parkedSessions and M.parkedSessions[k] then
+    return M.parkedSessions[k]
   end
   return nil
 end
@@ -312,17 +371,32 @@ end
 -- Re-attach a parked session so a continued roll appends to the same list.
 function M.UnparkSession(sess)
   if not sess then return end
-  if M.parkedSessions and M.parkedSessions[sess.itemID] == sess then
-    M.parkedSessions[sess.itemID] = nil
+  local k = sessKey(sess)
+  if M.parkedSessions and M.parkedSessions[k] == sess then
+    M.parkedSessions[k] = nil
   end
   M.sessions = M.sessions or {}
-  M.sessions[sess.itemID] = sess
+  M.sessions[k] = sess
   M.session = sess
 end
 
 -- A parked session by item (nil once awarded/cancelled).
 function M.ParkedSession(itemID)
-  if itemID and M.parkedSessions then return M.parkedSessions[itemID] end
+  if itemID and M.parkedSessions then
+    local k = M.RollKey(itemID)
+    if M.parkedSessions[k] then return M.parkedSessions[k] end
+    -- Unscoped lookup (walk-back before the corpse re-pins): exactly one
+    -- parked session for this item returns it; two corpses = ambiguous,
+    -- nil (the pinned path above owns that case).
+    local found = nil
+    for _, s2 in pairs(M.parkedSessions) do
+      if s2 and s2.itemID == itemID then
+        if found then return nil end
+        found = s2
+      end
+    end
+    return found
+  end
   return nil
 end
 
@@ -333,8 +407,7 @@ end
 -- ended, award pending): more rolls can't land on it, but Continue
 -- re-attaches it explicitly.
 function M.Finish(manual, itemID)
-  local sess = (itemID and M.sessions and M.sessions[itemID])
-    or M.SessionFor(itemID) or M.session
+  local sess = M.SessionFor(itemID) or M.session
   if not sess then Z.Print("No active session.") return "closed" end
   M.session = sess
   local sheet = Z.DB and Z.DB.sheet
@@ -676,8 +749,9 @@ end
 -- M.pendingAwardMenu stays as the legacy alias of the active item's menu.
 function M.ShowAwardMenu(sess, data)
   M.pendingAwardMenus = M.pendingAwardMenus or {}
-  M.pendingAwardMenus[sess.itemID] = { sess = sess, data = data }
-  M.pendingAwardMenu = M.pendingAwardMenus[sess.itemID]
+  local sk = sess.key or M.RollKey(sess.itemID)
+  M.pendingAwardMenus[sk] = { sess = sess, data = data }
+  M.pendingAwardMenu = M.pendingAwardMenus[sk]
   if Z.AwardMenuUI and Z.AwardMenuUI.Show then
     Z.AwardMenuUI.Show(sess, data)
     return
@@ -1050,8 +1124,9 @@ M.pendingAwardMenus = nil -- per-item { [itemID] = { sess, data } } while the ML
 
 function M.HandleSimAward(sess, data)
   M.pendingAwardMenus = M.pendingAwardMenus or {}
-  M.pendingAwardMenus[sess.itemID] = { sess = sess, data = data }
-  M.pendingAwardMenu = M.pendingAwardMenus[sess.itemID]
+  local sk = sess.key or M.RollKey(sess.itemID)
+  M.pendingAwardMenus[sk] = { sess = sess, data = data }
+  M.pendingAwardMenu = M.pendingAwardMenus[sk]
   local winners = data.winners or {}
   if Z.Util.ArrayCount(winners) == 0 then
     -- Nobody eligible: the item stays open for the ML to award anyone
@@ -1080,10 +1155,10 @@ function M.AwardChosen(choice, itemID)
   local openID = Z.LootWindow and Z.LootWindow.detail
     and Z.LootWindow.detail.itemID or nil
   if M.pendingAwardMenus then
-    if itemID and M.pendingAwardMenus[itemID] then
-      pend = M.pendingAwardMenus[itemID]
-    elseif openID and M.pendingAwardMenus[openID] then
-      pend = M.pendingAwardMenus[openID]
+    if itemID and M.pendingAwardMenus[M.RollKey(itemID)] then
+      pend = M.pendingAwardMenus[M.RollKey(itemID)]
+    elseif openID and M.pendingAwardMenus[M.RollKey(openID)] then
+      pend = M.pendingAwardMenus[M.RollKey(openID)]
     end
   end
   if not pend and itemID and M.session and M.session.itemID == itemID then
@@ -1135,8 +1210,14 @@ function M.AwardChosen(choice, itemID)
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
-    if M.pendingAwardMenus then M.pendingAwardMenus[sess.itemID] = nil end
+    local ak = sess.key or M.RollKey(sess.itemID)
+    if M.pendingAwardMenus then M.pendingAwardMenus[ak] = nil end
     M.pendingAwardMenu = nil
+    if M.pendingAwardMenus then
+      for _, other in pairs(M.pendingAwardMenus) do
+        if other then M.pendingAwardMenu = other break end
+      end
+    end
     M.DropSession(sess)
     if sess.rehearse then
       -- Rehearsal award: normal live award above, then next queued item.
@@ -1171,8 +1252,14 @@ function M.AwardChosen(choice, itemID)
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
-    if M.pendingAwardMenus then M.pendingAwardMenus[sess.itemID] = nil end
+    local ak = sess.key or M.RollKey(sess.itemID)
+    if M.pendingAwardMenus then M.pendingAwardMenus[ak] = nil end
     M.pendingAwardMenu = nil
+    if M.pendingAwardMenus then
+      for _, other in pairs(M.pendingAwardMenus) do
+        if other then M.pendingAwardMenu = other break end
+      end
+    end
     M.DropSession(sess)
     if sess.rehearse then
       if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
@@ -1188,21 +1275,22 @@ end
 -- Legacy entry point (pre-menu auto-award). Kept for compatibility:
 -- routes through the menu choice so the ML still confirms.
 function M.Award(itemID, itemLink, winnerEntry)
-  local sess = (M.sessions and M.sessions[itemID]) or M.session
+  local sess = M.SessionFor(itemID) or M.session
   if sess and sess.itemID == itemID then
+    local akey = sess.key or M.RollKey(itemID)
     local menu = { sess = sess, data = M.BuildAwardMenu(sess,
       Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
         sess.itemID, sess.rolls, { cap = Z.Caps.SR, requireSR = true, itemCount = sess.itemCount })) }
     M.pendingAwardMenus = M.pendingAwardMenus or {}
-    M.pendingAwardMenus[itemID] = menu
+    M.pendingAwardMenus[akey] = menu
     M.pendingAwardMenu = menu
   else
     local menu = { sess = { itemID = itemID, itemLink = itemLink, id = 0, silent = false, itemCount = 1 },
       data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
         candidates = {}, perType = {}, none = false, itemID = itemID, itemLink = itemLink } }
     M.pendingAwardMenus = M.pendingAwardMenus or {}
-    M.pendingAwardMenus[itemID] = menu
-    M.pendingAwardMenu = menu
+    M.pendingAwardMenus[M.RollKey(itemID)] = menu
+    M.pendingAwardMenu = M.pendingAwardMenus[M.RollKey(itemID)]
   end
   M.AwardChosen({ name = winnerEntry.name, via = "winner" }, itemID)
 end
@@ -1459,6 +1547,18 @@ function M.ParkCorpse()
     local oldest = table.remove(M.corpseOrder, 1)
     if oldest then M.corpseCache[oldest] = nil end
   end
+  -- Shelve this corpse's unplayed rehearsal queue entries with it (the
+  -- shared pending queue is ResetFresh-wiped on every new-corpse scan).
+  -- LIVE entries (rolling now) stay put — they belong to the active flow.
+  local rehearsePending = {}
+  if Z.Sim and Z.Sim.pending then
+    for i = Z.Util.ArrayCount(Z.Sim.pending), 1, -1 do
+      local e = Z.Sim.pending[i]
+      if e and e.rehearse and (e.corpse == nil or e.corpse == key) then
+        table.insert(rehearsePending, table.remove(Z.Sim.pending, i))
+      end
+    end
+  end
   M.corpseCache[key] = {
     key = key, guid = M.lootGUID, target = M.lootTarget,
     rows = W and snapshotRows(W.items) or {},
@@ -1470,6 +1570,7 @@ function M.ParkCorpse()
     awardMenus = M.pendingAwardMenus,
     awardMenu = M.pendingAwardMenu,
     pendingLoot = M.pendingLoot,
+    rehearsePending = rehearsePending,
   }
 end
 -- Restore a cached corpse onto the live tables. Sessions re-link by id;
@@ -1525,6 +1626,16 @@ function M.RestoreCorpse(key)
   end
   if not M.pendingAwardMenu then M.pendingAwardMenu = e.awardMenu end
   if not M.pendingLoot then M.pendingLoot = e.pendingLoot end
+  -- Unshelve this corpse's rehearsal queue: re-add entries not already
+  -- covered live (played on while parked, or re-queued by top-up).
+  if Z.Sim and e.rehearsePending then
+    for i = 1, Z.Util.ArrayCount(e.rehearsePending) do
+      local qe = e.rehearsePending[i]
+      if qe and not Z.Sim.RehearsalCovered(qe.itemID) then
+        table.insert(Z.Sim.pending, qe)
+      end
+    end
+  end
   M.lootGUID = e.guid
   M.lootTarget = e.target
   M.lootKey = e.key

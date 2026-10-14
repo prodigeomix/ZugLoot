@@ -718,6 +718,61 @@ ML.Finish(true, 1001)
 ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(ZugLoot.SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "A awarded after B")
 ok(ML.corpseCache["guid:GUID-A"] == nil or true, "A resolved")
+-- SAME item on two corpses: each corpse owns its rolls, menu and window
+-- state (roll key = corpse + item). B's finish/award must not touch A's
+-- parked session, parked menu, or parked detail — and B's roll rows must
+-- not leak into A's window on walk-back.
+ML.corpseCache = {}
+ML.corpseOrder = {}
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-A" end
+end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened() -- corpse A: roll the SAME item, finish it, park it
+ok(LW.OpenDetail(1001) ~= nil, "A detail opens")
+eq(LW.doAction(1001, "roll"), "rolling", "A starts rolling")
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+eq(LW.doAction(1001, "finish"), "finished", "A finishes into parked award")
+local keyA = ML.RollKey(1001)
+ok(ML.ParkedSession(1001) ~= nil, "A session parked")
+ok(keyA ~= 1001, "roll key is corpse-scoped (not bare itemID)")
+LW.OnEvent("LOOT_CLOSED") -- walk away from A
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-B" end
+end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } } -- same item!
+ML.OnLootOpened() -- corpse B: fresh roll of the same item, finish, award
+local sessB0 = ML.SessionFor(1001)
+ok(sessB0 == nil or sessB0.key ~= keyA, "B scan keeps its own state")
+eq(LW.doAction(1001, "roll"), "rolling", "B rolls the same item")
+ML.ApplySystemRoll(ML.session, "Bbb", 80, 1, 100)
+eq(#ML.session.rolls, 1, "B session holds only B's roll")
+eq(ML.session.rolls[1].name, "Bbb", "A's roll did not leak into B")
+eq(LW.doAction(1001, "finish"), "finished", "B finishes into parked award")
+ML.AwardChosen({ name = "Bbb", via = "winner" })
+ok(ZugLoot.SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "B awarded")
+-- Walk back to A: A's rolls, menu and window come back whole.
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-A" end
+end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+ok(LW.Find(1001) ~= nil, "A rows resume after B award")
+local sessA = ML.ParkedSession(1001) or ML.SessionFor(1001)
+ok(sessA ~= nil, "A session survived B's award")
+eq(#(sessA and sessA.rolls or {}), 1, "A rolls not wiped by B")
+eq((sessA and sessA.rolls[1] and sessA.rolls[1].name), "Aaa", "A roll data intact")
+ok(ML.pendingAwardMenu ~= nil, "A award menu restored")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(ZugLoot.SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "A awarded after B")
+-- Fresh corpse C: no phantom rolling row for the item.
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-C" end
+end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+local rowC = LW.Find(1001)
+ok(rowC ~= nil and rowC.status == "open", "fresh corpse opens clean, not rolling")
 UnitExists = nil
 -- No GUID (stock API shape: exists only) falls back to name+fingerprint.
 UnitExists = function(unit)

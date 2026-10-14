@@ -675,10 +675,90 @@ Sim.StopRehearsal()
 ok(not Sim.rehearseRun, "auto run stopped")
 eq(ZugLoot.DB.sheet, realSheet, "sheet restored after stop")
 ZugLoot.DB.rollAuto = false
+-- 19b. Second corpse mid-run tops up (ResetFresh wipes the queue on
+-- every corpse): unplayed entries from corpse A survive alongside B's.
+-- X-close on a rolling window finishes+parks (shared Close path), so a
+-- fresh roll for the next item starts clean with intake on the alias.
+ZugLoot.DB.rehearse = true
+ZugLoot.DB.rollAuto = false
+lootSlots = {
+  { link = "item:1001:0:0:0", quality = 4 },
+  { link = "item:1002:0:0:0", quality = 4 },
+}
+ML.OnLootOpened()
+eq(#Sim.pending, 2, "corpse A queues two entries")
+eq(LW.doAction(1001, "roll"), "rolling", "A head rolling")
+ok(drain(), "drain A head")
+ok(ML.pendingAwardMenu ~= nil, "A head awaiting award")
+-- Loot corpse B while A's award pends: B's rows queue, A's menu lives.
+lootSlots = {
+  { link = "item:1003:0:0:0", quality = 4 },
+}
+ML.OnLootOpened()
+local queuedB = false
+for i = 1, #Sim.pending do
+  if Sim.pending[i] and Sim.pending[i].itemID == 1003 then queuedB = true end
+end
+ok(queuedB, "corpse B tops up the run")
+-- A's menu parks into A's cache entry (awards need A's corpse open, so
+-- A is awarded after walking back — the designed resume flow).
+local aMenuParked = false
+for _, e in pairs(ML.corpseCache or {}) do
+  if e and e.awardMenus then
+    for k, menu in pairs(e.awardMenus) do
+      if menu and menu.sess and menu.sess.itemID == 1001 then
+        aMenuParked = true
+      end
+    end
+  end
+end
+ok(aMenuParked, "A award menu parked in A's cache entry")
+-- A's UNPLAYED queue entry (1002) shelves with A's corpse too — B's scan
+-- ResetFresh must not orphan it.
+local aQueueParked = false
+for _, e in pairs(ML.corpseCache or {}) do
+  if e and e.rehearsePending then
+    for j = 1, #e.rehearsePending do
+      if e.rehearsePending[j] and e.rehearsePending[j].itemID == 1002 then
+        aQueueParked = true
+      end
+    end
+  end
+end
+ok(aQueueParked, "A unplayed queue entry shelved with A's corpse")
+eq(LW.doAction(1003, "roll"), "rolling", "B rolls while A parked")
+ok(drain(), "drain B head")
+ok(ML.pendingAwardMenu ~= nil, "B award menu pending")
+ML.AwardChosen({ name = "Bryn", via = "winner" })
+ok(drain(), "drain B award")
+-- Walk back to A: window, roll state and award menu restore whole.
+lootSlots = {
+  { link = "item:1001:0:0:0", quality = 4 },
+  { link = "item:1002:0:0:0", quality = 4 },
+}
+ML.OnLootOpened()
+ok(ML.pendingAwardMenu ~= nil, "A award menu restored on walk-back")
+ML.AwardChosen({ name = "Aldric", via = "winner" })
+ok(drain(), "drain A award")
+ok(not Sim.rehearseRun, "interleaved run ended")
+eq(ZugLoot.DB.sheet, realSheet, "sheet restored after interleave")
 -- Flag off: corpse scan queues nothing.
 ZugLoot.DB.rehearse = false
 ML.OnLootOpened()
 ok(not Sim.rehearseRun, "flag off: no rehearsal run")
+-- New corpse during a live sim follows the shared fresh-corpse rule
+-- (ResetFresh clears all flows equally — sims die on new corpses by
+-- design); rehearsal then starts clean on the fresh rows like any flow.
+ZugLoot.DB.rehearse = true
+lootSlots = { { link = "item:2001:0:0:0", quality = 4 } } -- fresh corpse
+ML.OnLootOpened()
+local freshQ = false
+for i = 1, #Sim.pending do
+  if Sim.pending[i] and Sim.pending[i].itemID == 2001 then freshQ = true end
+end
+ok(freshQ, "fresh corpse queues under shared fresh-corpse rule")
+Sim.StopRehearsal()
+ZugLoot.DB.rehearse = false
 -- Cleanup live-only globals this section introduced.
 GetNumLootItems, GetLootSlotLink, LootSlotIsCoin, GetLootSlotInfo = nil, nil, nil, nil
 GetItemInfo, LootSlot, UnitName = nil, nil, nil
