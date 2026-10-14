@@ -13,6 +13,31 @@ function Z.Print(msg)
   end
 end
 
+-- Multi-line /zl help: grouped sections, one line per command with a
+-- real description. Headless-testable (returns the lines too).
+-- Slim command set: windows do the rest via buttons/menus. Kept:
+-- sheet, import, loadfile, sheetreq, sync, simboss, simstop, rehearse.
+function Z.HelpLines()
+  return {
+    "|cFFFFD700ZugLoot v" .. tostring(Z.VERSION or "?") .. " — commands:|r",
+    "    sheet ............ open the SR sheet",
+    "    import ........... paste a raidres export or line-format sheet",
+    "    loadfile ......... import from CustomData/ZugLoot_SR.txt",
+    "    sheetreq ......... ask the group for the current sheet (ML/leader answers)",
+    "    sync <name> ...... ask ONE player for their sheet (player link works)",
+    "    simboss <boss> ... queue a boss's drops, you roll each",
+    "    simstop .......... stop the sim, reset everything",
+    "    rehearse [on|off]  solo master-loot practice with invented rollers",
+    "    help ............. this list",
+  }
+end
+
+function Z.PrintHelp()
+  local lines = Z.HelpLines()
+  for i = 1, #lines do Z.Print(lines[i]) end
+  return lines
+end
+
 function Z.InitDB()
   ZugLootDB = ZugLootDB or {}
   ZugLootCharDB = ZugLootCharDB or {}
@@ -134,66 +159,19 @@ function Z.Slash(msg)
   local cmd, rest = string.match(msg, "^(%S+)%s*(.*)$")
   cmd = string.lower(cmd or "")
   rest = rest or ""
+  -- Slim command set (windows do the rest via buttons/menus):
+  -- sheet, import, loadfile, sheetreq, sync, simboss, simstop, rehearse.
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sheetreq|sync <name>|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|lootdebug|lootframe|rehearse|rollauto|help")
+    Z.PrintHelp()
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
-  elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
-  elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
   elseif cmd == "import" then Z.SRImport.ShowPaste()
   elseif cmd == "loadfile" then Z.SRImport.LoadFromFile()
-  elseif cmd == "rf" then Z.MasterLootUI.StartRoll(rest, "SR")
-  elseif cmd == "arf" then Z.MasterLootUI.StartRoll(rest, "OPEN")
-  elseif cmd == "rr" then Z.MasterLootUI.StartRaidRoll(rest)
-  elseif cmd == "2x" then Z.MasterLootUI.StartRoll(rest, "TWO")
-  elseif cmd == "fr" then Z.MasterLootUI.FinishEarly(Z.Util.ItemID(rest))
-  elseif cmd == "cr" then Z.MasterLootUI.Cancel(Z.Util.ItemID(rest))
-  elseif cmd == "show" then Z.RaiderLootUI.Show()
-  elseif cmd == "hide" then Z.RaiderLootUI.Hide()
-  elseif cmd == "time" then Z.RaiderLootUI.SetTime(tonumber(rest))
-  elseif cmd == "autoclose" then Z.RaiderLootUI.SetAutoClose(rest)
-  elseif cmd == "auto" then Z.AutoRoll.Set(rest)
-  elseif cmd == "ver" then Z.MainWindow.Toggle("versions")
-  elseif cmd == "verlist" then Z.VersionGrid.PrintList()
   elseif cmd == "sheetreq" then Z.Comm.RequestSheet()
   elseif cmd == "sync" then Z.Comm.RequestSheetFrom(rest)
-  elseif cmd == "sim" then Z.Sim.SimItem(rest)
   elseif cmd == "simboss" then Z.Sim.SimBoss(rest)
-  elseif cmd == "simtmog" then Z.Sim.SimTmog(rest)
-  elseif cmd == "simroll" then Z.Sim.RequestRoll(Z.Util.ItemID(rest))
   elseif cmd == "simstop" then Z.Sim.Stop()
-  elseif cmd == "roll" then Z.MasterLootUI.StartItemRoll(rest)
-  elseif cmd == "award" then
-    if Z.MasterLootUI and Z.MasterLootUI.RequireML() then
-      -- "/zl award Name [item]" — the item pins the decision when several
-      -- award menus are pending; without it the open item decides.
-      local nm, itemArg = string.match(rest, "^(%S+)%s*(.*)$")
-      local itemID = Z.Util.ItemID(itemArg or "")
-      Z.MasterLootUI.AwardChosen({ name = Z.Util.Trim(nm or ""), via = "menu" }, itemID)
-    end
-  elseif cmd == "lootdebug" then
-    Z.LootWindow.lootDebug = not Z.LootWindow.lootDebug
-    Z.Print("lootdebug " .. (Z.LootWindow.lootDebug and "ON" or "OFF"))
   elseif cmd == "rehearse" then
     if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end
-  elseif cmd == "rollauto" then
-    if Z.DB then
-      local s = string.lower(Z.Util.Trim(rest or ""))
-      if s == "on" or s == "1" then Z.DB.rollAuto = true
-      elseif s == "off" or s == "0" then Z.DB.rollAuto = false
-      else Z.DB.rollAuto = not Z.DB.rollAuto end
-      Z.Print("Auto-start rolls " .. (Z.DB.rollAuto and "ON" or "OFF"))
-    end
-  elseif cmd == "lootframe" then
-    if Z.LootWindow and Z.LootWindow.TakeoverWanted() then
-      Z.LootWindow.SetTakeoverWanted(false)
-      Z.Print("Loot frame: Blizzard's. (/zl lootframe to switch back)")
-    else
-      Z.LootWindow.SetTakeoverWanted(true)
-      Z.Print("Loot frame: ZugLoot. (takes over on the next corpse)")
-    end
-  elseif cmd == "log" then Z.DropLog.Show()
-  elseif cmd == "logclear" then Z.DropLog.Clear()
-  elseif cmd == "reset" then Z.SRImport.ResetWon()
   else Z.Print("unknown command. /zl help")
   end
 end
