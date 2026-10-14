@@ -174,4 +174,80 @@ ZugLoot.Timer.Update(10)
 eq(#sent, 0, "leader never double-sent")
 UnitName = oldName
 
+-- 7. Raid identity survives the broadcast: META envelope carries the
+-- raid name + import stamp, the receiver's header shows them (not "—").
+-- Needs the real SRImport/SRData (shimmed above) + archive shims.
+dofile("SRData.lua")
+dofile("SRImport.lua")
+local SRData = ZugLoot.SRData
+local RI = ZugLoot.SRImport
+ZugLoot.RaidArchive = { ArchiveActive = function() end, SyncActive = function() end }
+ZugLoot.MainWindow = nil
+ZugLoot.SRView = nil
+local raidSheet = SRData.NewSheet()
+raidSheet.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+raidSheet.meta.raidID = "LeadGal-1234"
+raidSheet.meta.raidName = "Molten Core"
+raidSheet.meta.importedBy = "LeadGal"
+raidSheet.meta.importedAt = 1234
+raidSheet.meta.source = "paste"
+local wirePayload = RI.SerializeSheet(raidSheet)
+ok(string.find(wirePayload, "META;", 1, true) ~= nil, "META envelope serialized")
+-- Full receive path through Comm (trusted sender, raid channel).
+raidMembers = 3
+raidRoster = { { "SoloPlayer", 0 }, { "LeadGal", 2 }, { "Other", 0 } }
+partyMembers = 0
+GetLootMethod = function() return "master" end
+GetLootMaster = function() return "NobodyHere" end
+ZugLoot.DB.sheet = nil
+Comm.OnMessage("SHEET:1:LeadGal-1234:" .. wirePayload, "LeadGal")
+ok(ZugLoot.DB.sheet ~= nil, "sheet received")
+eq(ZugLoot.DB.sheet.meta.raidName, "Molten Core", "raid name survives sync")
+eq(ZugLoot.DB.sheet.meta.raidID, "LeadGal-1234", "raid id survives sync")
+eq(ZugLoot.DB.sheet.meta.importedAt, 1234, "import stamp survives sync")
+eq(ZugLoot.DB.sheet.meta.importedBy, "LeadGal", "sender stamped")
+ok(ZugLoot.DB.sheet.items[1001] ~= nil, "items survive sync")
+-- META escaping: commas in names survive the envelope.
+local commaSheet = SRData.NewSheet()
+commaSheet.items[7] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+commaSheet.meta.raidName = "Ahn'Qiraj, Temple"
+local wireC = RI.SerializeSheet(commaSheet)
+local backC = RI.DeserializeSheet(wireC)
+eq(backC.meta.raidName, "Ahn'Qiraj, Temple", "comma in raid name survives")
+-- Legacy sender (no META line): receiver still stamps id + sender.
+ZugLoot.DB.sheet = nil
+Comm.OnMessage("SHEET:1:legacy-9:A;1:1", "LeadGal")
+ok(ZugLoot.DB.sheet ~= nil, "legacy sheet received")
+eq(ZugLoot.DB.sheet.meta.raidID, "legacy-9", "legacy raid id stamped")
+eq(ZugLoot.DB.sheet.meta.importedBy, "LeadGal", "legacy sender stamped")
+
+-- 8. Sync updates: same raidID + newer META stamp applies; same raidID +
+-- older stamp is refused (never rolls the raid back).
+ZugLoot.DB.sheet = nil
+Comm.OnMessage("SHEET:1:LeadGal-1234:" .. wirePayload, "LeadGal")
+ok(ZugLoot.DB.sheet ~= nil, "base sync lands")
+eq(#ZugLoot.DB.sheet.items[1001].rollers, 1, "base content")
+-- Build an update: same raid, newer stamp, extra roller.
+local updSheet = SRData.NewSheet()
+updSheet.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 }, { name = "Bbb", rolls = 1 } } }
+updSheet.meta.raidID = "LeadGal-1234"
+updSheet.meta.raidName = "Molten Core"
+updSheet.meta.importedBy = "LeadGal"
+updSheet.meta.importedAt = 9999
+updSheet.meta.source = "paste"
+Comm.OnMessage("SHEET:1:LeadGal-1234:" .. RI.SerializeSheet(updSheet), "LeadGal")
+eq(#ZugLoot.DB.sheet.items[1001].rollers, 2, "sync update applies (keeps id)")
+eq(ZugLoot.DB.sheet.meta.raidID, "LeadGal-1234", "sync update keeps raid id")
+eq(ZugLoot.DB.sheet.meta.raidName, "Molten Core", "sync update keeps raid name")
+-- Stale re-send (older stamp): refused, live update kept.
+local staleSheet = SRData.NewSheet()
+staleSheet.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+staleSheet.meta.raidID = "LeadGal-1234"
+staleSheet.meta.raidName = "Molten Core"
+staleSheet.meta.importedBy = "LeadGal"
+staleSheet.meta.importedAt = 1234
+staleSheet.meta.source = "paste"
+Comm.OnMessage("SHEET:1:LeadGal-1234:" .. RI.SerializeSheet(staleSheet), "LeadGal")
+eq(#ZugLoot.DB.sheet.items[1001].rollers, 2, "stale sync refused, update kept")
+
 return T

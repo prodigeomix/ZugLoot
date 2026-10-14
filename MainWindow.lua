@@ -703,15 +703,10 @@ function M.Refresh()
     .. "   |   " .. tostring((meta and meta.raidName) or "—")
     .. "   |   started " .. started
     .. "   |   " .. tostring(nItems) .. " items   |   " .. tostring(nRolls) .. " rolled")
-  -- Get-sheet button visibility: in-group with no sheet only. Solo has
-  -- nobody to ask; sheet holders (and the ML/leader, who import) need
-  -- no fetch button.
-  if M.reqSheetBtn and M.reqSheetBtn.Show and M.reqSheetBtn.Hide then
-    local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
-      and Z.SRSecurity.IsSolo()
-    if not solo and not sheet then M.reqSheetBtn:Show()
-    else M.reqSheetBtn:Hide() end
-  end
+  -- Get-sheet button is always visible (re-sync on demand: new raid,
+  -- sheet updated mid-run, or just making sure). Solo it prints "nobody
+  -- to ask" via RequestSheet — no special-casing here.
+  if M.reqSheetBtn and M.reqSheetBtn.Show then M.reqSheetBtn:Show() end
   for _, tb in ipairs(tabBtns) do
     if tb.key == M.activeTab then
       tb.fs:SetTextColor(PAL.ink[1], PAL.ink[2], PAL.ink[3])

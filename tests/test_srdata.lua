@@ -130,4 +130,54 @@ ok(badSheet == nil and badErr ~= nil, "ParseAnyImport rejects garbage")
 local ids = SRData.SortedItemIDs(s2)
 ok(ids[1] < ids[2], "sorted ascending")
 
+-- 9. Same-raid updates keep the raidID and apply by revision, never by
+-- import order. Regression: re-importing/syncing an update kept the
+-- raidID but tripped the "raidID <= live raidID" stale guard, so every
+-- update was ignored as stale.
+time = function() return 5000 end -- deterministic "now"
+ZugLoot.RaidArchive = { ArchiveActive = function() end, SyncActive = function() end }
+ZugLoot.SRSecurity = { CanBroadcast = function() return false end }
+local RI = ZugLoot.SRImport
+-- Live sheet: raid R1 at revision 4000.
+local live = SRData.NewSheet()
+live.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+live.meta = { raidID = "R1", raidName = "Molten Core", importedAt = 4000,
+  importedBy = "ML", source = "paste" }
+ZugLoot.DB = { sheet = live }
+-- Paste re-import of an UPDATED export (same raidID, newer stamp 4500):
+-- applies, keeps the ID, archives nothing stale.
+local upd = SRData.NewSheet()
+upd.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 }, { name = "Bbb", rolls = 1 } } }
+upd.meta = { raidID = "R1", raidName = "Molten Core", importedAt = 4500, source = "paste" }
+local okUpd = RI.ApplySheet(upd, "paste", "ML")
+ok(okUpd ~= false, "same-raid update applies")
+eq(ZugLoot.DB.sheet.meta.raidID, "R1", "update keeps the raid id")
+eq(#ZugLoot.DB.sheet.items[1001].rollers, 2, "update content applied")
+ok(not RI.SheetIsStale(live, ZugLoot.DB.sheet), "newer revision not stale")
+-- Re-importing the OLD export (revision 4000) over the update: refused,
+-- live progress untouched.
+local old = SRData.NewSheet()
+old.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+old.meta = { raidID = "R1", raidName = "Molten Core", importedAt = 4000, source = "paste" }
+ok(RI.SheetIsStale(ZugLoot.DB.sheet, old), "older revision is stale")
+local okOld = RI.ApplySheet(old, "paste", "ML")
+eq(okOld, false, "stale re-import refused")
+eq(#ZugLoot.DB.sheet.items[1001].rollers, 2, "live update kept")
+-- Line-format re-import (no export time): stamps now (5000) — newer than
+-- anything applied, so it applies as a same-raid refresh.
+local lf, lferr = SRData.ParseLineFormat("Ccc;1001:1\n")
+ok(lf ~= nil, "line import parses: " .. tostring(lferr))
+lf.meta.raidID = "R1"
+local okLf = RI.ApplySheet(lf, "file", "ML")
+ok(okLf ~= false, "line-format refresh applies")
+eq(ZugLoot.DB.sheet.meta.raidID, "R1", "refresh keeps the raid id")
+eq(ZugLoot.DB.sheet.meta.importedAt, 5000, "refresh stamped now")
+-- Different raid always applies (no stale comparison across raids).
+local other = SRData.NewSheet()
+other.meta = { raidID = "R2", raidName = "BWL", importedAt = 100, source = "paste" }
+ok(not RI.SheetIsStale(ZugLoot.DB.sheet, other), "other raid never stale")
+local okOther = RI.ApplySheet(other, "paste", "ML")
+ok(okOther ~= false, "other raid applies")
+eq(ZugLoot.DB.sheet.meta.raidID, "R2", "raid switched")
+
 return T

@@ -44,8 +44,12 @@ Rules:
    `Load from File`) for preview/sim/sheet-view. No broadcast happens solo
    (`Comm.Channel()` is nil there; `VER_REQ`/`AWARD` also skip). `CanImport()`
    covers local loading; `CanBroadcast()` covers pushing to the group.
-2. Sheet broadcasts carry `raidID` (= leader name + import timestamp) and `version`.
-   Receivers overwrite only if `raidID` is newer; stale sheets never clobber fresh ones.
+2. Sheet broadcasts carry `raidID` (= leader name + import timestamp), `version`,
+   and a META envelope (raid name + revision stamp). Same-raid updates keep
+   the raidID and apply by revision (`importedAt`: raidres export time, else
+   import time) — older-or-equal revisions are stale and refused on ALL paths
+   (paste, file, sync), BEFORE archiving, so an old export can never roll a
+   newer update back. Different raidIDs always apply.
 3. Raiders get a **read-only** copy. There is no addon-message path for a raider to
    push sheet edits.
 4. Comm prefix: `ZugLoot` (chat addon channel `CHAT_MSG_ADDON`). Message types:
@@ -165,7 +169,7 @@ Sheet = {
   scroll bodies with scrollbar + mouse wheel). Tabs: **Sheet** (default) |
   **Raids** | **Members** | **Setup**. `/zl log` prints the drop log to
   chat, `/zl ver` opens Members, `/zl raids` opens Raids. Header row:
-  Reset rolls | Get sheet (in-group, sheetless only) | Import | File —
+  Reset rolls | Get sheet (always visible; solo prints “nobody to ask”) | Import | File —
   Setup holds options only (no duplicate import/clear buttons). (`SRView`/
   `VersionGrid` standalone frames retired into tabs; their modules keep
   pure logic + slash commands. DropLog has no tab: `Show()` prints.)
@@ -413,6 +417,12 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   addons on this client) rejects bare pipes in chat/addon traffic with
   “Invalid escape code in chat message”. Decode order: `%B` → `|` first,
   `%P` → `%` last.
+- Raid identity envelope: `SerializeSheet` leads with a
+  `META;raidID=…,name=…,by=…,at=…,src=…` line (commas escaped `%C`), so a
+  synced sheet shows the raid name in the header/archive instead of “—”.
+  `ParseLineFormat` skips META; `ExtractMeta` strips + parses it on
+  receive; legacy senders without META still get message-raidID + trusted
+  sender stamped. `DeserializeSheet` applies META only where non-empty.
 - Grid of **rectangles**: group first, then SR-sheet players not in the
   group. Full name in class color (outlined). Colors (muted):
   green = in group + on the sheet, red = in group + no SR,

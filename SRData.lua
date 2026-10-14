@@ -174,6 +174,10 @@ function M.ParseLineFormat(text)
         return nil, "line " .. lineNo .. ": missing ';' in '" .. t .. "'"
       end
       head = Util.Trim(head)
+      -- META lines belong to the broadcast envelope, not the sheet:
+      -- skip them here (ExtractMeta consumes them on receive). Unknown
+      -- heads would otherwise fail as player names.
+      if string.upper(head) ~= "META" then
       local parts = Util.Split(tail, ",")
       if string.upper(head) == "HARDRES" then
         for i = 1, Util.ArrayCount(parts) do
@@ -193,6 +197,7 @@ function M.ParseLineFormat(text)
           if err then return nil, "line " .. lineNo .. ": " .. err end
           addRoller(sheet, itemID, 4, head, count, (plus > 0) and plus or nil)
         end
+      end
       end
     end
   end
@@ -224,8 +229,16 @@ function M.TransformRaidRes(data)
   sheet.meta.source = "paste"
   local metaId = nil
   local raidName = nil
+  local exportAt = nil
   if type(data.metadata) == "table" then
     if data.metadata.id then metaId = tostring(data.metadata.id) end
+    -- Export time = content revision: prefer an explicit timestamp when
+    -- the exporter provides one (exportedAt / exported_at / updatedAt /
+    -- timestamp, epoch seconds), else fall back to import time at apply.
+    for _, k in ipairs({ "exportedAt", "exported_at", "updatedAt", "updated_at", "timestamp", "exported" }) do
+      local v = tonumber(data.metadata[k])
+      if v and v > 0 then exportAt = v break end
+    end
     -- Raid/instance name: `instances` array first, then `instance` (name or id).
     local inst = data.metadata.instances
     if type(inst) == "table" then
@@ -240,6 +253,7 @@ function M.TransformRaidRes(data)
   end
   sheet.meta.raidID = metaId
   sheet.meta.raidName = raidName
+  sheet.meta.importedAt = exportAt or 0 -- 0 = unknown: ApplySheet stamps now
   local function xform(items, name, role, quality)
     for i = 1, Util.ArrayCount(items) do
       local it = items[i]

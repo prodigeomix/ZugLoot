@@ -189,11 +189,22 @@ function M.OnMessage(msg, sender)
     if not payload then Z.Print("Bad sheet message from " .. tostring(sender)) return end
     local sheet, err = Z.SRImport.DeserializeSheet(payload)
     if not sheet then Z.Print("Sheet import failed: " .. tostring(err)) return end
-    sheet.meta.raidID = raidID
+    -- Envelope (META line) carries the raid identity; the message raidID
+    -- and the trusted sender fill gaps it leaves (legacy senders send no
+    -- META at all). Sender always wins: we know who pushed it.
+    sheet.meta = sheet.meta or {}
+    if not sheet.meta.raidID or sheet.meta.raidID == "" then
+      sheet.meta.raidID = raidID
+    end
     sheet.meta.importedBy = sender
-    -- Stale guard: never overwrite a newer raidID.
-    if Z.DB.sheet and Z.DB.sheet.meta.raidID and raidID <= Z.DB.sheet.meta.raidID then
-      Z.Print("Ignored stale sheet " .. tostring(raidID))
+    -- Stale guard: same raid compares content revision (importedAt from
+    -- the META envelope), not the raidID string — a re-sent update keeps
+    -- its raidID but carries a NEWER stamp and must apply. Refuse BEFORE
+    -- archiving (archiving first would snapshot progress, then drop it).
+    if Z.SRImport and Z.SRImport.SheetIsStale
+        and Z.SRImport.SheetIsStale(Z.DB and Z.DB.sheet, sheet) then
+      Z.Print("Ignored stale sheet " .. tostring(sheet.meta.raidID)
+        .. " (a newer update is already applied).")
       return
     end
     if Z.RaidArchive then

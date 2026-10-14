@@ -240,7 +240,7 @@ assert(hb and hb.reset, "header Reset rolls button built");
 assert(hb.getsheet, "header Get sheet button built");
 assert(hb.import, "header Import button built");
 assert(hb.file, "header File button built");
-assert(hb.getsheetVisible == false, "mock is solo: Get sheet hidden");
+assert(hb.getsheetVisible == true, "Get sheet always visible");
 -- LootBlare-style roll window: build, show item, feed grouped rolls.
 Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
 -- icon + name resolve link-first (regression: bare-ID call showed no

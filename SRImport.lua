@@ -11,8 +11,26 @@ local editBox = nil
 
 -- Serialize normalized sheet to a compact string for SHEET broadcast.
 -- Format: line format (lossless for our model) — no JSON lib needed in client.
+-- First line is META (raid identity for the receiver's header/archive):
+--   META;raidID=<id>,name=<raid name>,by=<importer>,at=<epoch>,src=<source>
+-- Commas inside values are sent as %C (the line format splits PLAYERS /
+-- entries on commas, and DeserializeSheet must see META first anyway).
+-- Tag-less META lines are skipped by ParseLineFormat-looking parsers that
+-- don't know META (unknown heads fall through harmlessly — see below).
 function M.SerializeSheet(sheet)
   local lines = {}
+  local meta = sheet.meta or {}
+  local function mval(v)
+    local s = tostring(v or "")
+    s = string.gsub(s, "%%", "%%P") -- escape % first (symmetric w/ wire)
+    s = string.gsub(s, ",", "%%C")
+    return s
+  end
+  table.insert(lines, "META;raidID=" .. mval(meta.raidID)
+    .. ",name=" .. mval(meta.raidName)
+    .. ",by=" .. mval(meta.importedBy)
+    .. ",at=" .. mval(meta.importedAt)
+    .. ",src=" .. mval(meta.source))
   for _, id in ipairs(Z.SRData.SortedItemIDs(sheet)) do
     local rollers = Z.SRData.GetRollers(sheet, id)
     for i = 1, Z.Util.ArrayCount(rollers) do
@@ -46,6 +64,37 @@ function M.SerializeSheet(sheet)
   return table.concat(lines, "|")
 end
 
+-- Inverse of the META value escape above (%C -> comma, %P -> %). Order:
+-- commas first, % last (a literal "%C" arrived as "%PC").
+local function munesc(s)
+  s = string.gsub(tostring(s or ""), "%%C", ",")
+  s = string.gsub(s, "%%P", "%%")
+  return s
+end
+
+-- Pull the META line out of a decoded sheet text. Returns meta table +
+-- remaining text (META line removed). Absent META (legacy/old clients,
+-- hand-written sheets): returns nil + original text — the receiver keeps
+-- its fallback stamping (raidID from the message, name "—").
+function M.ExtractMeta(text)
+  text = tostring(text or "")
+  local metaLine = string.match(text, "^META;([^\n]*)\n?")
+    or string.match(text, "\nMETA;([^\n]*)")
+  if not metaLine then return nil, text end
+  local meta = {}
+  for k, v in string.gmatch(metaLine, "([%w]+)=([^,]*),?") do
+    if k == "raidID" then meta.raidID = munesc(v)
+    elseif k == "name" then meta.raidName = munesc(v)
+    elseif k == "by" then meta.importedBy = munesc(v)
+    elseif k == "at" then meta.importedAt = tonumber(munesc(v)) or 0
+    elseif k == "src" then meta.source = munesc(v) end
+  end
+  -- Strip the META line (first occurrence) so item parsing never sees it.
+  local stripped, n = string.gsub(text, "META;" .. metaLine:gsub("(%W)", "%%%1"), "", 1)
+  if n == 0 then stripped = text end
+  return meta, stripped
+end
+
 -- Decode a broadcast payload: tagged wire form (B64/ESC, see
 -- Comm.EncodeSheetPayload) or legacy raw line text (old clients, tests).
 -- ESC unescapes in the SAFE order: %B -> | first, %P -> % last (a
@@ -77,15 +126,58 @@ function M.DeserializeSheet(payload)
   local text, err = M.DecodeSheetPayload(payload)
   if not text then return nil, err end
   if not string.find(text, ";") then return nil, "empty sheet" end
+  -- META envelope first (raid identity for the receiver's header):
+  -- parsed aside, stripped from the item text.
+  local meta, rest = M.ExtractMeta(text)
   -- Per-name lines with single entries parse via line format.
-  return Z.SRData.ParseLineFormat(text)
+  local sheet, perr = Z.SRData.ParseLineFormat(rest)
+  if not sheet then return nil, perr end
+  if meta then
+    sheet.meta = sheet.meta or {}
+    -- Envelope wins only where it actually carries a value (empty =
+    -- unknown, keep the parse defaults, not blank strings).
+    if meta.raidID and meta.raidID ~= "" then sheet.meta.raidID = meta.raidID end
+    if meta.raidName and meta.raidName ~= "" then sheet.meta.raidName = meta.raidName end
+    if meta.importedBy and meta.importedBy ~= "" then sheet.meta.importedBy = meta.importedBy end
+    if meta.importedAt and meta.importedAt ~= 0 then sheet.meta.importedAt = meta.importedAt end
+    if meta.source and meta.source ~= "" then sheet.meta.source = meta.source end
+  end
+  return sheet, nil
+end
+
+-- Should this incoming sheet replace the live one? Same raid (by raidID)
+-- compares CONTENT revision, not the raid: importedAt is the revision
+-- stamp (export time on raidres, import time for line format). Older or
+-- equal revisions are stale — importing/syncing an old export over a
+-- newer update must never roll the raid back. Different raidID (or no
+-- live sheet): always accept.
+function M.SheetIsStale(cur, incoming)
+  if not cur or not cur.meta or not cur.meta.raidID then return false end
+  if not incoming or not incoming.meta then return false end
+  if incoming.meta.raidID ~= cur.meta.raidID then return false end
+  local curAt = tonumber(cur.meta.importedAt) or 0
+  local newAt = tonumber(incoming.meta.importedAt) or 0
+  return newAt <= curAt
 end
 
 function M.ApplySheet(sheet, source, importer)
+  sheet.meta = sheet.meta or {}
+  -- Revision stamp: a known export time (raidres metadata) wins; line
+  -- format and timestamp-less exports stamp NOW. Either way the stale
+  -- check below compares real revisions, never import order.
+  if not sheet.meta.importedAt or sheet.meta.importedAt == 0 then
+    sheet.meta.importedAt = (time and time()) or 0
+  end
   sheet.meta.source = source
-  sheet.meta.importedAt = (time and time()) or 0
   sheet.meta.importedBy = importer or (UnitName and UnitName("player")) or "?"
   sheet.meta.raidID = sheet.meta.raidID or (sheet.meta.importedBy .. "-" .. tostring(sheet.meta.importedAt))
+  -- Same raid, older-or-equal revision: stale. Refuse BEFORE archiving
+  -- (archiving first would snapshot live progress, then drop it).
+  if M.SheetIsStale(Z.DB and Z.DB.sheet, sheet) then
+    Z.Print("Ignored stale sheet for " .. tostring(sheet.meta.raidID)
+      .. " (a newer update is already applied).")
+    return false
+  end
   -- Keep the outgoing raid around: archive it before replacing.
   if Z.RaidArchive then
     Z.RaidArchive.ArchiveActive(Z.DB, (time and time()) or 0)
