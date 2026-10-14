@@ -173,7 +173,13 @@ Sheet = {
   Setup holds options only (no duplicate import/clear buttons). (`SRView`/
   `VersionGrid` standalone frames retired into tabs; their modules keep
   pure logic + slash commands. DropLog has no tab: `Show()` prints.)
-- **Sheet tab**, one card per item: SR'd items sorted by itemID ascending,
+- **Sheet tab**, one card per item in **3 even columns** (row-major flow,
+  single shared scroll body — columns scroll together; card styling
+  unchanged): SR rollers in **two columns** inside each card, drop count as
+  a green `[xN]` badge, **left-click opens the item roll-log window** (loot
+  icon + name header, every session newest-first): SR'd items alphabetical
+  by name (client cache, else sheet name, else item:id fallback; numeric
+  ids break ties),
   unreserved items (rolled but never SR'd — auto-added at the bottom, see §3.3):
   - icon button (texture via `GetItemInfo(tonumber(id))` numeric-ID trick, cf.
     LootBlare fix #8; quality-color bottom border). **Hover = full GameTooltip

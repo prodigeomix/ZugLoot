@@ -347,68 +347,84 @@ function M.RenderSheet()
     TrackRow(key, row, 40)
     return
   end
-  for ci = 1, Z.Util.ArrayCount(cards) do
-    local card = cards[ci]
-    local row = CreateFrame("Frame", nil, b.child)
-    row:SetWidth(BODY_WIDTH)
+  -- 3 even columns across the body. Cards flow row-major (1-2-3, 4-5-6)
+  -- and every column scrolls with the SAME scroll body, so the styling
+  -- (zebra, icons, tooltips) is untouched — only the placement changes.
+  local NCOL = 3
+  local GAP = 8
+  local colW = math.floor((BODY_WIDTH - (NCOL - 1) * GAP) / NCOL)
+  local nCards = Z.Util.ArrayCount(cards)
+  -- Column heights first (equal rows would strand short cards): each
+  -- card's height from its line count, columns stack independently and
+  -- the tracked row takes the tallest column. Rollers flow in TWO
+  -- columns inside the card, so a roller row costs ceil(n/2) lines;
+  -- roll HISTORY lives in the detail window (click), not on the card.
+  local function rollerRows(card)
+    local n = Z.Util.ArrayCount(card.rollers)
+    if n == 0 then return 1 end -- the "(no SRs — open roll)" line
+    return math.ceil(n / 2)
+  end
+  local function cardH(card)
+    local h = 30 + (rollerRows(card) * 13) + 14 -- + hint line
+    if h < 52 then h = 52 end
+    return h
+  end
+  local function buildCard(parent, card, w, ci)
+    -- Clickable card: a Button (frames can't take OnClick — the client
+    -- errors "unnamed doesn't have an OnClick script").
+    local row = CreateFrame("Button", nil, parent)
+    row:SetWidth(w)
     -- icon
     local icon = ItemIcon(row, card.itemID, 36)
     icon:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
     -- title: name + badges
     local title = FS(row, "GameFontNormal", "")
     title:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -4)
-    title:SetWidth(BODY_WIDTH - 60) title:SetJustifyH("LEFT")
+    title:SetWidth(w - 56) title:SetJustifyH("LEFT")
     local nice = ItemName(card.itemID, card.quality)
     local badges = ""
     if card.hardres then badges = badges .. "  |cFFFF8000[HR]|r" end
     if card.unsr then badges = badges .. "  |cff888888[not SR'd]|r" end
     local nRolls = Z.Util.ArrayCount(card.rollSessions)
     if nRolls > 0 then
-      badges = badges .. "  |cFF00FF00[rolled x" .. nRolls .. "]|r"
+      -- Drop count: how many times this item came up for a roll.
+      badges = badges .. "  |cFF00FF00[x" .. nRolls .. "]|r"
     end
     title:SetText(nice .. badges)
-    -- body lines: SR list, then each session's player lines
-    local lines = {}
-    if Z.Util.ArrayCount(card.rollers) > 0 then
-      for i = 1, Z.Util.ArrayCount(card.rollers) do
-        table.insert(lines, RollerLine(card.rollers[i]))
+    -- body: SR rollers in TWO columns (left half, right half).
+    local nR = Z.Util.ArrayCount(card.rollers)
+    M.zlCardCols = M.zlCardCols or {}
+    if nR > 0 then
+      M.zlCardCols[card.itemID] = { left = math.ceil(nR / 2), right = nR - math.ceil(nR / 2) }
+      local half = math.ceil(nR / 2)
+      local left, right = {}, {}
+      for i = 1, nR do
+        local line = RollerLine(card.rollers[i])
+        if i <= half then table.insert(left, line)
+        else table.insert(right, line) end
+      end
+      local bodyL = FS(row, "GameFontHighlightSmall", table.concat(left, "\n"))
+      bodyL:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -22)
+      bodyL:SetWidth(math.floor((w - 60) / 2)) bodyL:SetJustifyH("LEFT") bodyL:SetJustifyV("TOP")
+      if Z.Util.ArrayCount(right) > 0 then
+        local bodyR = FS(row, "GameFontHighlightSmall", table.concat(right, "\n"))
+        bodyR:SetPoint("TOPLEFT", row, "TOPLEFT", 48 + math.floor((w - 60) / 2) + 8, -22)
+        bodyR:SetWidth(math.floor((w - 60) / 2)) bodyR:SetJustifyH("LEFT") bodyR:SetJustifyV("TOP")
       end
     else
-      if card.unsr then
-        table.insert(lines, "|cff888888(not on SR sheet — open roll)|r")
-      else
-        table.insert(lines, "|cff888888(no SRs — open roll)|r")
-      end
+      local emptyTxt = "|cff888888(no SRs — open roll)|r"
+      if card.unsr then emptyTxt = "|cff888888(not on SR sheet — open roll)|r" end
+      local bodyE = FS(row, "GameFontHighlightSmall", emptyTxt)
+      bodyE:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -22)
+      bodyE:SetWidth(w - 56) bodyE:SetJustifyH("LEFT") bodyE:SetJustifyV("TOP")
     end
-    for s = 1, Z.Util.ArrayCount(card.rollSessions) do
-      local sess = card.rollSessions[s]
-      local wtxt = ""
-      if Z.Util.ArrayCount(sess.winners or {}) > 0 then
-        local wn = {}
-        for w = 1, Z.Util.ArrayCount(sess.winners) do
-          table.insert(wn, PName(sess.winners[w]))
-        end
-        wtxt = " => " .. table.concat(wn, ", ")
-      end
-      table.insert(lines, "|cFFFFD700— rolls #" .. s .. " (" .. tostring(sess.mode or "?") .. ")" .. wtxt .. "|r")
-      for m = 1, Z.Util.ArrayCount(sess.lines) do
-        local e = sess.lines[m]
-        local isW = false
-        for w = 1, Z.Util.ArrayCount(sess.winners or {}) do
-          if sess.winners[w] == e.name then isW = true break end
-        end
-        table.insert(lines, "    " .. RollLine(e, isW))
-      end
-      for t = 1, Z.Util.ArrayCount(sess.trades or {}) do
-        local tr = sess.trades[t]
-        table.insert(lines, "    |cff00FFFF" .. tostring(tr.from) .. " traded to " .. tostring(tr.to) .. " (transmog)|r")
-      end
-    end
-    local body = FS(row, "GameFontHighlightSmall", table.concat(lines, "\n"))
-    body:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -22)
-    body:SetWidth(BODY_WIDTH - 60) body:SetJustifyH("LEFT") body:SetJustifyV("TOP")
-    local h = 30 + (Z.Util.ArrayCount(lines) * 13)
-    if h < 52 then h = 52 end
+    -- hint line: click opens the roll-log window for this item.
+    local hint = FS(row, "GameFontHighlightSmall",
+      nRolls > 0 and ("|cff888888(click: " .. nRolls .. " roll log" .. (nRolls == 1 and "" or "s") .. ")|r")
+        or "|cff888888(not rolled yet)|r")
+    hint:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 48, 4)
+    hint:SetWidth(w - 56) hint:SetJustifyH("LEFT")
+    local h = cardH(card)
     row:SetHeight(h)
     -- zebra
     if math.mod(ci, 2) == 0 then
@@ -428,9 +444,163 @@ function M.RenderSheet()
     row:EnableMouse(true)
     Tip(row, "item:" .. tostring(card.itemID),
       card.hardres and "HARD RESERVED" or ("SR: " .. (table.concat(srNames, ", ") ~= "" and table.concat(srNames, ", ") or "none")),
-      nRolls > 0 and (nRolls .. " roll session(s) this raid — see rows") or "not rolled yet this raid")
-    TrackRow(key, row, h)
+      nRolls > 0 and (nRolls .. " roll session(s) this raid — click for the log") or "not rolled yet this raid")
+    -- Left click: roll-log window for this item (icon keeps its own
+    -- link-in-chat click; the card body opens the log).
+    local logID = card.itemID
+    if row.RegisterForClicks then
+      pcall(row.RegisterForClicks, row, "LeftButtonUp")
+    end
+    row:SetScript("OnClick", function() M.ShowItemLog(logID) end)
+    return row
   end
+  -- Row-major placement into 3 columns: each visual row is one tracked
+  -- TrackRow entry (single scroll body => everything scrolls together).
+  -- ci: card index; col = (ci-1) % 3; vy = stacked row heights.
+  local ri = 0
+  while ri * NCOL < nCards do
+    local rowF = CreateFrame("Frame", nil, b.child)
+    rowF:SetWidth(BODY_WIDTH)
+    local rh = 0
+    rowF.zlCells = {} -- placement record for the layout assert
+    for c = 0, NCOL - 1 do
+      local ci = ri * NCOL + c + 1
+      if ci <= nCards then
+        local card = cards[ci]
+        local cell = buildCard(rowF, card, colW, ci)
+        local cx = c * (colW + GAP)
+        cell:SetPoint("TOPLEFT", rowF, "TOPLEFT", cx, 0)
+        table.insert(rowF.zlCells, { x = cx, w = colW })
+        local ch = cardH(card)
+        if ch > rh then rh = ch end
+      end
+    end
+    rowF:SetHeight(rh)
+    TrackRow(key, rowF, rh)
+    ri = ri + 1
+  end
+end
+
+-------------------------------------------------------------------------------
+-- Item roll-log window: left-click a sheet card to open it. Loot icon +
+-- item name on top (pretty header), then every roll session newest-first
+-- with winner + full per-player lines. Standalone window (own frame, own
+-- close), nil-safe headless (data via ItemLogLines for tests).
+-------------------------------------------------------------------------------
+M.itemLogFrame = nil
+M.itemLogItem = nil
+
+-- Pure lines for an item's roll log (headless-testable): header +
+-- newest-first sessions. Returns { header={itemID, name}, lines={...} }.
+function M.ItemLogLines(itemID)
+  local sheet = Z.DB and Z.DB.sheet
+  local name = ItemName(itemID, sheet and sheet.items[itemID] and sheet.items[itemID].quality or 4)
+  local out = { header = { itemID = itemID, name = name }, lines = {} }
+  if not sheet then return out end
+  local cards = Z.ItemCards and Z.ItemCards.BuildCards(sheet) or {}
+  local card = nil
+  for i = 1, Z.Util.ArrayCount(cards) do
+    if cards[i].itemID == itemID then card = cards[i] break end
+  end
+  if not card then return out end
+  local nS = Z.Util.ArrayCount(card.rollSessions)
+  for s = nS, 1, -1 do
+    local sess = card.rollSessions[s]
+    local wtxt = ""
+    if Z.Util.ArrayCount(sess.winners or {}) > 0 then
+      local wn = {}
+      for w = 1, Z.Util.ArrayCount(sess.winners) do
+        table.insert(wn, PName(sess.winners[w]))
+      end
+      wtxt = " => " .. table.concat(wn, ", ")
+    end
+    local when = ""
+    if sess.t and sess.t > 0 and Z.Util.FormatTime then
+      when = " " .. Z.Util.FormatTime(sess.t)
+    end
+    table.insert(out.lines, "|cFFFFD700— drops/rolls #" .. s .. " (" .. tostring(sess.mode or "?") .. ")" .. wtxt .. when .. "|r")
+    for m = 1, Z.Util.ArrayCount(sess.lines) do
+      local e = sess.lines[m]
+      local isW = false
+      for w = 1, Z.Util.ArrayCount(sess.winners or {}) do
+        if sess.winners[w] == e.name then isW = true break end
+      end
+      table.insert(out.lines, "    " .. RollLine(e, isW))
+    end
+    for t = 1, Z.Util.ArrayCount(sess.trades or {}) do
+      local tr = sess.trades[t]
+      table.insert(out.lines, "    |cff00FFFF" .. tostring(tr.from) .. " traded to " .. tostring(tr.to) .. " (transmog)|r")
+    end
+  end
+  return out
+end
+
+function M.ShowItemLog(itemID)
+  M.itemLogItem = itemID
+  if not CreateFrame then return end -- headless: data via ItemLogLines
+  if M.itemLogFrame then
+    if M.itemLogFrame.Hide then M.itemLogFrame:Hide() end
+    M.itemLogFrame = nil
+  end
+  local sheet = Z.DB and Z.DB.sheet
+  local data = M.ItemLogLines(itemID)
+  local f = CreateFrame("Frame", "ZugLootItemLog", UIParent)
+  if type(f) ~= "table" or type(f.SetWidth) ~= "function"
+      or type(f.CreateFontString) ~= "function" then
+    return -- minimal stubs: data layer already built above
+  end
+  f:SetWidth(420) f:SetHeight(300)
+  f:SetPoint("CENTER", UIParent, "CENTER", 120, 60)
+  f:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+    edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+    tile = true, tileSize = 16, edgeSize = 16,
+    insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+  f:SetBackdropColor(0, 0, 0, 0.95)
+  f:SetMovable(true) f:EnableMouse(true)
+  f:RegisterForDrag("LeftButton")
+  f:SetScript("OnDragStart", function() f:StartMoving() end)
+  f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
+  f:SetClampedToScreen(true)
+  -- Above the main window: same strata but a higher level, so the log
+  -- never slides under it (nil-safe on mock frames).
+  if f.SetFrameStrata then pcall(f.SetFrameStrata, f, "DIALOG") end
+  if f.SetFrameLevel then
+    local lvl = 10
+    if M.frame and M.frame.GetFrameLevel then
+      local ok, ml = pcall(M.frame.GetFrameLevel, M.frame)
+      if ok and tonumber(ml) then lvl = tonumber(ml) + 10 end
+    end
+    pcall(f.SetFrameLevel, f, lvl)
+  end
+  -- Pretty header: loot icon (quality border) + item name + drop count.
+  local icon = ItemIcon(f, itemID, 40)
+  icon:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -12)
+  local nS = 0
+  if sheet and Z.ItemCards then
+    local cards = Z.ItemCards.BuildCards(sheet)
+    for i = 1, Z.Util.ArrayCount(cards) do
+      if cards[i].itemID == itemID then nS = Z.Util.ArrayCount(cards[i].rollSessions) break end
+    end
+  end
+  local title = FS(f, "GameFontNormalLarge", data.header.name)
+  title:SetPoint("TOPLEFT", f, "TOPLEFT", 60, -14)
+  title:SetWidth(340) title:SetJustifyH("LEFT")
+  local sub = FS(f, "GameFontHighlightSmall",
+    nS > 0 and ("dropped x" .. nS .. " this raid") or "not dropped yet this raid")
+  sub:SetPoint("TOPLEFT", f, "TOPLEFT", 60, -34)
+  sub:SetWidth(340) sub:SetJustifyH("LEFT")
+  sub:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3])
+  local xb = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+  xb:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
+  xb:SetScript("OnClick", function() f:Hide() end)
+  -- Session lines, newest first.
+  local body = FS(f, "GameFontHighlightSmall", table.concat(data.lines, "\n"))
+  body:SetPoint("TOPLEFT", f, "TOPLEFT", 12, -64)
+  body:SetWidth(396) body:SetJustifyH("LEFT") body:SetJustifyV("TOP")
+  local n = Z.Util.ArrayCount(data.lines)
+  f:SetHeight(math.max(140, 110 + n * 13))
+  if f.Show then f:Show() end
+  M.itemLogFrame = f
 end
 
 -------------------------------------------------------------------------------
@@ -752,6 +922,27 @@ end
 function M.DebugHeader()
   if headerFS and headerFS.GetText then return headerFS:GetText() end
   return nil
+end
+
+-- Test hook: roller-column split of one card ({ left, right } line
+-- counts). Recorded at build time (mock frames track no children).
+function M.DebugCardColumns(itemID)
+  local t = M.zlCardCols or {}
+  return t[itemID]
+end
+
+-- Test hook: tracked visual rows of a tab body for the sheet column
+-- layout assert ({ { h, cells = { {x, w}... } }... }). Card cells record
+-- their placement at build time (mock frames track no children).
+function M.DebugBodyRows(tabKey)
+  local bd = bodies[tabKey]
+  if not bd then return nil end
+  local out = {}
+  for i = 1, Z.Util.ArrayCount(bd.rows or {}) do
+    local rowF = bd.rows[i]
+    table.insert(out, { h = rowF.rowH, cells = rowF.zlCells })
+  end
+  return out
 end
 
 -- Test hook: current active-raid line text.

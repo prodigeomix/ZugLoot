@@ -93,6 +93,33 @@ Z.SRData.MarkWon(s, 17063, "Carbon");
 Z.DB.sheet = s;
 Z.DB.drops = { { t=1, itemID=17063, link="[Test Sword]", source="raid", outcome="award", winner="Carbon" } };
 Z.DB.sheet = s;
+-- Sheet tab renders cards in 3 even columns, one tracked row per visual
+-- row (single scroll body => columns scroll together).
+Z.MainWindow.SelectTab("sheet");
+local sheetRows = Z.MainWindow.DebugBodyRows("sheet");
+assert(sheetRows and #sheetRows == 2, "4 cards in 3 cols = 2 tracked rows, got " .. tostring(sheetRows and #sheetRows));
+local r1 = sheetRows[1];
+assert(r1.cells and #r1.cells == 3, "first visual row holds 3 cards");
+assert(r1.cells[1].x == 0 and r1.cells[2].x > r1.cells[1].x and r1.cells[3].x > r1.cells[2].x, "columns spaced left to right");
+assert(r1.cells[2].x - r1.cells[1].x == r1.cells[3].x - r1.cells[2].x, "columns evenly spaced");
+local r2 = sheetRows[2];
+assert(r2.cells and #r2.cells == 1, "last visual row holds the leftover card");
+print("sheet 3-column layout OK");
+-- Card rollers split into two columns (17063 has Blackfang + Carbon).
+local twoCol = Z.MainWindow.DebugCardColumns(17063);
+assert(twoCol and twoCol.left == 1 and twoCol.right == 1, "rollers split 1+1 across two columns, got " .. tostring(twoCol and (twoCol.left .. "+" .. twoCol.right)));
+print("sheet roller 2-column split OK");
+-- Drop-count badge + roll-log window data for the rolled item.
+local log = Z.MainWindow.ItemLogLines(17063);
+assert(log and log.header and log.header.itemID == 17063, "log header targets the item");
+assert(string.find(log.header.name, "Test Sword", 1, true), "log header names the item, got: " .. tostring(log.header.name));
+assert(#log.lines >= 3, "log holds session + player lines, got " .. tostring(#log.lines));
+assert(string.find(table.concat(log.lines, "\n"), "Carbon", 1, true), "log names the winner");
+-- Card click opens the log window (mock frame: builds + shows).
+Z.MainWindow.ShowItemLog(17063);
+assert(Z.MainWindow.itemLogFrame ~= nil, "log window built on card click");
+assert(Z.MainWindow.itemLogItem == 17063, "log window targets the clicked item");
+print("item roll-log window OK");
 -- ML loot window + award menu render under the mock frame API.
 Z.LootWindow.SetItems({ { itemID=19137, link="[Test Dagger]", quality=4, sr=1 } }, "loot");
 Z.LootWindow.Show("Boss loot");

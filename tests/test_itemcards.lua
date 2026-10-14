@@ -133,4 +133,38 @@ eq(SRData.PruneUnreserved(unSheet), 1, "one stub pruned")
 ok(unSheet.items[50] == nil, "stub gone")
 ok(unSheet.items[200] ~= nil, "SR item kept")
 
+-- 9. Cards sort alphabetically by item name (client cache or sheet
+-- name), numeric ids only as tie-break; stubs still trail at bottom.
+GetItemInfo = function(id)
+  local names = { [300] = "Zebra Blade", [100] = "Apple Staff", [200] = "Mango Axe" }
+  return names[tonumber(id)]
+end
+local alphaSheet = SRData.NewSheet()
+alphaSheet.items[300] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+alphaSheet.items[100] = { quality = 4, rollers = { { name = "Bbb", rolls = 1 } } }
+alphaSheet.items[200] = { quality = 4, rollers = { { name = "Ccc", rolls = 1 } } }
+local alphaCards = Cards.BuildCards(alphaSheet)
+eq(#alphaCards, 3, "three cards")
+eq(alphaCards[1].itemID, 100, "Apple Staff first")
+eq(alphaCards[2].itemID, 200, "Mango Axe second")
+eq(alphaCards[3].itemID, 300, "Zebra Blade last")
+-- Sheet-stored names work with no client cache either.
+GetItemInfo = nil
+local namedSheet = SRData.NewSheet()
+namedSheet.items[9] = { quality = 4, name = "Zulu", rollers = { { name = "Aaa", rolls = 1 } } }
+namedSheet.items[3] = { quality = 4, name = "Alpha", rollers = { { name = "Bbb", rolls = 1 } } }
+local namedCards = Cards.BuildCards(namedSheet)
+eq(namedCards[1].itemID, 3, "sheet name Alpha first")
+eq(namedCards[2].itemID, 9, "sheet name Zulu last")
+-- Uncached ids fall back to item:<id> (deterministic, still sorted).
+local bareSheet = SRData.NewSheet()
+bareSheet.items[50] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+bareSheet.items[5] = { quality = 4, rollers = { { name = "Bbb", rolls = 1 } } }
+local bareCards = Cards.BuildCards(bareSheet)
+eq(bareCards[1].itemID, 5, "item:5 before item:50")
+-- Wire order stays numeric regardless of names.
+local wireIDs = SRData.SortedCardIDs(alphaSheet, { keepNumeric = true })
+eq(table.concat(wireIDs, ","), "100,200,300", "broadcast order numeric")
+GetItemInfo = nil
+
 return T

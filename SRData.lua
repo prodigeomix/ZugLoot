@@ -360,8 +360,22 @@ function M.SortedItemIDs(sheet)
   return ids
 end
 
--- Card order: SR'd items numeric first, unreserved stubs at the bottom.
-function M.SortedCardIDs(sheet)
+-- Card order: alphabetical by item name, unreserved stubs (rolled but
+-- never SR'd) at the bottom. Names come from the client item cache
+-- (GetItemInfo); unknown ids fall back to "item:<id>" so the order stays
+-- deterministic headless and for uncached items. opts.keepNumeric keeps
+-- the legacy numeric order (broadcast serialize path — wire stability).
+function M.CardName(sheet, id)
+  local item = sheet.items[id]
+  local cached = item and item.name or nil
+  if cached and cached ~= "" then return tostring(cached) end
+  if GetItemInfo then
+    local ok, nm = pcall(GetItemInfo, tonumber(id))
+    if ok and nm and nm ~= "" then return tostring(nm) end
+  end
+  return "item:" .. tostring(id)
+end
+function M.SortedCardIDs(sheet, opts)
   local sr, un = {}, {}
   for id, item in pairs(sheet.items) do
     if type(item) == "table" and item.unsr == true then
@@ -370,8 +384,18 @@ function M.SortedCardIDs(sheet)
       table.insert(sr, id)
     end
   end
-  table.sort(sr)
-  table.sort(un)
+  if opts and opts.keepNumeric then
+    table.sort(sr)
+    table.sort(un)
+  else
+    local function byName(a, b)
+      local na, nb = M.CardName(sheet, a), M.CardName(sheet, b)
+      if na ~= nb then return na < nb end
+      return a < b -- tie-break: stable numeric fallback
+    end
+    table.sort(sr, byName)
+    table.sort(un, byName)
+  end
   for i = 1, Util.ArrayCount(un) do table.insert(sr, un[i]) end
   return sr
 end

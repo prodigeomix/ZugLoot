@@ -31,7 +31,8 @@ function M.SerializeSheet(sheet)
     .. ",by=" .. mval(meta.importedBy)
     .. ",at=" .. mval(meta.importedAt)
     .. ",src=" .. mval(meta.source))
-  for _, id in ipairs(Z.SRData.SortedItemIDs(sheet)) do
+  -- Wire order stays numeric (keepNumeric): receivers sort for display.
+  for _, id in ipairs(Z.SRData.SortedCardIDs(sheet, { keepNumeric = true })) do
     local rollers = Z.SRData.GetRollers(sheet, id)
     for i = 1, Z.Util.ArrayCount(rollers) do
       local r = rollers[i]
