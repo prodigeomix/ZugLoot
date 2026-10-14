@@ -13,7 +13,6 @@ local function ok(v, msg)
 end
 
 ZugLoot = {}
-dofile("Util.lua")
 dofile("ClassColors.lua")
 
 -- Mock group state: upvalues the security module reads via globals.
@@ -109,8 +108,20 @@ meIsPartyLeader = false
 UnitIsPartyLeader = nil
 ok(not Sec.IsLeader("LeadGal"), "no unit API: remote leader refused")
 ok(not Sec.CanAcceptFrom("LeadGal"), "no unit API: sheet refused")
+-- Restore the STOCK mock shapes (5b overrode UnitName/UnitIsPartyLeader
+-- with unit-dispatching versions; later sections need the plain ones).
 UnitName = function() return "SoloPlayer" end
 GetNumPartyMembers = function() return partyMembers end
+UnitIsPartyLeader = function(unit) return nil end
+-- Restore raid-shaped roster fns (5b overrode the unit/global fns).
+GetNumRaidMembers = function() return raidMembers end
+GetRaidRosterInfo = function(i)
+  local r = raidRoster[i]
+  if not r then return nil end
+  return r[1], r[2]
+end
+UnitName = function() return "SoloPlayer" end
+UnitIsPartyLeader = function(unit) return nil end
 
 -- 6. SHEET_REQ answer policy: ML answers, leader only when no ML sheet
 -- exists, raiders never. Needs sheet + timer + comm shims.
@@ -122,6 +133,9 @@ end
 ZugLoot.PREFIX = "ZugLoot"
 ZugLoot.Timer = ZugLoot.Timer
 ZugLoot.Print = function() end
+-- Comm/SRSecurity captured `local Z = ZugLoot` at load: Z.DB must live
+-- on that same table. Establish it once here (later sections mutate
+-- .sheet in place, never rebind).
 ZugLoot.DB = { sheet = nil }
 ZugLoot.SRImport = { SerializeSheet = function() return "A;1:1" end }
 local meIsML = false
@@ -164,6 +178,7 @@ eq(Sec.SheetReqAnswer(), nil, "no sheet: ML stays silent")
 UnitName = oldName
 -- Leader reply is delayed (timer) and cancelled by an arriving sheet.
 ZugLoot.DB.sheet = { items = {}, meta = {} }
+local oldName2 = UnitName
 UnitName = function() return "LeadGal" end
 raidRoster = { { "SoloPlayer", 0 }, { "LeadGal", 2 } }
 GetLootMaster = function() return "NobodyHere" end
@@ -175,7 +190,7 @@ Comm.OnMessage("SHEET:1:r1:A;1:1", "MasterLou") -- ML answered first
 eq(ZugLoot.Timer.Pending(), 0, "ML sheet cancels leader reply")
 ZugLoot.Timer.Update(10)
 eq(#sent, 0, "leader never double-sent")
-UnitName = oldName
+UnitName = oldName2
 
 -- 7. Raid identity survives the broadcast: META envelope carries the
 -- raid name + import stamp, the receiver's header shows them (not "—").
@@ -252,5 +267,45 @@ staleSheet.meta.importedAt = 1234
 staleSheet.meta.source = "paste"
 Comm.OnMessage("SHEET:1:LeadGal-1234:" .. RI.SerializeSheet(staleSheet), "LeadGal")
 eq(#ZugLoot.DB.sheet.items[1001].rollers, 2, "stale sync refused, update kept")
+
+-- 9. Targeted sync (/zl sync <name>): only the named player answers,
+-- directly (anyone holding a sheet may answer); trust stays on RECEIVE.
+-- (Restore the SRImport shim: section 7 loaded the real module above.)
+ZugLoot.SRImport = { SerializeSheet = function() return "A;1:1" end }
+UnitName = function() return "SoloPlayer" end
+raidMembers = 3
+raidRoster = { { "MasterLou", 0 }, { "SoloPlayer", 0 }, { "LeadGal", 2 } }
+partyMembers = 0
+GetLootMethod = function() return "master" end
+GetLootMaster = function() return "MasterLou" end
+ZugLoot.DB.sheet = { items = {}, meta = {} }
+-- Link-strip: color-coded [Name] links reduce to bare names.
+eq(Comm.StripPlayerLink("|cFFF58CBASoloPlayer|r"), "SoloPlayer", "color link stripped")
+eq(Comm.StripPlayerLink("|cFFF58CBA|Hplayer:SoloPlayer|h[SoloPlayer]|h|r"), "SoloPlayer", "player link stripped")
+eq(Comm.StripPlayerLink("SoloPlayer"), "SoloPlayer", "bare name passes through")
+-- Requester side: targeted request goes out addressed.
+sent = {}
+Comm.RequestSheetFrom("|cFFF58CBA|Hplayer:LeadGal|h[LeadGal]|h|r")
+eq(#sent, 1, "targeted request sent")
+ok(string.find(sent[1].msg, "SHEET_REQ:LeadGal", 1, true) ~= nil, "request addressed to LeadGal")
+Comm.RequestSheetFrom("")
+eq(#sent, 1, "empty name sends nothing (usage)")
+-- Answer side (as LeadGal): targeted request answered directly even
+-- though LeadGal is not ML and the ML is present (role policy bypass).
+sent = {}
+UnitName = function() return "LeadGal" end
+Comm.OnMessage("SHEET_REQ:LeadGal", "SoloPlayer")
+eq(#sent, 1, "named player answers directly")
+ok(string.find(sent[1].msg, "SHEET:", 1, true) ~= nil, "answer is a sheet")
+-- Wrong name: silence (not us, don't answer).
+sent = {}
+Comm.OnMessage("SHEET_REQ:SomebodyElse", "SoloPlayer")
+eq(#sent, 0, "wrong name stays silent")
+-- No sheet held: silence even when named.
+ZugLoot.DB.sheet = nil
+sent = {}
+Comm.OnMessage("SHEET_REQ:LeadGal", "SoloPlayer")
+eq(#sent, 0, "sheetless named player stays silent")
+UnitName = oldName
 
 return T

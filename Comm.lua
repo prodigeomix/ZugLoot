@@ -63,6 +63,26 @@ function M.RequestVersions()
   send("VER_REQ", c)
 end
 
+-- Strip a player link to its bare name: "|cFF...Name|r" (class-colored
+-- chat link, possibly with an |Hplayer:...|h wrapper) -> "Name".
+-- Anything without color markup passes through trimmed. Pure helper.
+function M.StripPlayerLink(s)
+  s = tostring(s or "")
+  -- |Hplayer:Name|h[Name]|h form (possibly itself color-wrapped):
+  -- prefer the bracket display.
+  local disp = string.match(s, "|Hplayer:[^|]*|h%[(.-)%]|h")
+  if disp and disp ~= "" then
+    -- Recurse: the display itself may carry color markup.
+    local inner = string.match(disp, "^|c%x%x%x%x%x%x%x%x(.-)|r$")
+    if inner then disp = inner end
+    return Z.Util.Trim(disp)
+  end
+  -- Bare color wrap |cXXXXXXXXName|r.
+  local inner = string.match(s, "^|c%x%x%x%x%x%x%x%x(.-)|r$")
+  if inner then return Z.Util.Trim(inner) end
+  return Z.Util.Trim(s)
+end
+
 -- Ask the group for the SR sheet (Members tab button, /zl sheetreq).
 -- Solo: nobody to ask. Everyone hears it; only the ML (or the leader
 -- when no ML sheet exists) answers — see OnMessage/SHEET_REQ.
@@ -75,6 +95,26 @@ function M.RequestSheet()
   local me = (UnitName and UnitName("player")) or "?"
   send("SHEET_REQ", c)
   Z.Print("Sheet requested from the master looter (" .. tostring(me) .. " asked).")
+end
+
+-- Ask ONE player for their sheet (/zl sync <name>): targeted request.
+-- Anyone may hold a sheet worth syncing (imports are open to all), but
+-- the RECEIVE side still only trusts ML/leader sheets (CanAcceptFrom) —
+-- a raider's answer arrives and is refused with the usual message.
+-- Name accepts player links (color-coded [Name]) as well as bare names.
+function M.RequestSheetFrom(rawName)
+  local c = M.Channel()
+  if not c then
+    Z.Print("No group to ask — solo has no sheet source.")
+    return
+  end
+  local name = M.StripPlayerLink(rawName)
+  if not name or name == "" then
+    Z.Print("Usage: /zl sync <name>")
+    return
+  end
+  send("SHEET_REQ:" .. name, c)
+  Z.Print("Sheet requested from " .. name .. ".")
 end
 function M.AnnounceVersion()
   local c = M.Channel()
@@ -142,9 +182,17 @@ function M.OnMessage(msg, sender)
   -- answer arrive first; a SHEET landing meanwhile cancels the leader's
   -- reply so the client never gets two competing sheets. Nobody else
   -- answers, ever — receivers only trust ML/leader sheets (CanAcceptFrom).
-  if msg == "SHEET_REQ" then
+  if msg == "SHEET_REQ" or string.sub(msg, 1, 10) == "SHEET_REQ:" then
+    -- Targeted form "SHEET_REQ:<name>": only answer when WE are the
+    -- named player (exact name match after link-strip). Anyone may be
+    -- asked (imports are open); trust is enforced on RECEIVE.
+    local target = string.match(msg, "^SHEET_REQ:(.+)$")
+    if target then
+      local me = UnitName and UnitName("player") or nil
+      if not me or Z.Comm.StripPlayerLink(target) ~= me then return end
+    end
     if Z.SRSecurity and Z.SRSecurity.ShouldAnswerSheetReq then
-      Z.SRSecurity.ShouldAnswerSheetReq(sender)
+      Z.SRSecurity.ShouldAnswerSheetReq(sender, target and true or false)
     end
     return
   end

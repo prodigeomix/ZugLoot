@@ -433,6 +433,11 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   gets two competing sheets. Raiders never answer. Receivers trust ONLY
   ML/leader sheets (`CanAcceptFrom` — a raider's sheet is refused even if
   one arrives). Solo: nobody to ask.
+- Targeted sync (`/zl sync <name>`, bare name or color-coded `[Name]`
+  player link): `SHEET_REQ:<name>` → ONLY the named player answers,
+  directly (anyone holding a sheet may answer — imports are open to
+  all). Trust stays on RECEIVE: a non-ML/leader answer still lands and
+  is refused by `CanAcceptFrom` with the usual message.
 - Wire encoding (`Comm.EncodeSheetPayload` / `SRImport.DecodeSheetPayload`):
   base64-wrapped when an encoder exists, else `%`-escaped raw (`%` →
   `%P`, `|` → `%B`). NEVER a bare `|`: ChatThrottleLib (bundled with other

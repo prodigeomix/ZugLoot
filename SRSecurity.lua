@@ -182,7 +182,15 @@ M._pendingSheetReply = nil -- leader-delayed reply handle (Timer)
 
 -- Comm calls this on SHEET_REQ. Sends at once (ML) or after the leader
 -- delay; prints what happened so the requester sees who answered.
-function M.ShouldAnswerSheetReq(requester)
+-- targeted = true for "/zl sync <name>" requests: the named player
+-- answers DIRECTLY when they hold a sheet (anyone may hold one) — no
+-- role check, no delay. Trust stays on RECEIVE (CanAcceptFrom).
+function M.ShouldAnswerSheetReq(requester, targeted)
+  if targeted then
+    if M.AnySheet() == nil then return nil end
+    M.AnswerSheetReq("direct")
+    return "direct"
+  end
   local role = M.SheetReqAnswer()
   if role == "ml" then
     M.AnswerSheetReq("ml")
@@ -204,10 +212,11 @@ function M.ShouldAnswerSheetReq(requester)
 end
 
 -- Perform the approved answer: broadcast our sheet to the group.
+-- role "direct" = named /zl sync answer (no role needed, sheet only).
 function M.AnswerSheetReq(role)
   local sheet = M.AnySheet()
   if not sheet then return false end
-  if role ~= "ml" and role ~= "leader" then return false end
+  if role ~= "ml" and role ~= "leader" and role ~= "direct" then return false end
   if Z.Comm and Z.Comm.BroadcastSheet then
     local raidID = sheet.meta and sheet.meta.raidID or "sheet"
     Z.Comm.BroadcastSheet(sheet, raidID)
