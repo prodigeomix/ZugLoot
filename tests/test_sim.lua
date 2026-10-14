@@ -609,6 +609,9 @@ LootSlot = function(slot, force) table.insert(lootedSlots, { slot, force }) end
 UnitName = function() return "SoloPlayer" end
 GetLootMethod = nil
 CreateFrame = nil -- headless: data layer only
+-- Manual default (general rollAuto off): items queue, nothing auto-plays —
+-- the ML picks each item's Roll button.
+ZugLoot.DB.rollAuto = false
 math.random = rigged({ 4, 90, 80, 70, 60 }) -- 4 rollers, then rolls
 local LW = ZugLoot.LootWindow
 local realSheet = makeSheet()
@@ -616,9 +619,16 @@ ZugLoot.DB.sheet = realSheet -- loaded sheet must be parked, never marked
 ML.OnLootOpened()
 math.random = realRandom
 eq(#LW.items, 3, "corpse rows listed (coin + 2 items)")
+ok(Sim.rehearseRun, "rehearsal run started")
+eq(#Sim.pending, 2, "both items queued, none auto-playing")
+ok(ML.session == nil, "manual default: no auto-start")
+ok(ZugLoot.DB.sheet ~= nil and ZugLoot.DB.sheet ~= realSheet,
+  "scratch sheet swapped in")
+-- ML picks the head item's Roll button: queued entry plays with fakes.
+eq(LW.doAction(1001, "roll"), "rolling", "Roll button plays queued entry")
 local liveEntry = nil
 for _, e in pairs(Sim.lives or {}) do liveEntry = e break end
-ok(liveEntry ~= nil and liveEntry.rehearse, "head entry auto-playing")
+ok(liveEntry ~= nil and liveEntry.rehearse, "queued entry playing")
 eq(#(liveEntry and liveEntry.rolls or {}), 4, "4 invented rolls (3-5 range)")
 local invented = true
 for i = 1, #(liveEntry and liveEntry.rolls or {}) do
@@ -628,20 +638,19 @@ for i = 1, #(liveEntry and liveEntry.rolls or {}) do
 end
 ok(invented, "rollers invented, none from the real sheet")
 ok(not SRData.HasWon(realSheet, 1001, "Aldric"), "real sheet untouched")
-ok(Sim.rehearseRun, "rehearsal run started")
-eq(#Sim.pending, 1, "one item left queued (head auto-playing)")
-ok(ZugLoot.DB.sheet ~= nil, "scratch sheet swapped in")
 -- Head plays: drain feeds + finish timer, menu pends for the ML.
 ok(drain(), "drain rehearsal head")
 ok(ML.pendingAwardMenu ~= nil, "award menu pending for ML pick")
-local menuItem = ML.pendingAwardMenu.sess.itemID
 -- Award it: corpse take fires for real (solo LootSlot + force flag).
 local beforeLoot = #lootedSlots
 ML.AwardChosen({ name = "Aldric", via = "winner" })
-ok(drain(), "drain rehearsal award + advance")
+ok(drain(), "drain rehearsal award")
 eq(#lootedSlots, beforeLoot + 1, "award really looted the corpse")
 eq(lootedSlots[#lootedSlots][2], 1, "corpse take passes force flag")
--- Queue advanced to the second item and played it; award that too.
+-- Manual mode: second item waits for its Roll button (no auto-advance).
+ok(ML.pendingAwardMenu == nil, "manual mode: no auto-advance")
+ok(Sim.rehearseRun, "run stays open with items queued")
+eq(LW.doAction(9, "roll"), "rolling", "Roll button plays second entry")
 ok(drain(), "drain rehearsal second item")
 if ML.pendingAwardMenu ~= nil then
   local beforeLoot2 = #lootedSlots
@@ -655,6 +664,17 @@ eq(ZugLoot.DB.sheet, realSheet, "real sheet restored after run")
 ok(not SRData.HasWon(realSheet, 1001, "Aldric")
   and not SRData.HasWon(realSheet, 9, "Bryn"),
   "rehearsal marks never touched the real sheet")
+-- General auto-start flag on: head auto-plays straight off the scan.
+ZugLoot.DB.rollAuto = true
+math.random = rigged({ 3, 90, 80, 70 })
+ML.OnLootOpened()
+math.random = realRandom
+ok(Sim.rehearseRun, "auto run started")
+ok(ML.session ~= nil, "auto-start: head rolling without a click")
+Sim.StopRehearsal()
+ok(not Sim.rehearseRun, "auto run stopped")
+eq(ZugLoot.DB.sheet, realSheet, "sheet restored after stop")
+ZugLoot.DB.rollAuto = false
 -- Flag off: corpse scan queues nothing.
 ZugLoot.DB.rehearse = false
 ML.OnLootOpened()

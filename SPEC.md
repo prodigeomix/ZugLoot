@@ -471,8 +471,10 @@ actual roll flow, not a separate code path:
 - `/zl rehearse [on|off]` (Setup tab `Rehearse` button flips it) — solo
   master-loot practice, no sheet needed. While on, every solo corpse's
   non-coin rows queue with 3–5 invented rollers (Aldric, Bryn, Cora, ...) 
-  and auto-play through the same pipeline (roll window, feed/finish
-  timers, award menu; the ML's own dice work too). Awarding is a REAL
+  and wait for the ML: each item's Roll button starts its roll through the
+  same pipeline (roll window, feed/finish timers, award menu; the ML's own
+  dice work too). `/zl rollauto [on|off]` (Setup `Auto-start`
+  checkbox, default OFF) auto-starts rolls instead. Awarding is a REAL
   live award — the item leaves the solo corpse via the normal
   `LootSlot(slot, 1)` take — which is the point: the full distribute flow
   rehearsed end to end. Runs against a scratch sheet (real sheet parked
@@ -562,6 +564,9 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl rehearse [on|off] solo master-loot practice: corpse items roll with invented
                     raiders (3-5 rolls), awards loot the corpse for real.
                     No sheet needed; real sheet parked on scratch, restored after.
+/zl rollauto [on|off] auto-start rolls as corpses are looted (default OFF:
+                    the ML picks each item's Roll button). General master-loot
+                    behaviour; rehearsal inherits it.
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)
 /zl help

@@ -24,6 +24,11 @@ function Z.InitDB()
   -- a roll window with invented rollers, then a real loot-through award.
   -- Persisted like other options; effect is solo-only. Absent = off.
   if ZugLootDB.rehearse == nil then ZugLootDB.rehearse = false end
+  -- Master-loot auto-start (see /zl rollauto): rolls begin by themselves
+  -- as corpses are looted. Default OFF — the ML picks each item's Roll
+  -- button. General behaviour, not rehearsal-specific (rehearsal inherits
+  -- it). Absent = off.
+  if ZugLootDB.rollAuto == nil then ZugLootDB.rollAuto = false end
   -- Loot-takeover kill-switch state (see LootWindow.NoteSilentLoot):
   -- once our LootSlot path proves dead, the takeover stays OFF across
   -- corpses and sessions until the user opts back in. Survives reloads
@@ -123,7 +128,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|lootdebug|lootframe|rehearse|help")
+    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|lootdebug|lootframe|rehearse|rollauto|help")
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
   elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
   elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
@@ -161,6 +166,14 @@ function Z.Slash(msg)
     Z.Print("lootdebug " .. (Z.LootWindow.lootDebug and "ON" or "OFF"))
   elseif cmd == "rehearse" then
     if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end
+  elseif cmd == "rollauto" then
+    if Z.DB then
+      local s = string.lower(Z.Util.Trim(rest or ""))
+      if s == "on" or s == "1" then Z.DB.rollAuto = true
+      elseif s == "off" or s == "0" then Z.DB.rollAuto = false
+      else Z.DB.rollAuto = not Z.DB.rollAuto end
+      Z.Print("Auto-start rolls " .. (Z.DB.rollAuto and "ON" or "OFF"))
+    end
   elseif cmd == "lootframe" then
     if Z.LootWindow and Z.LootWindow.TakeoverWanted() then
       Z.LootWindow.SetTakeoverWanted(false)

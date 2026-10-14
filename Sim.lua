@@ -567,9 +567,12 @@ function M.BuildRehearsalEntry(itemID, link)
     rehearse = true }
 end
 
--- Queue every non-coin corpse row for rehearsal and auto-play the head.
--- No-ops unless the Z.DB.rehearse flag is on, solo, idle, and the corpse
--- actually holds rollable rows. Returns the queued count.
+-- Queue every non-coin corpse row for rehearsal play. No-ops unless the
+-- Z.DB.rehearse flag is on, solo, idle, and the corpse actually holds
+-- rollable rows. Auto-starts the head ONLY when the general rollAuto
+-- master-loot option is on (default OFF: ML picks each Roll button)
+-- (default OFF: the ML picks each item's Roll button). Returns the
+-- queued count.
 function M.StartRehearsal()
   if not (Z.DB and Z.DB.rehearse) then return 0 end
   if not (Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo()) then return 0 end
@@ -594,7 +597,11 @@ function M.StartRehearsal()
   M.running = true
   Z.Print("Rehearsal: " .. n .. " item" .. (n == 1 and "" or "s")
     .. " queued — roll window + invented rolls, then award to loot.")
-  M.RehearseRoll(M.pending[1].itemID)
+  if Z.DB.rollAuto then
+    M.RehearseRoll(M.pending[1].itemID)
+  else
+    Z.Print("Rehearsal: pick an item's Roll button to start its roll.")
+  end
   return n
 end
 
@@ -604,7 +611,7 @@ end
 -- whose row already left the corpse are dropped (pre-roll award etc.).
 function M.RehearseRoll(itemID)
   local MLUI = Z.MasterLootUI
-  if MLUI and MLUI.session then return end -- sequential holds
+  if MLUI and MLUI.session then return false end -- sequential holds
   for i = 1, Z.Util.ArrayCount(M.pending) do
     local entry = M.pending[i]
     if entry and entry.itemID == itemID and entry.rehearse then
@@ -640,9 +647,10 @@ function M.RehearseRoll(itemID)
       end
       if W.MarkRolling then W.MarkRolling(itemID) end
       Z.Print("Rehearsal: rolling " .. dispName(itemID, entry.link) .. ".")
-      return
+      return true
     end
   end
+  return false
 end
 
 -- Drop a queued rehearsal entry (pre-roll award / cancel paths).
@@ -662,13 +670,24 @@ function M.DropRehearsal(itemID)
   return dropped
 end
 
--- Continuation after a rehearsal award: next queued item, else end the
--- run (restore the real sheet) and report. Timer-deferred like sim.
+-- Continuation after a rehearsal award: auto-start the next queued item
+-- only with the general rollAuto option on, else end the run when
+-- the queue drains (ML in control)
+-- (restore the real sheet) and report. Timer-deferred like sim.
 function M.afterRehearsal()
   Z.Timer.After(1.0, function()
+    if Z.DB and Z.DB.rollAuto then
+      for i = 1, Z.Util.ArrayCount(M.pending) do
+        local e = M.pending[i]
+        if e and e.rehearse then M.RehearseRoll(e.itemID) return end
+      end
+    end
     for i = 1, Z.Util.ArrayCount(M.pending) do
       local e = M.pending[i]
-      if e and e.rehearse then M.RehearseRoll(e.itemID) return end
+      if e and e.rehearse then
+        Z.Print("Rehearsal: pick the next item's Roll button (or enable auto-start).")
+        return
+      end
     end
     M.EndRehearsalRun("Rehearsal done — items looted, scratch sheet dropped.")
   end)

@@ -1266,6 +1266,19 @@ function M.doAction(itemID, actionID, extra)
     -- Re-roll of a parked item: drop the stale snapshot so the fresh
     -- session builds pristine roll state (no phantom duplicate rolls).
     M.DropParked(itemID)
+    -- Rehearsal queue first: the ML's Roll button plays the queued
+    -- invented-roller entry (fakes included), not a bare live roll.
+    if Z.Sim and Z.Sim.RehearseRoll then
+      local queued = false
+      for i = 1, Z.Util.ArrayCount(Z.Sim.pending or {}) do
+        local e = Z.Sim.pending[i]
+        if e and e.itemID == itemID and e.rehearse then queued = true break end
+      end
+      if queued then
+        if Z.Sim.RehearseRoll(itemID) then return "rolling" end
+        return "roll failed"
+      end
+    end
     local ok = false
     if d.source == "sim" then
       if Z.Sim and Z.Sim.RequestRoll then
