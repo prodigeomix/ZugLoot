@@ -299,6 +299,7 @@ eq(lootedSlots[#lootedSlots][2], 1, "SuperWoW force flag passed")
 -- Coin slot: first row, loots on click (client GetLootSlotType path is
 -- stubbed here via LootSlotIsCoin; the scan reads it, not the link).
 LootSlotIsCoin = function(slot) if lootSlots[slot] and lootSlots[slot].link == nil then return 1 end return 0 end
+GetLootSlotInfo = function(slot) if lootSlots[slot] and lootSlots[slot].link == nil then return "Interface\\Icons\\INV_Misc_Coin_01", lootSlots[slot].amount or "12 Copper" end end
 lootSlots = { { link = nil }, { link = "item:1001:0:0:0", quality = 4 } }
 ML.OnLootOpened()
 eq(ZugLoot.LootWindow.items[1].itemID, "Coin", "coin row leads the list")
@@ -306,11 +307,41 @@ ok(ZugLoot.LootWindow.items[1].coin, "coin flagged")
 local beforeCoin = #lootedSlots
 ML.LootCorpseSlot(nil, "Coin", "SoloPlayer")
 eq(#lootedSlots, beforeCoin + 1, "coin row loots its corpse slot")
+eq(ZugLoot.LootWindow.items[1].texture, "Interface\\Icons\\INV_Misc_Coin_01",
+  "coin row uses slot texture")
+-- Zero-copper corpses (empty coin slot) grow no phantom row …
+lootSlots = { { link = nil, amount = "0 Copper" },
+  { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(#ZugLoot.LootWindow.items, 1, "empty coin slot skipped")
+eq(ZugLoot.LootWindow.items[1].itemID, 1001, "item row only")
+-- … nor do blank-amount slots; icon falls back to the gold coin.
+lootSlots = { { link = nil, amount = "" } }
+GetLootSlotInfo = function(slot)
+  if lootSlots[slot] and lootSlots[slot].link == nil then
+    return nil, lootSlots[slot].amount
+  end
+end
+-- (empty scan leaves existing rows alone, so assert the scan itself)
+eq(ML.ScanSlot(1, 3), nil, "blank coin slot skipped")
+lootSlots = { { link = nil, amount = "3 Silver" } }
+ML.OnLootOpened()
+eq(ZugLoot.LootWindow.items[1].texture, "Interface\\Icons\\INV_Misc_Coin_01",
+  "coin icon fallback (no question mark)")
+-- IsEmptyCoin unit cases: nonzero digit anywhere = money.
+local LW2 = ZugLoot.LootWindow
+ok(LW2.IsEmptyCoin("0 Copper"), "0 copper is empty")
+ok(LW2.IsEmptyCoin(""), "blank is empty")
+ok(LW2.IsEmptyCoin(nil), "nil is empty")
+ok(not LW2.IsEmptyCoin("12 Copper"), "12 copper is money")
+ok(not LW2.IsEmptyCoin("1 Gold, 0 Silver, 0 Copper"), "mixed is money")
+GetLootSlotInfo = nil
 LootSlotIsCoin = nil
 -- Row click routing: coin/free rows loot at once (no detail); roll rows
 -- open the detail. Duplicate itemIDs loot the CLICKED slot only.
 local LW = ZugLoot.LootWindow
 LootSlotIsCoin = function(slot) if lootSlots[slot] and lootSlots[slot].link == nil then return 1 end return 0 end
+GetLootSlotInfo = function(slot) if lootSlots[slot] and lootSlots[slot].link == nil then return "Interface\\Icons\\INV_Misc_Coin_01", lootSlots[slot].amount or "12 Copper" end end
 lootSlots = { { link = nil },
   { link = "item:9:0:0:0", quality = 1 },
   { link = "item:9:0:0:0", quality = 1 },

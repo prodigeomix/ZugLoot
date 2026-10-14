@@ -1072,6 +1072,10 @@ end
 function M.ScanSlot(slot, threshold, groupThresh)
   if not GetNumLootItems then return nil end
   -- Coin first: no link, texture + amount text from the slot info.
+  -- Zero-copper corpses still carry an (empty) coin slot client-side —
+  -- skip it so wolves etc. don't grow a phantom "0 Copper" row.
+  -- Texture fallback chain: slot texture, then the stock gold-coin icon
+  -- (never the "?" placeholder — coin always has art on 1.12).
   if Z.LootWindow and Z.LootWindow.IsCoinSlot
       and Z.LootWindow.IsCoinSlot(slot) then
     local tex, slotName = nil, nil
@@ -1080,6 +1084,10 @@ function M.ScanSlot(slot, threshold, groupThresh)
       if type(a) == "string" then tex = a end
       if type(b) == "string" then slotName = b end
     end
+    if Z.LootWindow.IsEmptyCoin and Z.LootWindow.IsEmptyCoin(slotName) then
+      return nil
+    end
+    tex = tex or "Interface\\Icons\\INV_Misc_Coin_01"
     return { itemID = "Coin", link = nil, quality = 0,
       texture = tex, quantity = nil, slot = slot,
       name = slotName or "Coin", coin = true }

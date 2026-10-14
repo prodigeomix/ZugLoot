@@ -268,6 +268,18 @@ function M.IsCoinSlot(slot)
   return false
 end
 
+-- Empty-coin check: the client keeps a coin slot on corpses with no money
+-- ("0 Copper"). The slot name from GetLootSlotInfo is the amount text —
+-- nil/blank or an all-zero amount means nothing to loot, so the row is
+-- skipped instead of showing a phantom coin entry. Matches gold/silver/
+-- copper wording in any client locale by digit: any nonzero digit = money.
+-- Pure (string in, bool out) for headless tests.
+function M.IsEmptyCoin(slotName)
+  local s = tostring(slotName or "")
+  if s == "" or s == "Coin" then return true end
+  return string.find(s, "[1-9]") == nil
+end
+
 -- The PARTY's roll threshold (green 2 .. epic 4): items BELOW it never
 -- enter a group roll — Blizzard hands them out via plain LootSlot, no
 -- Need/Greed frames. Reads the live client setting; falls back to the
