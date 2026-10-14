@@ -43,6 +43,10 @@ dofile("MasterLootUI.lua")
 local LW = ZugLoot.LootWindow
 local ML = ZugLoot.MasterLootUI
 local SRData = ZugLoot.SRData
+-- Headless corpse session: rows imply an open corpse (the detail Award
+-- button only exists on scanned rows). Closed-loot blocking is covered
+-- in test_mlflow; here the session stays open unless a test closes it.
+ML.lootOpen = true
 
 local function makeSheet()
   local s = SRData.NewSheet()

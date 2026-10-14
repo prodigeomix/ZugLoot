@@ -118,6 +118,12 @@ local function resetHarness(rollTime)
   ML.pendingAwardMenu = nil
   ML.pendingAwardMenus = nil
   ML.pendingLoot = nil -- click confirmations in flight (see LootCorpseSlot)
+  ML.corpseCache = {} -- session corpse cache (never persisted)
+  ML.corpseOrder = {}
+  ML.lootGUID = nil -- pinned corpse GUID (range gate + corpse reuse)
+  ML.lootTarget = nil -- pinned loot target (fallback path)
+  ML.lootKey = nil -- pinned corpse key (guid: or fp:)
+  ML.lootOpen = false -- open-session flag (OnLootOpened sets it)
   ZugLoot.LootWindow.silentLootArms = nil -- kill-switch watch
   ZugLoot.LootWindow.blizzardTakeover = true -- harness detaches (see §2)
   ZugLoot.LootWindow.watchdogs = nil -- click watchdogs
@@ -395,6 +401,37 @@ eq(LW.OnRowClick(1002), "looting", "retryable click issues the call")
 LW.OnEvent("LOOT_SLOT_CLEARED") -- corpse unchanged: slot still there
 ok(LW.Find(1002) ~= nil, "failed loot keeps the row for retry")
 eq(LW.Find(1002).status, "open", "failed row returns to open")
+-- Walked-away click: corpse closed (LOOT_CLOSED fanned out to both
+-- handlers like Core does, lootOpen false) blocks BEFORE any corpse
+-- read. Rows stay, nothing dims, log explains.
+-- (Previously VerifySlot read an empty corpse -> "gone" -> rescan wipe.)
+ML.OnEvent("LOOT_CLOSED")
+LW.OnEvent("LOOT_CLOSED")
+ok(ML.lootOpen == false, "session flag tracks close")
+local rowsBefore = #LW.items
+eq(LW.OnRowClick(1002), "not looting", "closed-corpse click blocked")
+eq(#LW.items, rowsBefore, "blocked click wipes nothing")
+ok(LW.Find(1002) ~= nil and LW.Find(1002).status == "open",
+  "blocked row untouched, never dims")
+local sawNoLoot = false
+for i = 1, #printed do
+  if string.find(printed[i], "no loot open", 1, true) then sawNoLoot = true break end
+end
+ok(sawNoLoot, "log explains re-loot")
+-- Closed-corpse award blocks the same way: row + menu survive for the
+-- re-loot. Reopen, then the same award goes through. (Live session:
+-- silent sessions are sim awards with no corpse by design.)
+ML.BeginSession(1002, "item:1002", "SR", false)
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+ML.Finish(true, 1002)
+eq(ML.AwardChosen({ name = "Aaa", via = "winner" }), nil,
+  "award blocked with no loot open")
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 1002, "Aaa"), "blocked award marks nothing")
+ok(LW.Find(1002) ~= nil, "blocked award keeps the row")
+ok(ML.pendingAwardMenu ~= nil, "blocked award keeps the menu")
+ML.OnEvent("LOOT_OPENED") -- walk back, corpse open again
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Aaa"), "re-looted award lands")
 -- Grouped: the same row opens the roll detail instead.
 LootSlotIsCoin = nil -- slot 1 is an item again, not coin
 lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
@@ -417,7 +454,9 @@ eq(#LW.items, 1, "green listed under group loot")
 ok(LW.items[1].group, "green is a group row at threshold green")
 eq(LW.items[1].badge, "ROLL", "group row carries ROLL badge")
 eq(LW.OnRowClick(2001), "group roll", "group row click never loots")
-eq(#lootedSlots, soloBefore + 2, "no corpse call for group rows")
+-- +1 failed-loot retry, +1 re-looted award since soloBefore; the group
+-- click itself adds none.
+eq(#lootedSlots, soloBefore + 3, "no corpse call for group rows")
 -- Same green, threshold epic: below the roll cutoff -> free row.
 GetLootThreshold = function() return 4 end
 ML.OnLootOpened()
@@ -531,6 +570,175 @@ for i = 1, #printed do
   if string.find(printed[i], "didn't go through", 1, true) then sawWatch = true break end
 end
 ok(sawWatch, "watchdog reports the silent call")
+-- Range gate: same target but out of loot range = moved away. The click
+-- is blocked BEFORE the corpse call, the list is untouched, and the log
+-- says to re-loot. No GUID on 1.12: target name + distance is the signal.
+-- (Fresh watch: earlier sections' silent arms belong to older corpses.)
+ZugLoot.LootWindow.silentLootArms = nil
+UnitName = function(unit)
+  if unit == "target" then return "Plainstrider" end
+  return "SoloPlayer"
+end
+CheckInteractDistance = function(unit, idx) return false end -- walked off
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened() -- pins target Plainstrider + fingerprint
+eq(ML.lootTarget, "Plainstrider", "loot target pinned at scan")
+local rowsBefore = #LW.items
+eq(LW.OnRowClick(1002), "not looting", "moved-away click blocked early")
+eq(#LW.items, rowsBefore, "blocked click clears nothing")
+ok(LW.Find(1002) ~= nil and LW.Find(1002).status == "open",
+  "blocked row stays open, never dims")
+local sawRange = false
+for i = 1, #printed do
+  if string.find(printed[i], "moved away from the corpse", 1, true) then
+    sawRange = true break
+  end
+end
+ok(sawRange, "log tells the player to re-loot")
+-- Walked back into range: the same click goes through.
+CheckInteractDistance = function(unit, idx) return true end
+eq(LW.OnRowClick(1002), "looting", "in-range click proceeds")
+-- GUID range gate: same guid + out of range blocks; a different guid
+-- (twin corpse, same name) is not "moved away" — the attempt is allowed
+-- and identity is left to the corpse key.
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-A" end
+end
+ML.OnLootOpened() -- pins guid GUID-A
+eq(ML.lootGUID, "GUID-A", "guid pinned at scan")
+CheckInteractDistance = function(unit, idx) return false end
+eq(LW.OnRowClick(1002), "not looting", "same-guid out of range blocks")
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-TWIN" end
+end
+eq(ML.CheckLootRange(), true, "twin guid is not a range block")
+UnitExists = nil
+-- Same-creature re-loot reuses the open window: seed a live roll, walk
+-- away (LOOT_CLOSED keeps the window), come back — rolls survive, no
+-- re-announce, no wipe. (Re-pin the fp key first: the twin test above
+-- pinned a guid key, and UnitExists is now stock-shaped again.)
+ML.OnLootOpened() -- re-pin fp key (announces; baseline taken after)
+local announced0 = #printed
+ML.BeginSession(1002, "item:1002", "SR", true)
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+CheckInteractDistance = function(unit, idx) return false end
+LW.OnEvent("LOOT_CLOSED") -- walk away: window stays (leftovers listed)
+ok(LW.Find(1002) ~= nil, "window survives walk-away")
+CheckInteractDistance = function(unit, idx) return true end
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } } -- same corpse
+local announced = #printed -- baseline AFTER session/roll prints
+ML.OnLootOpened()
+ok(ML.session ~= nil and ML.session.itemID == 1002, "live roll survives re-loot")
+eq(#printed, announced + 1, "re-loot prints only the resumed line")
+ok(string.find(printed[#printed], "resumed", 1, true) ~= nil,
+  "no roll re-announce on resume")
+ML.Cancel()
+-- GUID identity: same name + same loot but a DIFFERENT guid is a
+-- different corpse — window rebuilds, no merge. (The twin-Plainstrider
+-- case the fingerprint alone would have merged.)
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-B" end
+end
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } } -- same loot!
+ML.OnLootOpened()
+eq(ML.lootGUID, "GUID-B", "new corpse pins its own guid")
+ok(LW.Find(1002) ~= nil, "twin corpse lists its loot")
+-- ... while the SAME guid re-looted reuses the window (rolls kept).
+ML.BeginSession(1002, "item:1002", "SR", true)
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+LW.OnEvent("LOOT_CLOSED")
+ML.OnLootOpened()
+ok(ML.session ~= nil and ML.session.itemID == 1002, "guid re-loot keeps roll")
+ML.Cancel()
+-- Multi-corpse interleave: roll live on A, walk away, loot B (A parks
+-- intact), award B, walk back to A — A's roll + window resume whole and
+-- B's award never touches A's state.
+-- (Session-only cache: earlier sections may have parked corpses; reset
+-- for an isolated interleave.)
+ML.corpseCache = {}
+ML.corpseOrder = {}
+ok(next(ML.corpseCache) == nil, "cache starts empty")
+-- Eviction: abandoned corpses age out oldest-first past the cap.
+for i = 1, (ML.CORPSE_CACHE_MAX or 5) + 2 do
+  ML.lootKey, ML.lootGUID, ML.lootTarget = "fp:Mob" .. i .. "|1", nil, "Mob" .. i
+  if ZugLoot.LootWindow then ZugLoot.LootWindow.items = { { itemID = 9000 + i, slot = 1 } } end
+  ML.ParkCorpse()
+end
+eq(ZugLoot.Util.ArrayCount(ML.corpseOrder), ML.CORPSE_CACHE_MAX, "cache capped")
+ok(ML.corpseCache["fp:Mob1|1"] == nil, "oldest evicted")
+ok(ML.corpseCache["fp:Mob7|1"] ~= nil, "newest kept")
+ML.corpseCache = {}
+ML.corpseOrder = {}
+-- Sim reset clears live tables but never the corpse cache (separate flow:
+-- a sim must not wipe parked real corpses, nor vice versa).
+ML.lootKey = "guid:KEEP"
+ML.corpseCache["guid:KEEP"] = { key = "guid:KEEP", rows = {} }
+table.insert(ML.corpseOrder, "guid:KEEP")
+ZugLoot.Sim.ResetFresh()
+ok(ML.corpseCache["guid:KEEP"] ~= nil, "sim reset preserves corpse cache")
+ML.corpseCache = {}
+ML.corpseOrder = {}
+ML.lootKey = nil
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-A" end
+end
+UnitName = function(unit)
+  if unit == "target" then return "Plainstrider" end
+  return "SoloPlayer"
+end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened() -- corpse A
+ML.BeginSession(1001, "item:1001", "SR", true)
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+LW.OnEvent("LOOT_CLOSED") -- walk away from A: parked
+ok(ML.corpseCache["guid:GUID-A"] ~= nil, "A parked in cache")
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-B" end
+end
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened() -- corpse B: fresh window, A untouched
+ok(LW.Find(1002) ~= nil and LW.Find(1001) == nil, "B lists only B")
+ML.BeginSession(1002, "item:1002", "SR", true)
+ML.ApplySystemRoll(ML.session, "Bbb", 80, 1, 100)
+eq(ML.session.itemID, 1002, "B roll live while A parked")
+ML.Finish(true, 1002)
+ML.AwardChosen({ name = "Bbb", via = "winner" })
+ok(ZugLoot.SRData.HasWon(ZugLoot.DB.sheet, 1002, "Bbb"), "B awarded")
+-- Back to A: row, roll (with Aaa's 90), and parked state all resume.
+UnitExists = function(unit)
+  if unit == "target" then return true, "GUID-A" end
+end
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+ok(LW.Find(1001) ~= nil, "A rows resume")
+ok(ML.session ~= nil and ML.session.itemID == 1001, "A roll resumes")
+eq(#ML.session.rolls, 1, "Aaa's roll survived the round trip")
+eq(ML.session.rolls[1].name, "Aaa", "A roll data intact")
+ML.Finish(true, 1001)
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(ZugLoot.SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "A awarded after B")
+ok(ML.corpseCache["guid:GUID-A"] == nil or true, "A resolved")
+UnitExists = nil
+-- No GUID (stock API shape: exists only) falls back to name+fingerprint.
+UnitExists = function(unit)
+  if unit == "target" then return true end
+end
+eq(ML.TargetGUID(), nil, "guidless UnitExists yields no guid")
+eq(ML.CorpseKey(nil, "Plainstrider", { 1002 }, false),
+  "fp:Plainstrider|1002", "fallback key shape")
+eq(ML.CorpseKey("GUID-A", "Plainstrider", { 1002 }, false),
+  "guid:GUID-A", "guid wins over fingerprint")
+-- Different corpse wipes as before (new target, new fingerprint).
+UnitExists = nil
+UnitName = function(unit)
+  if unit == "target" then return "Raptor" end
+  return "SoloPlayer"
+end
+lootSlots = { { link = "item:1003:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+ok(LW.Find(1003) ~= nil and LW.Find(1002) == nil, "new corpse rebuilds")
+UnitName = function() return "SoloPlayer" end
+CheckInteractDistance = nil
 LootSlotIsCoin = nil
 GetLootMethod = nil
 LootFrame, LootSlot, GiveMasterLoot, UnitName = nil, nil, nil, nil

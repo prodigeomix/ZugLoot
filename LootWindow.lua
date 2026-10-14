@@ -393,7 +393,15 @@ function M.HideBlizzardFallback() end
 -- Nil-safe headless (no corpse APIs -> no-op).
 function M.OnEvent(event, arg1)
   if event == "LOOT_CLOSED" then
-    if Z.Util.ArrayCount(M.items or {}) == 0 then M.Hide() end
+    -- Walk-away with leftovers: park the corpse into the session cache
+    -- (rolls/parks/menus intact) so re-looting resumes it whole. The
+    -- window stays visible; only a fully-distributed corpse hides it.
+    -- The corpse pin survives LOOT_CLOSED for the walk-back comparison.
+    if Z.Util.ArrayCount(M.items or {}) == 0 then
+      M.Hide()
+    elseif Z.MasterLootUI and Z.MasterLootUI.ParkCorpse then
+      Z.MasterLootUI.ParkCorpse()
+    end
   elseif event == "LOOT_SLOT_CLEARED" then
     if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
       Z.MasterLootUI.RescanLeftovers()
@@ -430,10 +438,8 @@ function M.BuildFrame()
   f:SetScript("OnDragStart", function() f:StartMoving() end)
   f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
   f:SetClampedToScreen(true)
-  local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-  title:SetPoint("TOP", f, "TOP", 0, -10)
-  title:SetText(M.title)
-  f.title = title
+  -- No header/title: rows start at the top edge (more room for loot).
+  -- f.title stays nil; Refresh guards it.
   local closeB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   closeB:SetWidth(70) closeB:SetHeight(20)
   closeB:SetPoint("BOTTOM", f, "BOTTOM", 0, 8)
@@ -633,21 +639,14 @@ end
 
 function M.Refresh()
   if not M.frame then return end
-  if type(M.frame.CreateFontString) ~= "function" then return end
-  if M.frame.title and M.frame.title.SetText then
-    local open = 0
-    for i = 1, Z.Util.ArrayCount(M.items) do
-      if M.items[i].status == "open" then open = open + 1 end
-    end
-    M.frame.title:SetText(M.title .. " (" .. open .. " open)")
-  end
+  -- No header: nothing to retitle (title widget removed in BuildFrame).
   -- Rebuild rows (cheap for a handful of drops).
   for i = 1, Z.Util.ArrayCount(M.rows) do
     if M.rows[i].Hide then M.rows[i]:Hide() end
   end
   M.rows = {}
   if type(CreateFrame) ~= "function" then return end
-  local y = -34
+  local y = -10
   for i = 1, Z.Util.ArrayCount(M.items) do
     local it = M.EnsureResolved(M.items[i])
     local id = it.itemID -- lua 5.0: fresh local per iteration for the closure
@@ -933,6 +932,23 @@ function M.OnRowClick(itemID, clickSlot)
       end
       return "gone"
     end
+    -- Moved away: block early, list untouched, log it. Re-loot the same
+    -- creature to resume — the window (rolls included) is still open.
+    if issued == "norange" then
+      Z.Print("Not looting " .. tostring(M.DisplayName(it))
+        .. ": you moved away from the corpse. "
+        .. "Loot it again to resume — the window is still open.")
+      return "not looting"
+    end
+    -- No open loot session (walked away / corpse closed): same block,
+    -- same intact list. The corpse pin + cache survive, so re-looting
+    -- resumes the window whole.
+    if issued == "nolooot" then
+      Z.Print("Not looting " .. tostring(M.DisplayName(it))
+        .. ": no loot open. "
+        .. "Loot the corpse again to resume — the window is still open.")
+      return "not looting"
+    end
     if issued == "passthrough" then return "passthrough" end
     if issued == true then
       M.MarkDone(itemID)
@@ -987,6 +1003,14 @@ function M.NoteSilentLoot(slot, itemID)
   local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
     and Z.SRSecurity.IsSolo()
   if not solo then return end
+  -- Corpse-scoped: arms belong to the pinned corpse key. A new corpse
+  -- (walk-away-and-back on something else) starts with a clean watch —
+  -- an old corpse's silence must never trip the switch on a new one.
+  local key = Z.MasterLootUI and Z.MasterLootUI.lootKey or nil
+  if M.silentLootArms and Z.Util.ArrayCount(M.silentLootArms) > 0
+      and M.silentLootArms[1] and M.silentLootArms[1].corpse ~= key then
+    M.silentLootArms = nil
+  end
   M.silentLootArms = M.silentLootArms or {}
   for i = 1, Z.Util.ArrayCount(M.silentLootArms) do
     local a = M.silentLootArms[i]
@@ -1007,7 +1031,9 @@ function M.NoteSilentLoot(slot, itemID)
       return
     end
   end
-  table.insert(M.silentLootArms, { slot = slot, itemID = itemID })
+  table.insert(M.silentLootArms,
+    { slot = slot, itemID = itemID,
+      corpse = Z.MasterLootUI and Z.MasterLootUI.lootKey or nil })
 end
 
 function M.OpenDetail(itemID)

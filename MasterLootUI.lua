@@ -167,6 +167,10 @@ function M.OnItemSystemRoll(itemID, player, roll, minR, maxR, sessionID)
   M.ApplySystemRoll(sess, player, roll, minR, maxR)
 end
 
+-- Rolls land on the ACTIVE corpse's session. Parked corpses keep their
+-- own sessions but collect no chat while parked (their window is closed);
+-- re-looting resumes them via the cache. M.session always belongs to the
+-- active corpse, so no routing table is needed.
 function M.OnSystemRoll(player, roll, minR, maxR)
   if not M.session then return end
   M.ApplySystemRoll(M.session, player, roll, minR, maxR)
@@ -740,12 +744,20 @@ end
 -- optimistically here — so a failed LootSlot (locked, full bags, range)
 -- leaves the row up for retry.
 function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
+  -- Session gate FIRST: no open loot session (walked away, corpse closed)
+  -- means no call can possibly land. Report "nolooot" so the caller logs
+  -- + keeps the list intact — never touch VerifySlot/rescan, which would
+  -- read an empty corpse and wipe every row.
+  if not M.lootOpen then return "nolooot" end
   -- LIVE-resolve the slot at call time: stored slot numbers go stale the
   -- moment anything shifts the corpse (earlier loot, page change), and a
   -- stale LootSlot() is a silent server-side no-op — exactly the reported
   -- "gray [done], nothing looted, no error" ghost. When the hinted slot
   -- no longer holds THIS item, re-scan the corpse for it; when the item
   -- is gone entirely, report "gone" (caller leaves the row for rescan).
+  -- Range gate SECOND: a moved-away player must never issue the call —
+  -- report "norange" so the caller logs + keeps the list intact.
+  if M.CheckLootRange() == "norange" then return "norange" end
   local slot = M.VerifySlot(itemID, slotHint)
   if slot == "gone" then return "gone" end
   if not slot then return "noslot" end
@@ -804,6 +816,96 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
       M.pendingLoot[slot] = row
     end
   end
+  return true
+end
+
+-- Corpse identity, strongest key first:
+-- 1. Creature GUID via UnitExists("target") -> (exists, guid). This
+--    client (Nampower/SuperWoW hooks) extends UnitExists with a second
+--    GUID return (DoiteAuras/Luna/Aegis_SBR/MageTools all rely on it),
+--    and GUIDs double as unit tokens. A GUID pins the UNIQUE corpse —
+--    two same-named Plainstriders never share a window. Nil-safe: the
+--    stock 1.12 UnitExists returns only exists (no guid), and headless
+--    tests may define neither.
+-- 2. Fallback: loot-target name + loot fingerprint (sorted itemIDs +
+--    coin flag). Same corpse re-looted after walking back still matches;
+--    same-named/same-loot twins may share (rescan reconciles correctly).
+-- Pure helper for tests: pass guid, name + id list.
+function M.TargetGUID()
+  if not UnitExists then return nil end
+  local ok, exists, guid = pcall(UnitExists, "target")
+  if ok and exists and guid and guid ~= "" then return guid end
+  return nil
+end
+
+function M.CorpseKey(targetGUID, targetName, itemIDs, hasCoin)
+  if targetGUID and targetGUID ~= "" then
+    return "guid:" .. tostring(targetGUID)
+  end
+  local ids = {}
+  for i = 1, Z.Util.ArrayCount(itemIDs) do
+    table.insert(ids, tostring(itemIDs[i]))
+  end
+  table.sort(ids)
+  return "fp:" .. tostring(targetName or "?") .. "|" .. table.concat(ids, ",")
+    .. (hasCoin and "|+coin" or "")
+end
+
+function M.LiveCorpseKey()
+  local guid = M.TargetGUID()
+  local target = nil
+  if UnitName then
+    local ok, nm = pcall(UnitName, "target")
+    if ok then target = nm end
+  end
+  local ids, coin = {}, false
+  if GetNumLootItems and GetLootSlotLink then
+    local n = GetNumLootItems() or 0
+    for s = 1, n do
+      if Z.LootWindow and Z.LootWindow.IsCoinSlot
+          and Z.LootWindow.IsCoinSlot(s) then
+        coin = true
+      else
+        local ok, l = pcall(GetLootSlotLink, s)
+        if ok and l then
+          local id = Z.Util.ItemID(l)
+          if id then table.insert(ids, id) end
+        end
+      end
+    end
+  end
+  return M.CorpseKey(guid, target, ids, coin)
+end
+
+-- Range gate: block a loot attempt when the player has moved away from
+-- the looted corpse. 1.12 has no movement event, so the signal is
+-- CheckInteractDistance("target", 1) (loot range) against the corpse
+-- pinned at scan time — by GUID when available (unique corpse), else by
+-- target name. Same corpse + out of range = moved away: block early
+-- ("norange"), list untouched, caller logs. Anything unverifiable (no
+-- live corpse, target changed/cleared, GUID-less different corpse with
+-- the same name) allows the attempt — the server has the final say.
+-- Only live corpse loot is gated (GetNumLootItems() > 0); sim/award
+-- bookkeeping never is.
+function M.CheckLootRange()
+  if not (GetNumLootItems and (GetNumLootItems() or 0) > 0) then
+    return true
+  end
+  if not (CheckInteractDistance and UnitName) then return true end
+  local pinnedGUID, pinnedName = M.lootGUID, M.lootTarget
+  if not (pinnedGUID or pinnedName) then return true end
+  local guid = M.TargetGUID()
+  if pinnedGUID then
+    -- GUID-pinned: a different GUID (or none) is a different corpse —
+    -- allow, the key check owns identity. Same GUID + out of range =
+    -- moved away from THIS corpse: block.
+    if not guid or guid ~= pinnedGUID then return true end
+  else
+    local okCur, cur = pcall(UnitName, "target")
+    if not okCur or cur ~= pinnedName then return true end
+  end
+  local okR, inRange = pcall(CheckInteractDistance, "target", 1)
+  if okR and not inRange then return "norange" end
   return true
 end
 
@@ -875,6 +977,17 @@ function M.AwardDirect(itemID, winnerName, source)
   if Z.LootWindow then
     local it = Z.LootWindow.Find(itemID)
     if it and it.link then link = it.link end
+  end
+  -- Live distribution of a CORPSE row needs the corpse OPEN (master-loot
+  -- handoff moves a corpse slot; walked-away corpse = nothing to hand).
+  -- Block early with a log, keep row + menu — the ML re-loots and awards
+  -- from the still-open window. Non-row awards (/rf rolls, sim, headless)
+  -- have no corpse slot: always apply.
+  if source ~= "sim" and not M.lootOpen
+      and Z.LootWindow and Z.LootWindow.Find(itemID) then
+    Z.Print("Not awarding " .. tostring(winnerName)
+      .. ": no loot open. Loot the corpse again, then award.")
+    return false
   end
   -- Loot the corpse slot FIRST (the only path that moves the item): a
   -- refused loot call (non-candidate, unresolvable slot) aborts the award
@@ -992,8 +1105,14 @@ function M.AwardChosen(choice, itemID)
   local link = sess.itemLink
   local source = sess.silent and "sim" or "raid"
   showAwardPopup(link, name, function()
-    -- Corpse loot call first: a refused call (non-candidate) aborts the
-    -- award and keeps the row + menu. Sim rows have no slot: always apply.
+    -- Live distribution of a corpse row needs the corpse OPEN; a refused
+    -- call aborts and keeps row + menu. Non-row awards always apply.
+    if source ~= "sim" and not M.lootOpen
+        and Z.LootWindow and Z.LootWindow.Find(sess.itemID) then
+      Z.Print("Not awarding " .. tostring(name)
+        .. ": no loot open. Loot the corpse again, then award.")
+      return
+    end
     if source ~= "sim" and M.LootCorpseSlot(link, sess.itemID, name) == false then return end
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
@@ -1015,6 +1134,12 @@ function M.AwardChosen(choice, itemID)
   -- DoAward inside... only when the popup fires. Without a client there is
   -- no OnAccept, so apply directly.
   if not (StaticPopupDialogs and StaticPopup_Show) then
+    if source ~= "sim" and not M.lootOpen
+        and Z.LootWindow and Z.LootWindow.Find(sess.itemID) then
+      Z.Print("Not awarding " .. tostring(name)
+        .. ": no loot open. Loot the corpse again, then award.")
+      return
+    end
     if source ~= "sim" and M.LootCorpseSlot(link, sess.itemID, name) == false then return end
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
@@ -1135,9 +1260,15 @@ end
 -- rest, append genuinely new slots. M.items here is the LootWindow list
 -- (MasterLootUI owns no row list of its own). Returns the live row count.
 -- Nil-safe headless.
+-- Open-session flag: true between LOOT_OPENED and LOOT_CLOSED. A rescan
+-- with no open session must keep every row — GetNumLootItems reads empty
+-- with no session, which otherwise looks exactly like "all looted" and
+-- wipes the window (the reported walk-away wipe).
+M.lootOpen = false
 function M.RescanLeftovers()
   local rows = (Z.LootWindow and Z.LootWindow.items) or M.items
   if not GetNumLootItems then return Z.Util.ArrayCount(rows) end
+  if not M.lootOpen then return Z.Util.ArrayCount(rows) end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
   local n = GetNumLootItems()
   -- Slot NUMBERS shift when a slot is looted (old slot 2 becomes slot 1),
@@ -1249,10 +1380,169 @@ function M.RescanLeftovers()
   return Z.Util.ArrayCount(rows)
 end
 
+-- Session-only corpse cache, keyed by corpse key (guid: preferred,
+-- fp: fallback — see CorpseKey). NEVER persisted: plain module tables,
+-- empty at load, no SavedVariables touch. Each entry owns EVERYTHING for
+-- one not-fully-looted corpse so walk-away-and-back resumes exactly:
+-- rows (with statuses), open detail, parked details, live sessions,
+-- parked sessions, award menus, click arms. Corpse B looted mid-roll on
+-- corpse A parks A intact; re-looting A restores it whole — a live roll
+-- on A keeps collecting /roll chat while B is worked, and B's award
+-- never touches A's state. Sim rows (source "sim", no corpse) live
+-- outside the cache on the live tables as before.
+-- Entry: { key, guid, target, rows, detail, parked,
+--            sessions, sessionID, parkedSessions,
+--            awardMenus, awardMenu, pendingLoot }
+-- Bounded: abandoned corpses (parked, never re-looted) evict oldest-first
+-- past M.CORPSE_CACHE_MAX. Session-only either way — never persisted.
+M.CORPSE_CACHE_MAX = 5
+M.corpseCache = {}
+M.corpseOrder = {}
+M.lootGUID = nil -- pinned corpse GUID (nil when client offers none)
+M.lootTarget = nil -- pinned loot target name (fallback path)
+M.lootKey = nil -- active corpse key (cache key while a corpse is open)
+-- Stash the live tables into the active corpse's cache entry (deep
+-- enough that later mutation can't alias: rows + detail + parked are
+-- copied row-wise; sessions/menus are referenced — they are only ever
+-- touched through their owning corpse while it is active).
+local function snapshotRows(rows)
+  local out = {}
+  for i = 1, Z.Util.ArrayCount(rows) do
+    local r = rows[i]
+    if r then
+      local c = {}
+      for k, v in pairs(r) do c[k] = v end
+      table.insert(out, c)
+    end
+  end
+  return out
+end
+function M.ParkCorpse()
+  local key = M.lootKey
+  if not key then return end
+  local W = Z.LootWindow
+  M.corpseCache = M.corpseCache or {}
+  M.corpseOrder = M.corpseOrder or {}
+  for i = Z.Util.ArrayCount(M.corpseOrder), 1, -1 do
+    if M.corpseOrder[i] == key then table.remove(M.corpseOrder, i) end
+  end
+  table.insert(M.corpseOrder, key)
+  while Z.Util.ArrayCount(M.corpseOrder) > (M.CORPSE_CACHE_MAX or 5) do
+    local oldest = table.remove(M.corpseOrder, 1)
+    if oldest then M.corpseCache[oldest] = nil end
+  end
+  M.corpseCache[key] = {
+    key = key, guid = M.lootGUID, target = M.lootTarget,
+    rows = W and snapshotRows(W.items) or {},
+    detail = W and W.detail or nil,
+    parked = W and W.parked or {},
+    sessions = M.sessions or {},
+    sessionID = M.session and M.session.id or nil,
+    parkedSessions = M.parkedSessions,
+    awardMenus = M.pendingAwardMenus,
+    awardMenu = M.pendingAwardMenu,
+    pendingLoot = M.pendingLoot,
+  }
+end
+-- Restore a cached corpse onto the live tables. Sessions re-link by id;
+-- parked details/menus resume untouched. Caller reconciles + shows.
+-- TAKE semantics: the entry leaves the cache on restore (the live tables
+-- own the state from here; walking away re-parks fresh). Stale copies
+-- must never linger beside live state.
+function M.RestoreCorpse(key)
+  local e = M.corpseCache and M.corpseCache[key]
+  if not e then return false end
+  M.corpseCache[key] = nil
+  if M.corpseOrder then
+    for i = Z.Util.ArrayCount(M.corpseOrder), 1, -1 do
+      if M.corpseOrder[i] == key then table.remove(M.corpseOrder, i) end
+    end
+  end
+  -- Merge, not overwrite: live tables may have moved on after the park
+  -- (e.g. a session finished + menu opened while walked away). Live-newer
+  -- state wins per key; the park only fills gaps. Rows/detail take the
+  -- park when the live window is empty, else stay (rescan reconciles).
+  local W = Z.LootWindow
+  if W then
+    if Z.Util.ArrayCount(W.items) == 0 then
+      W.items = snapshotRows(e.rows)
+    end
+    if not W.detail then W.detail = e.detail end
+    W.parked = W.parked or {}
+    for k, v in pairs(e.parked or {}) do
+      if W.parked[k] == nil then W.parked[k] = v end
+    end
+  end
+  M.sessions = M.sessions or {}
+  for k, v in pairs(e.sessions or {}) do
+    if M.sessions[k] == nil then M.sessions[k] = v end
+  end
+  if not M.session and e.sessionID then
+    for _, s in pairs(M.sessions) do
+      if s and s.id == e.sessionID then M.session = s break end
+    end
+  end
+  if not M.session then
+    for _, s in pairs(M.sessions) do
+      if s then M.session = s break end
+    end
+  end
+  M.parkedSessions = M.parkedSessions or {}
+  for k, v in pairs(e.parkedSessions or {}) do
+    if M.parkedSessions[k] == nil then M.parkedSessions[k] = v end
+  end
+  M.pendingAwardMenus = M.pendingAwardMenus or {}
+  for k, v in pairs(e.awardMenus or {}) do
+    if M.pendingAwardMenus[k] == nil then M.pendingAwardMenus[k] = v end
+  end
+  if not M.pendingAwardMenu then M.pendingAwardMenu = e.awardMenu end
+  if not M.pendingLoot then M.pendingLoot = e.pendingLoot end
+  M.lootGUID = e.guid
+  M.lootTarget = e.target
+  M.lootKey = e.key
+  return true
+end
+-- Drop a corpse from the cache once fully looted (no rows left after a
+-- reconcile, or Close with an empty list). Distributed corpses must not
+-- linger — the cache is for NOT-fully-looted mobs only.
+function M.ForgetCorpse(key)
+  if M.corpseCache and key then M.corpseCache[key] = nil end
+  if M.corpseOrder and key then
+    for i = Z.Util.ArrayCount(M.corpseOrder), 1, -1 do
+      if M.corpseOrder[i] == key then table.remove(M.corpseOrder, i) end
+    end
+  end
+end
 function M.OnLootOpened()
-  if M.session then return end -- already rolling
-  if M.pendingAwardMenu then return end -- still deciding the award
   if not GetNumLootItems then return end
+  M.lootOpen = true -- session is definitionally open inside this handler
+  local key = M.LiveCorpseKey()
+  -- Cached corpse (walked away mid-roll/award, now back): restore it
+  -- whole — rows, live roll, parked details, award menus — then
+  -- reconcile against the live corpse. A different corpse parks the
+  -- active one first (untouched), so multi-corpse interleaves keep
+  -- every roll collecting independently.
+  if key and M.corpseCache and M.corpseCache[key] then
+    if M.lootKey and M.lootKey ~= key then M.ParkCorpse() end
+    M.RestoreCorpse(key)
+    M.RescanLeftovers()
+    if Z.LootWindow then
+      if Z.Util.ArrayCount(Z.LootWindow.items) == 0 then
+        M.ForgetCorpse(key)
+        if M.lootKey == key then
+          M.lootKey, M.lootGUID, M.lootTarget = nil, nil, nil
+        end
+        Z.LootWindow.Hide()
+      else
+        Z.LootWindow.Show()
+        Z.Print("Loot window resumed — rolls and award state kept.")
+      end
+    end
+    return
+  end
+  -- New corpse while another is mid-roll: park the active one intact
+  -- (its live roll keeps collecting chat), then build fresh below.
+  if M.lootKey and M.lootKey ~= key then M.ParkCorpse() end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
   local found, coin, free, grouped = {}, {}, {}, {}
   local n = GetNumLootItems()
@@ -1293,6 +1583,16 @@ function M.OnLootOpened()
   if Z.LootWindow and Z.LootWindow.DetachBlizzardLoot then
     pcall(Z.LootWindow.DetachBlizzardLoot)
   end
+  -- Pin the corpse for the walk-away-and-back flow (GUID > name +
+  -- fingerprint). GUID survives re-targeting; name does not.
+  M.lootGUID = M.TargetGUID()
+  if UnitName then
+    local ok, nm = pcall(UnitName, "target")
+    M.lootTarget = (ok and nm) or nil
+  else
+    M.lootTarget = nil
+  end
+  M.lootKey = M.LiveCorpseKey()
   -- RollFor-style loot window: coin first, roll rows next, group-roll
   -- items (Blizzard's Need/Greed owns those) after, free leftovers last.
   -- The ML works each roll row from the list; coin/free rows loot on
@@ -1329,7 +1629,10 @@ function M.OnEvent(event, a1, a2)
     local player, roll, minR, maxR = string.match(tostring(a1 or ""), "(.+) rolls (%d+) %((%d+)%-(%d+)%)")
     if player then M.OnSystemRoll(player, tonumber(roll), tonumber(minR), tonumber(maxR)) end
   elseif event == "LOOT_OPENED" then
+    M.lootOpen = true
     M.OnLootOpened()
+  elseif event == "LOOT_CLOSED" then
+    M.lootOpen = false
   elseif event == "LOOT_BIND_CONFIRM" then
     -- BoP take: confirm every armed click-to-loot slot. a1 is the slot
     -- on 1.12 (nil-safe: confirm all armed slots when it isn't).

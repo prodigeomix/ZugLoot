@@ -249,7 +249,42 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   stand our rows down to display-only (`passthrough`) — a dead `LootSlot`
   path must yield to the stock UI, never strand dimmed rows. Confirms,
   errors, and failed-but-present rescans all disarm the watch; awards
-  never arm it.
+  never arm it; the watch is corpse-scoped (a new corpse starts clean).
+  Open-session flag (`MasterLootUI.lootOpen`, true between `LOOT_OPENED`
+  and `LOOT_CLOSED`): with no session open there is no call that can land.
+  Clicks and live awards both check it FIRST — before range, before slot
+  verify — and block with `"not looting"` / `"Not awarding <name>: no
+  loot open"`, list + row + menu untouched; re-looting resumes the cached
+  window. This is what stops the walk-away wipe: the old code read an
+  empty (closed) corpse as `"gone"` and rescanned every row away. Rescans
+  with no open session likewise keep all rows (an unreadable corpse
+  proves nothing left). Sim/non-row awards bypass the gate (no corpse).
+  Range gate: "moved away" is read off `CheckInteractDistance("target",
+  1)` against the corpse pinned at scan — by GUID when the client offers
+  one, else by target name. Same corpse + out of range = moved: the click
+  is blocked BEFORE the corpse call (`"not looting"` + chat log telling
+  the player to loot the corpse again), the list is untouched — nothing
+  dims, nothing clears. A different GUID is never a range block (identity
+  belongs to the corpse key).
+  Corpse identity: `UnitExists("target")` returns `(exists, guid)` on this
+  client (Nampower/SuperWoW extension — DoiteAuras/Luna/Aegis_SBR rely on
+  the same second return; GUIDs double as unit tokens). The corpse key is
+  `guid:<guid>` when available, else `fp:<name>|<sorted ids>[|+coin]`.
+  Walk-away-and-back reuses the window: `LOOT_CLOSED` with leftovers
+  keeps rows/rolls/parked details, and re-looting the SAME corpse
+  (key match) reconciles instead of wiping — live rolls and award state
+  survive the round trip, with no twin-merge (same name + same loot on a
+  different GUID rebuilds). A different corpse rebuilds as before.
+  Session corpse cache (`MasterLootUI.corpseCache`, never persisted —
+  empty at load, no SavedVariables): each not-fully-looted corpse owns
+  rows, open/parked details, live + parked roll sessions, award menus,
+  and click arms under its key. Looting corpse B mid-roll on A parks A
+  intact (A's roll keeps collecting); returning to A restores it whole
+  and B's award never touches A's state — rolls continue and loot
+  distributes per corpse. Restore takes (no stale copies); fully-looted
+  corpses are forgotten; abandoned ones evict oldest-first past a cap of
+  5. Sim flows never touch the cache. Rolls land on the ACTIVE corpse's
+  session; parked corpses collect no chat while parked.
   Each roll-row item is
   announced + logged (`loot`/`seen`), awarding loots the corpse slot
   through Blizzard's APIs (master loot hands to another winner by
