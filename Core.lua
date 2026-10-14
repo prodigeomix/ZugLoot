@@ -20,6 +20,12 @@ function Z.InitDB()
   ZugLootDB.raidArchive = ZugLootDB.raidArchive or {}
   ZugLootDB.drops = ZugLootDB.drops or {}
   ZugLootDB.rollTime = ZugLootDB.rollTime or Z.Limits.ROLL_TIMEOUT_DEFAULT
+  -- Loot-takeover kill-switch state (see LootWindow.NoteSilentLoot):
+  -- once our LootSlot path proves dead, the takeover stays OFF across
+  -- corpses and sessions until the user opts back in. Survives reloads
+  -- (a broken loot path won't fix itself on relog); re-arm via Setup tab
+  -- or /zl lootframe. Never nil-guarded away: false is a valid state.
+  if ZugLootDB.lootTakeover == nil then ZugLootDB.lootTakeover = true end
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
   ZugLootCharDB.autoRoll = ZugLootCharDB.autoRoll or false
   ZugLootCharDB.verSeen = ZugLootCharDB.verSeen or {}
@@ -89,6 +95,10 @@ function Z.Init()
   frame:RegisterEvent("LOOT_OPENED")
   frame:RegisterEvent("LOOT_CLOSED")
   frame:RegisterEvent("LOOT_SLOT_CLEARED")
+  frame:RegisterEvent("START_LOOT_ROLL")
+  frame:RegisterEvent("CANCEL_LOOT_ROLL")
+  frame:RegisterEvent("LOOT_BIND_CONFIRM")
+  frame:RegisterEvent("UI_ERROR_MESSAGE")
   frame:RegisterEvent("RAID_ROSTER_UPDATE")
   frame:RegisterEvent("PARTY_MEMBERS_CHANGED")
   frame:SetScript("OnEvent", function() Z.OnEvent(event, arg1, arg2, arg3, arg4) end)
@@ -109,7 +119,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|help")
+    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|lootdebug|lootframe|help")
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
   elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
   elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
@@ -141,6 +151,17 @@ function Z.Slash(msg)
       local nm, itemArg = string.match(rest, "^(%S+)%s*(.*)$")
       local itemID = Z.Util.ItemID(itemArg or "")
       Z.MasterLootUI.AwardChosen({ name = Z.Util.Trim(nm or ""), via = "menu" }, itemID)
+    end
+  elseif cmd == "lootdebug" then
+    Z.LootWindow.lootDebug = not Z.LootWindow.lootDebug
+    Z.Print("lootdebug " .. (Z.LootWindow.lootDebug and "ON" or "OFF"))
+  elseif cmd == "lootframe" then
+    if Z.LootWindow and Z.LootWindow.TakeoverWanted() then
+      Z.LootWindow.SetTakeoverWanted(false)
+      Z.Print("Loot frame: Blizzard's. (/zl lootframe to switch back)")
+    else
+      Z.LootWindow.SetTakeoverWanted(true)
+      Z.Print("Loot frame: ZugLoot. (takes over on the next corpse)")
     end
   elseif cmd == "log" then Z.MainWindow.Toggle("rolls")
   elseif cmd == "logclear" then Z.DropLog.Clear()

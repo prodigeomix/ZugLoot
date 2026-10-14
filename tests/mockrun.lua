@@ -254,5 +254,24 @@ s.players["Thrall"] = { class = "PaladinHoly" };
 assert(Z.ClassColors.ClassOf("Thrall") == "Paladin", "roll window sheet class");
 assert(Z.ClassColors.ColoredName("Thrall") == "|cFFF58CBAThrall|r", "roll window pink");
 Z.RaiderLootUI.ShowResult("The winner is Jaina (50) !");
+-- START_LOOT_ROLL mirrors a group roll in OUR dice frame; the dice vote
+-- through RollOnLoot (Need 1 / Greed 2 / Pass 0), never RandomRoll chat
+-- spam (which would forfeit the roll). CANCEL hides the frame.
+local votes = {};
+RollOnLoot = function(id, vote) table.insert(votes, { id, vote }) end;
+GetLootRollItemLink = function(id) return "item:2001:0:0:0" end;
+Z.RaiderLootUI.OnEvent("START_LOOT_ROLL", 7);
+assert(Z.RaiderLootUI.groupRollID == 7, "group roll tracked");
+Z.RaiderLootUI.DoRoll("SR", 100);
+assert(votes[1][1] == 7 and votes[1][2] == 1, "SR votes Need on the roll");
+Z.RaiderLootUI.DoRoll("OS", 99);
+assert(votes[2][2] == 2, "OS votes Greed");
+Z.RaiderLootUI.DoRoll("TMOG", 98);
+assert(votes[3][2] == 2, "TMOG votes Greed");
+Z.RaiderLootUI.DoRoll("MS", 100);
+assert(votes[4][2] == 1, "MS votes Need");
+Z.RaiderLootUI.OnEvent("CANCEL_LOOT_ROLL", 7);
+assert(Z.RaiderLootUI.groupRollID == nil, "cancel clears the roll");
+RollOnLoot = nil; GetLootRollItemLink = nil;
 print("roll window OK");
 print("MOCK UI RUN OK");

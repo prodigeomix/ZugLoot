@@ -411,7 +411,18 @@ function M.OnRoll(player, roll, rtype, excluded)
   timeLeft = (Z.DB and Z.DB.rollTime) or 15 -- refresh on activity (LootBlare parity)
 end
 
+-- Dice vote: group-roll mirror votes Need/Greed/Pass through Blizzard's
+-- RollOnLoot (the ONLY legal vote — RandomRoll would just spam chat and
+-- forfeit the roll); ZugLoot master-loot sessions roll /roll as before.
+-- RollOnLoot ids: 1 = Need, 2 = Greed, 0 = Pass (LazyPig parity).
+local GROUP_VOTE = { SR = 1, MS = 1, OS = 2, TMOG = 2 }
 function M.DoRoll(rtype, cap)
+  if M.groupRollID then
+    if RollOnLoot then
+      pcall(RollOnLoot, M.groupRollID, GROUP_VOTE[rtype] or 2)
+    end
+    return
+  end
   RandomRoll(1, cap)
   if Z.MasterLootUI.session then
     Z.Comm.SendRollAns(Z.MasterLootUI.session.id, rtype)
@@ -427,6 +438,14 @@ function M.OnRollReq(msg, sender)
   end
 end
 
+-- Group-loot Need/Greed frames (Blizzard's GroupLootFrame1..N) stay alive
+-- (see LootWindow NOTE): a group roll is a server-side roll, and the ONLY
+-- way to vote is RollOnLoot(rollID, 1/2/0) — suppressing the frames would
+-- strand the item. So our window mirrors the roll: START_LOOT_ROLL shows
+-- OUR dice frame for the item (same frame as master-loot rolls, LootBlare
+-- parity), the dice vote through RollOnLoot, CANCEL_LOOT_ROLL hides it.
+-- RollOnLoot is guarded: without it (headless) the dice are inert.
+M.groupRollID = nil
 function M.OnEvent(event, a1, a2)
   if event == "CHAT_MSG_RAID_WARNING" then
     -- LootBlare trigger: ML links item in RW. Verify sender is ML (raid-safe).
@@ -434,6 +453,25 @@ function M.OnEvent(event, a1, a2)
     local link = string.match(tostring(a1 or ""), "(|c%x+|Hitem.-|h%[.-%]|h|r)")
     if link and sender and Z.SRSecurity.IsML(sender) then
       M.ShowItem(link, (Z.DB and Z.DB.rollTime) or 15)
+    end
+  elseif event == "START_LOOT_ROLL" then
+    -- a1 = rollID (1.12 passes the roll id as first arg). Resolve the
+    -- item link for the frame; the dice vote via RollOnLoot(rollID, ...).
+    local rollID = tonumber(a1)
+    M.groupRollID = rollID
+    local link = nil
+    if rollID and GetLootRollItemLink then
+      local ok, l = pcall(GetLootRollItemLink, rollID)
+      if ok then link = l end
+    end
+    local secs = rollID and GetLootRollTimeLeft
+      and (function() local ok, t = pcall(GetLootRollTimeLeft, rollID) if ok then return t end end)()
+      or nil
+    M.ShowItem(link or ("Group roll #" .. tostring(rollID)), secs)
+  elseif event == "CANCEL_LOOT_ROLL" then
+    if tonumber(a1) == M.groupRollID or a1 == nil then
+      M.groupRollID = nil
+      M.Hide()
     end
   end
 end

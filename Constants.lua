@@ -34,4 +34,9 @@ ZugLoot.Colors = {
 ZugLoot.Limits = {
   DROP_LOG_MAX = 500,
   ROLL_TIMEOUT_DEFAULT = 15,
+  -- Quality numbers only exist for items; coin is handled separately.
+  -- GetLootThreshold() returns the PARTY's roll threshold (2 green .. 4
+  -- epic); items BELOW it never enter a group roll — plain LootSlot takes
+  -- them. Default mirrors the client default threshold (uncommon).
+  LOOT_THRESHOLD_DEFAULT = 2,
 }

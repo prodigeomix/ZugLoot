@@ -63,8 +63,55 @@ function M.Clear()
   M.items = {}
   M.detail = nil
   M.parked = {}
+  M.DisarmWatchdogs()
   M.Refresh()
   M.RefreshDetail()
+end
+
+-- Watchdog: when a click-to-loot call goes silent (issued clean, row
+-- dimmed, but no LOOT_SLOT_CLEARED within a few seconds and no error),
+-- poke the corpse — re-read the clicked slot. If the item is STILL there
+-- the call died server-side: un-dim the row at once and say so (don't
+-- wait for a confirm that never comes, don't strand grey rows). If the
+-- slot emptied without an event, reconcile. Timer-driven (vanilla-safe);
+-- headless no-op without corpse APIs. One watchdog per click; disarmed
+-- by confirm (RescanLeftovers), error (UI_ERROR_MESSAGE), or firing.
+M.watchdogs = nil
+function M.WatchClick(slot, itemID, rowName)
+  if not (GetNumLootItems and Z.Timer and Z.Timer.After) then return end
+  M.watchdogs = M.watchdogs or {}
+  local wd = { slot = slot, itemID = itemID, dead = false }
+  table.insert(M.watchdogs, wd)
+  Z.Timer.After(4, function()
+    wd.dead = true
+    if M.watchdogs then
+      for i = Z.Util.ArrayCount(M.watchdogs), 1, -1 do
+        if M.watchdogs[i] == wd then table.remove(M.watchdogs, i) break end
+      end
+    end
+    -- Armed click still pending AND row still dimmed = silent ignore.
+    local armed = Z.MasterLootUI and Z.MasterLootUI.pendingLoot
+      and Z.MasterLootUI.pendingLoot[slot]
+    local row = M.Find(itemID)
+    if not (armed and row and row.status == "done") then return end
+    -- Re-read the corpse slot: gone = late confirm arrived unordered,
+    -- reconcile; present = server dropped the call, un-dim + report.
+    if Z.MasterLootUI and Z.MasterLootUI.VerifySlot then
+      local v = Z.MasterLootUI.VerifySlot(itemID, slot)
+      if v == "gone" or v == nil then
+        if Z.MasterLootUI.RescanLeftovers then Z.MasterLootUI.RescanLeftovers() end
+        return
+      end
+    end
+    if Z.MasterLootUI then Z.MasterLootUI.pendingLoot[slot] = nil end
+    row.status = "open"
+    M.Refresh()
+    Z.Print("Loot didn't go through for " .. tostring(rowName or itemID)
+      .. " (slot " .. tostring(slot) .. ") — click again to retry.")
+  end)
+end
+function M.DisarmWatchdogs()
+  M.watchdogs = nil
 end
 
 -- Replace the list (loot scan / sim queue). Plain array of
@@ -94,7 +141,8 @@ function M.SetItems(list, source)
         slot = e.slot,
         badge = badge or "",
         coin = e.coin and true or false,
-        free = (not e.coin) and (e.free and true or false) or false,
+        free = (not e.coin and not e.group) and (e.free and true or false) or false,
+        group = (not e.coin) and (e.group and true or false) or false,
         status = "open",
         source = source or "loot",
       }
@@ -133,20 +181,55 @@ function M.MarkOpen(itemID) M.SetStatus(itemID, "open") end
 -- Session detach flag: once ADDON_LOADED fires the takeover is armed;
 -- re-armed per LOOT_OPENED (repeat detach is cheap and idempotent).
 M.blizzardTakeover = false
-function M.DetachBlizzardLoot()
-  local f = LootFrame -- client global; nil headless (tests never define it)
-  if f then
-    if f.UnregisterAllEvents then pcall(f.UnregisterAllEvents, f) end
-    if f.SetScript then pcall(f.SetScript, f, "OnHide", nil) end
-    if f.Hide then pcall(f.Hide, f) end
+-- takeOver=true detaches (hide Blizzard's frame, ours takes over);
+-- takeOver=false restores (re-register LOOT_* events, show on next loot).
+-- Events unregistered on 1.12: LOOT_OPENED, LOOT_CLOSED, LOOT_SLOT_CLEARED,
+-- plus the OnHide CloseLoot hook — the full set FrameXML subscribes.
+-- Restoring ONLY re-registers: Blizzard repopulates itself on the next
+-- loot (or immediately if a loot session is currently open).
+-- Takeover preference: Z.DB.lootTakeover (persisted). The kill-switch
+-- sets it false; the user re-arms via Setup tab or /zl lootframe.
+-- takeOver arg forces a direction for this call AND persists it.
+function M.TakeoverWanted()
+  if Z.DB and Z.DB.lootTakeover == false then return false end
+  return true
+end
+function M.SetTakeoverWanted(want)
+  if Z.DB then Z.DB.lootTakeover = want and true or false end
+  M.DetachBlizzardLoot(want and true or false)
+end
+function M.DetachBlizzardLoot(takeOver)
+  if takeOver == nil then takeOver = M.TakeoverWanted() end
+  local function frameTakeover(f)
+    if not f then return end
+    if takeOver then
+      if f.UnregisterAllEvents then pcall(f.UnregisterAllEvents, f) end
+      if f.SetScript then pcall(f.SetScript, f, "OnHide", nil) end
+      if f.Hide then pcall(f.Hide, f) end
+    else
+      if f.RegisterEvent then
+        pcall(f.RegisterEvent, f, "LOOT_OPENED")
+        pcall(f.RegisterEvent, f, "LOOT_CLOSED")
+        pcall(f.RegisterEvent, f, "LOOT_SLOT_CLEARED")
+      end
+      -- Re-arm FrameXML's own close hook so its window behaves stock.
+      if f.SetScript and CloseLoot then
+        pcall(f.SetScript, f, "OnHide", function() pcall(CloseLoot) end)
+      end
+      -- Do NOT Show() here: a frame detached before this loot session
+      -- never ran LootFrame_OnShow, its internal page state is nil, and
+      -- forcing Show() crashes FrameXML (LootFrame.lua arithmetic on nil
+      -- page). The re-registered LOOT_OPENED repopulates it on the NEXT
+      -- loot; the CURRENT corpse must be re-looted (close it: walking
+      -- away / CloseLoot ends the broken session cleanly).
+      -- NOTE: CloseLoot is deliberately NOT auto-called: ending the
+      -- player's loot session out from under them would drop loot access
+      -- entirely. Print the recovery step instead (once, at restore).
+    end
   end
-  local pf = pfLootFrame -- pfQuest's loot skin, same treatment when present
-  if pf then
-    if pf.UnregisterAllEvents then pcall(pf.UnregisterAllEvents, pf) end
-    if pf.SetScript then pcall(pf.SetScript, pf, "OnHide", nil) end
-    if pf.Hide then pcall(pf.Hide, pf) end
-  end
-  M.blizzardTakeover = true
+  frameTakeover(LootFrame) -- client global; nil headless (tests never define it)
+  frameTakeover(pfLootFrame) -- pfQuest's loot skin, same treatment when present
+  M.blizzardTakeover = takeOver
 end
 -- Per-loot safety net: keep Blizzard's frame down while OUR rows cover
 -- the corpse (post-detach this is normally already hidden; cheap to repeat).
@@ -161,21 +244,61 @@ end
 -- replaces Blizzard's in all looting situations.
 
 -- Slot-kind check: coin slots carry no item link. Vanilla exposes
--- LootSlotIsCoin; backported/retail clients expose GetLootSlotType
--- (LOOT_SLOT_MONEY == 2). Nil-safe: false with no client APIs (headless).
+-- LootSlotIsCoin AND LootSlotIsItem (1.12 FrameXML convention, cf.
+-- Gatherhud/BigWigs/Aegis_Exchange usage across this client); backported
+-- clients expose GetLootSlotType (LOOT_SLOT_MONEY == 2). Nil-safe: false
+-- with no client APIs (headless).
 function M.IsCoinSlot(slot)
   if LootSlotIsCoin then
     local ok, v = pcall(LootSlotIsCoin, slot)
     if ok and v == 1 then return true end
+  end
+  if LootSlotIsItem then
+    local ok, v = pcall(LootSlotIsItem, slot)
+    if ok then return not (v == 1) end
   end
   if GetLootSlotType then
     local ok, t = pcall(GetLootSlotType, slot)
     if ok and t ~= nil then
       if t == 2 then return true end
       if LOOT_SLOT_MONEY and t == LOOT_SLOT_MONEY then return true end
+      return false
     end
   end
   return false
+end
+
+-- The PARTY's roll threshold (green 2 .. epic 4): items BELOW it never
+-- enter a group roll — Blizzard hands them out via plain LootSlot, no
+-- Need/Greed frames. Reads the live client setting; falls back to the
+-- client default (uncommon) headless or when the API is absent.
+function M.GroupRollThreshold()
+  if GetLootThreshold then
+    local ok, t = pcall(GetLootThreshold)
+    if ok and type(t) == "number" then return t end
+  end
+  return (Z.Limits and Z.Limits.LOOT_THRESHOLD_DEFAULT) or 2
+end
+
+-- Should this item go through a GROUP roll (Need/Greed frames) rather
+-- than plain LootSlot? Only in a group, only under group loot, only at
+-- or above the party's threshold. Everything else is directly lootable.
+-- quality: GetLootSlotInfo 4th return (nil-safe: unknown -> not rollable).
+function M.IsGroupRollItem(quality)
+  if not (Z.SRSecurity and Z.SRSecurity.IsSolo
+      and not Z.SRSecurity.IsSolo()) then return false end
+  local method = nil
+  if GetLootMethod then
+    local ok, m = pcall(GetLootMethod)
+    if ok then method = m end
+  end
+  if method == nil and Z.SRSecurity and Z.SRSecurity.LootMethod then
+    local ok, m = pcall(Z.SRSecurity.LootMethod)
+    if ok then method = m end
+  end
+  if method ~= "group" then return false end
+  if type(quality) ~= "number" then return false end
+  return quality >= M.GroupRollThreshold()
 end
 
 -- Handed out = gone: drop the row from the list (by itemID; scanning the
@@ -226,20 +349,21 @@ function M.Hide()
   M.CloseDetail()
 end
 
--- The overview Close button: re-scan the corpse so leftover (unawarded)
--- loot comes back into view — through Blizzard's frame if we track no
--- rows, through ours otherwise. Either way the ML never loses sight of
--- undistributed loot by dismissing the window.
+-- The overview Close button: reconcile with the corpse (confirmed loots
+-- drop, failed clicks stay) instead of blindly hiding. Empty tracked list
+-- closes the loot out; leftovers stay listed so nothing undistributed is
+-- lost by dismissing the window.
 function M.CloseOverview()
-  M.Hide()
+  if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
+    Z.MasterLootUI.RescanLeftovers()
+  end
   if Z.Util.ArrayCount(M.items) == 0 then
+    M.Hide()
     if CloseLoot then pcall(CloseLoot) end
     return "closed"
   end
-  if Z.MasterLootUI and Z.MasterLootUI.OnLootOpened then
-    Z.MasterLootUI.OnLootOpened()
-  end
-  return "rescanned"
+  M.Hide()
+  return "parked"
 end
 
 -- No Blizzard fallback: every corpse slot (coin, greys, green+) has a row
@@ -250,10 +374,10 @@ function M.MaybeBlizzardFallback() return false end
 
 function M.HideBlizzardFallback() end
 
--- Corpse-side refresh: re-scan whatever is left. ONLY fires on
--- LOOT_SLOT_CLEARED while our window is OPEN (someone looted a slot
--- outside our rows — e.g. auto-loot). Rebuild keeps badge/state for
--- tracked rows; LOOT_CLOSED with an empty tracked list hides the window.
+-- Corpse-side refresh: re-scan whatever is left. LOOT_SLOT_CLEARED is the
+-- CONFIRMATION that a slot left the corpse (our click or anyone else's):
+-- the slot-keyed rescan drops exactly that row and keeps the rest.
+-- LOOT_CLOSED with an empty tracked list hides the window.
 -- Nil-safe headless (no corpse APIs -> no-op).
 function M.OnEvent(event, arg1)
   if event == "LOOT_CLOSED" then
@@ -574,8 +698,11 @@ function M.Refresh()
     end
     -- Row click: coin/free rows loot their slot at once (no detail, no
     -- rolling); roll rows open the detail (RollFor: row click selects).
+    -- Slot-explicit closure: the click carries THIS row's slot, never a
+    -- Find(itemID) lookup (duplicates would loot the wrong row's slot).
     if row.SetScript then
-      row:SetScript("OnClick", function() M.OnRowClick(id) end)
+      local clickSlot = it.slot
+      row:SetScript("OnClick", function() M.OnRowClick(id, clickSlot) end)
       -- Hover: item tooltip via the stashed link (never the raw scan link).
       row:SetScript("OnEnter", function()
         M.ShowTip(row, it._tipLink)
@@ -746,22 +873,129 @@ function M.ParkedDetail(itemID)
 end
 
 -- Row click entry: coin/free rows loot immediately through Blizzard's
--- frame (the only path that moves the item) and leave the list; roll
--- rows open the detail. Returns what happened (headless-testable).
-function M.OnRowClick(itemID)
+-- frame (the only path that moves the item) and leave the list. Solo,
+-- EVERY corpse row loots on click (Blizzard solo behavior: click takes
+-- it) — out of group there is nobody to roll against, so even
+-- threshold+ rows skip the detail. Sim rows carry no corpse slot and
+-- always open the detail. Returns what happened (headless-testable).
+-- Click-to-loot: coin/free rows ALWAYS loot on click; solo, EVERY corpse
+-- row loots on click (nobody to roll against). Loot first, drop the row
+-- only once the corpse CONFIRMS it (LOOT_SLOT_CLEARED, same slot) — never
+-- optimistically, so a failed LootSlot (locked, full bags, range) leaves
+-- the row up for retry. Sim rows carry no corpse slot: detail as usual.
+-- Returns "looting" (call issued), "loot failed" (no call), or
+-- "detail" (headless-testable).
+-- Group-roll rows (Blizzard's Need/Greed owns them) are display-only:
+-- clicking never loots (that would steal the item out from under the
+-- group roll); the row drops when Blizzard's roll resolves and the winner
+-- loots it (LOOT_SLOT_CLEARED rescan).
+-- clickSlot: the CLICKED row's slot from the button closure (never a
+-- Find(itemID) lookup — duplicates share itemIDs). Falls back to the
+-- row's tracked slot when the closure predates it (headless/tests call
+-- with itemID only).
+-- Passthrough: when Blizzard's frame is restored (takeover off — e.g.
+-- the click-to-loot kill-switch after silent loot calls), our rows are
+-- display-only: report it and touch nothing, Blizzard's own frame loots.
+function M.OnRowClick(itemID, clickSlot)
   local it = M.Find(itemID)
-  if it and (it.coin or it.free) then
+  if it and it.group then return "group roll" end
+  local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
+    and Z.SRSecurity.IsSolo()
+  if M.blizzardTakeover == false then return "passthrough" end
+  local slot = clickSlot or (it and it.slot)
+  if it and slot and (it.coin or it.free or solo) then
+    local issued = nil
     if Z.MasterLootUI and Z.MasterLootUI.LootCorpseSlot then
       local me = nil
       if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
-      -- Slot-explicit: duplicate itemIDs across slots must loot the CLICKED
-      -- row's slot, not the first Find() match.
-      Z.MasterLootUI.LootCorpseSlot(it.link, itemID, me, it.slot)
+      issued = Z.MasterLootUI.LootCorpseSlot(it.link, itemID, me, slot)
     end
-    M.RemoveItem(itemID, it.slot)
-    return "looted"
+    -- STRICT true: "noslot" (corpse unreadable), "gone" (item already
+    -- off the corpse — rescan to reconcile) and false (refused) must
+    -- NEVER dim the row — a dimmed-but-unlooted row is exactly the
+    -- reported "gray and says done, still not looted" ghost.
+    -- "passthrough" (Blizzard frame restored, hands off): nothing to dim.
+    if issued == "gone" then
+      if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
+        Z.MasterLootUI.RescanLeftovers()
+      end
+      return "gone"
+    end
+    if issued == "passthrough" then return "passthrough" end
+    if issued == true then
+      M.MarkDone(itemID)
+      -- Watchdog: if no confirm/error lands within 4s, re-read the slot
+      -- and un-dim a still-present row (silent server ignore must never
+      -- strand grey rows). Disarmed by confirm/error firing first.
+      if M.WatchClick then M.WatchClick(slot, itemID, M.DisplayName(it)) end
+      -- Kill-switch watch: clicks only (awards don't feed it — an ML
+      -- re-awarding the same item must never restore Blizzard's frame).
+      -- TWO consecutive silent clicks (issued clean, never confirmed) on
+      -- the same slot+item = dead LootSlot path: restore Blizzard's frame.
+      if M.NoteSilentLoot then M.NoteSilentLoot(slot, itemID) end
+      if M.lootDebug then
+        local link = nil
+        if GetLootSlotLink then
+          local ok, l = pcall(GetLootSlotLink, slot)
+          if ok then link = l end
+        end
+        local method = nil
+        if GetLootMethod then
+          local ok, m = pcall(GetLootMethod)
+          if ok then method = m end
+        end
+        -- FULL link (never truncated: names with spaces must be verifiable)
+        -- plus loot method, so a wrong-slot vs dead-call cause is conclusive.
+        Z.Print("lootdebug: row=" .. tostring(M.DisplayName(it))
+          .. " LootSlot(" .. tostring(slot) .. ") of "
+          .. tostring(GetNumLootItems and GetNumLootItems())
+          .. " method=" .. tostring(method)
+          .. " link=" .. tostring(link))
+      end
+      return "looting"
+    end
+    return "loot failed"
   end
   return M.OpenDetail(itemID) and "detail" or nil
+end
+
+-- /zl lootdebug: verbose click-to-loot logging (slot, corpse size, link).
+M.lootDebug = false
+
+-- Silent-call kill-switch: tracks consecutive click-to-loot calls that
+-- issued clean but never confirmed (no LOOT_SLOT_CLEARED, no error).
+-- LOOT_SLOT_CLEARED disarms via RescanLeftovers (arms clear there); any
+-- second silent call while one is still armed = the LootSlot path is dead
+-- on this client: restore Blizzard's frame (takeover off) so loot keeps
+-- working through the stock UI instead of stranding dimmed rows.
+-- Solo-only guard lives at the call site (grouped rolls need our flow).
+-- Headless-safe: pure table + client-global touch isolated in Detach.
+M.silentLootArms = nil
+function M.NoteSilentLoot(slot, itemID)
+  local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
+    and Z.SRSecurity.IsSolo()
+  if not solo then return end
+  M.silentLootArms = M.silentLootArms or {}
+  for i = 1, Z.Util.ArrayCount(M.silentLootArms) do
+    local a = M.silentLootArms[i]
+    if a and a.slot == slot and a.itemID == itemID then
+      -- Second silent call on the same slot+item: path is dead. Persist
+      -- the stand-down (survives corpses AND reloads) so the next corpse
+      -- doesn't re-detach into the same broken loop — Blizzard's frame
+      -- handles loot until the user re-arms (/zl lootframe, Setup tab).
+      M.silentLootArms = nil
+      if Z.LootWindow and Z.LootWindow.Clear then Z.LootWindow.Clear() end
+      M.SetTakeoverWanted(false)
+      -- The current corpse was scanned under a detached frame, so
+      -- Blizzard's window can't show it (forced Show would crash
+      -- FrameXML on nil page state). Re-loot the corpse for the stock UI.
+      Z.Print("ZugLoot loot clicks aren't reaching the server — "
+        .. "Blizzard loot frame restored (stays off until /zl lootframe). "
+        .. "Close this corpse and loot it again; /zl sheet etc. still work.")
+      return
+    end
+  end
+  table.insert(M.silentLootArms, { slot = slot, itemID = itemID })
 end
 
 function M.OpenDetail(itemID)

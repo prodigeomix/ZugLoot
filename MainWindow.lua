@@ -636,6 +636,28 @@ function M.RenderSetup()
   Tip(b5, "Reset all settings",
     "Factory reset: sheet, raid history, drop log and all options back to defaults.",
     "Confirmation window first. Local data only — anyone can use it.")
+  -- Loot-frame takeover toggle (the click-to-loot kill-switch stands it
+  -- down persistently; this opts back in). Same as /zl lootframe.
+  local b6 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b6:SetWidth(150) b6:SetHeight(24)
+  b6:SetPoint("LEFT", b5, "RIGHT", 8, 0)
+  local function takeLabel()
+    if Z.LootWindow and Z.LootWindow.TakeoverWanted() then
+      return "Loot frame: ZUG"
+    end
+    return "Loot frame: BLIZZ"
+  end
+  b6:SetText(takeLabel())
+  b6:SetScript("OnClick", function()
+    if Z.LootWindow and Z.LootWindow.TakeoverWanted() then
+      Z.LootWindow.SetTakeoverWanted(false)
+    else
+      Z.LootWindow.SetTakeoverWanted(true)
+    end
+    b6:SetText(takeLabel())
+  end)
+  Tip(b6, "Loot frame", "Which window handles corpse loot: ZugLoot or Blizzard's.",
+    "Auto-switches to Blizzard if ZugLoot clicks stop reaching the server.")
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (see Rolls tab)\n" ..

@@ -732,20 +732,23 @@ end
 -- corpse item to the winner; any other method loots it to us. Either way
 -- OUR window stays the visible loot window: the item leaves the corpse
 -- and our row drops (RemoveItem), never Blizzard's frame popping back.
+-- Three outcomes: true = loot call ISSUED (slot resolved + API present);
+-- "noslot" = no corpse slot/API involved (sim rows, /rf rolls, headless
+-- award tests) — the caller proceeds without corpse interaction; false =
+-- REFUSED (master-loot non-candidate) — the caller aborts and keeps row.
+-- The row leaves the list only on LOOT_SLOT_CLEARED for that slot — never
+-- optimistically here — so a failed LootSlot (locked, full bags, range)
+-- leaves the row up for retry.
 function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
-  local slot = slotHint or nil
-  if not slot and Z.LootWindow then
-    local it = Z.LootWindow.Find(itemID)
-    if it and it.slot then slot = it.slot end
-  end
-  if not slot and GetNumLootItems and GetLootSlotLink then
-    local n = GetNumLootItems() or 0
-    for s = 1, n do
-      local ok, l = pcall(GetLootSlotLink, s)
-      if ok and l and Z.Util.ItemID(l) == itemID then slot = s break end
-    end
-  end
-  if not slot then return end
+  -- LIVE-resolve the slot at call time: stored slot numbers go stale the
+  -- moment anything shifts the corpse (earlier loot, page change), and a
+  -- stale LootSlot() is a silent server-side no-op — exactly the reported
+  -- "gray [done], nothing looted, no error" ghost. When the hinted slot
+  -- no longer holds THIS item, re-scan the corpse for it; when the item
+  -- is gone entirely, report "gone" (caller leaves the row for rescan).
+  local slot = M.VerifySlot(itemID, slotHint)
+  if slot == "gone" then return "gone" end
+  if not slot then return "noslot" end
   local me = nil
   if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
   local method = nil
@@ -753,11 +756,114 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
   if method == nil and Z.SRSecurity and Z.SRSecurity.LootMethod then
     local ok, m = pcall(Z.SRSecurity.LootMethod) if ok then method = m end
   end
-  if method == "master" and me and winnerName and winnerName ~= me then
-    if GiveMasterLoot then pcall(GiveMasterLoot, slot, winnerName) end
-  else
-    if LootSlot then pcall(LootSlot, slot) end
+  -- BoP items need a second call: LootSlot raises the LOOT_BIND_CONFIRM
+  -- popup, ConfirmLootSlot(slot) takes it. Without it BoP loot sits on
+  -- the corpse forever. The confirm lands in OnEvent (Core routes
+  -- LOOT_BIND_CONFIRM) and confirms every armed pending slot.
+  -- SuperWoW hook (Turtle client): LootSlot takes an optional second arg
+  -- (force). A plain LootSlot(slot) from script context is silently
+  -- dropped by this client — verified live: direct call, correct slot,
+  -- freeforall, no error, no loot. RollFor documents the same class of
+  -- limitation for coins. Pass force=1 (verified strings: SuperWoWhook
+  -- exports "LootSlot(slot [, force])"). pcall-guarded: a stock 1.12
+  -- client ignores extra C-API args, so this stays compatible.
+  local function superLoot(s)
+    if LootSlot then return pcall(LootSlot, s, 1) end
   end
+  local function callLoot()
+    if method == "master" and me and winnerName and winnerName ~= me then
+      -- Master loot hands the corpse item to ANOTHER player by candidate
+      -- index (RollFor parity: GetMasterLootCandidate(slot, i) -> index).
+      -- Vanilla quirk: one-arg GetMasterLootCandidate(i) ignores the slot.
+      local idx = M.MasterLootIndex(slot, winnerName)
+      if not idx then
+        Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.")
+        return false
+      end
+      if GiveMasterLoot then return pcall(GiveMasterLoot, slot, idx) end
+      return "noslot"
+    end
+    if LootSlot then return superLoot(slot) end
+    return "noslot"
+  end
+  local okCall, errCall = callLoot()
+  if okCall == "noslot" then return "noslot" end
+  if not okCall then
+    -- The pcall itself blew up (bad slot, tainted call): NEVER dim the
+    -- row — surface the error so a dead loot call can't masquerade as
+    -- "done" (the reported ghost: gray row, nothing looted).
+    Z.Print("Loot failed (slot " .. tostring(slot) .. "): " .. tostring(errCall))
+    return false
+  end
+  -- Armed, not done: the row drops when LOOT_SLOT_CLEARED confirms the
+  -- slot left the corpse (post-confirm rescan prunes anything stale).
+  if Z.LootWindow and Z.LootWindow.Find then
+    local row = Z.LootWindow.Find(itemID)
+    if row and (slotHint == nil or row.slot == slot) then
+      M.pendingLoot = M.pendingLoot or {}
+      M.pendingLoot[slot] = row
+    end
+  end
+  return true
+end
+
+-- Verify a stored slot still holds the expected item, live from the
+-- corpse. Returns the (possibly re-resolved) slot number, "gone" when
+-- the item is nowhere on the corpse, or nil when the corpse can't be
+-- read at all. Coin rows (itemID "Coin") verify via IsCoinSlot since
+-- they carry no link.
+function M.VerifySlot(itemID, slotHint)
+  if not (GetNumLootItems and GetLootSlotLink) then
+    if slotHint then return slotHint end
+    return nil
+  end
+  local n = GetNumLootItems() or 0
+  local function slotHolds(s)
+    if itemID == "Coin" then
+      return Z.LootWindow and Z.LootWindow.IsCoinSlot
+        and Z.LootWindow.IsCoinSlot(s)
+    end
+    local ok, l = pcall(GetLootSlotLink, s)
+    return ok and l and Z.Util.ItemID(l) == itemID
+  end
+  if slotHint and slotHint >= 1 and slotHint <= n and slotHolds(slotHint) then
+    return slotHint -- still valid: cheapest path, no scan
+  end
+  for s = 1, n do
+    if s ~= slotHint and slotHolds(s) then return s end -- shifted: re-resolve
+  end
+  if slotHint then return "gone" end -- was tracked, now absent
+  return nil
+end
+
+-- Click confirmations in flight: [slot] = row, armed by LootCorpseSlot,
+-- cleared by the LOOT_SLOT_CLEARED confirmation (same slot) or the LOOT
+-- re-scan (slot gone = looted elsewhere / corpse closed). Rows leave the
+-- list ONLY through confirmation — never optimistically at click time.
+M.pendingLoot = nil
+
+-- Candidate index of a player for one corpse slot (nil when absent).
+-- RollFor parity: vanilla 1.12 takes ONE arg (index); backports/retail
+-- take (slot, index). One-arg first — a two-arg call on vanilla would
+-- silently misread (extra C-API args ignored, slot mistaken for index).
+-- GetMasterLootCandidate errors with no candidate list (solo /
+-- non-master methods) — pcall-guarded, never raises.
+function M.MasterLootIndex(slot, playerName)
+  if not GetMasterLootCandidate or not playerName then return nil end
+  for i = 1, 40 do
+    local ok, nm = pcall(GetMasterLootCandidate, i)
+    if ok and nm ~= nil and nm ~= "" then
+      if nm == playerName then return i end
+    else
+      local ok2, nm2 = pcall(GetMasterLootCandidate, slot, i)
+      if ok2 and nm2 ~= nil and nm2 ~= "" then
+        if nm2 == playerName then return i end
+      else
+        break -- end of the candidate list (either form)
+      end
+    end
+  end
+  return nil
 end
 
 -- Direct award from the loot-window row detail: no roll, straight to the
@@ -770,10 +876,13 @@ function M.AwardDirect(itemID, winnerName, source)
     local it = Z.LootWindow.Find(itemID)
     if it and it.link then link = it.link end
   end
+  -- Loot the corpse slot FIRST (the only path that moves the item): a
+  -- refused loot call (non-candidate, unresolvable slot) aborts the award
+  -- and keeps the row. Sim rows have no slot: skip straight to DoAward.
+  if source ~= "sim" then
+    if M.LootCorpseSlot(link, itemID, winnerName) == false then return false end
+  end
   M.DoAward(itemID, link, winnerName, source == "sim" and "sim" or "raid")
-  -- Loot the corpse slot through Blizzard's frame (the only path that
-  -- moves the item), then drop our row. Sim rows have no slot: skip.
-  if source ~= "sim" then M.LootCorpseSlot(link, itemID, winnerName) end
   -- Handed out = gone: the row leaves the list (live loot too, like the
   -- corpse running dry). Stays gone until the next LOOT_OPENED / simboss.
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
@@ -883,9 +992,11 @@ function M.AwardChosen(choice, itemID)
   local link = sess.itemLink
   local source = sess.silent and "sim" or "raid"
   showAwardPopup(link, name, function()
+    -- Corpse loot call first: a refused call (non-candidate) aborts the
+    -- award and keeps the row + menu. Sim rows have no slot: always apply.
+    if source ~= "sim" and M.LootCorpseSlot(link, sess.itemID, name) == false then return end
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
-    if source ~= "sim" then M.LootCorpseSlot(link, sess.itemID, name) end
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
@@ -904,9 +1015,9 @@ function M.AwardChosen(choice, itemID)
   -- DoAward inside... only when the popup fires. Without a client there is
   -- no OnAccept, so apply directly.
   if not (StaticPopupDialogs and StaticPopup_Show) then
+    if source ~= "sim" and M.LootCorpseSlot(link, sess.itemID, name) == false then return end
     M.DoAward(sess.itemID, link, name, source)
     closeFinishedDetail()
-    if source ~= "sim" then M.LootCorpseSlot(link, sess.itemID, name) end
     if Z.LootWindow and Z.LootWindow.RemoveItem then
       Z.LootWindow.RemoveItem(sess.itemID)
     end
@@ -951,7 +1062,14 @@ end
 -- Further items go through /rf (or the sim loot window in sim).
 -- Scan one corpse slot into a row entry (nil when the slot is empty or
 -- unreadable). Coin slots carry no link: { itemID="Coin" }.
-function M.ScanSlot(slot, threshold)
+-- threshold: OUR roll-row cutoff (DB minLootQuality, default rare+).
+-- groupThresh: the PARTY's Need/Greed cutoff (GetLootThreshold, default
+-- uncommon) — items below it never enter a group roll.
+-- Row kinds: coin (always click-loot) | roll (>= threshold: SR detail) |
+-- group (group-loot item at/above groupThresh but BELOW our threshold:
+-- Blizzard's Need/Greed frames own it — we list it but never loot it) |
+-- free (everything else: one click loots, no rolling).
+function M.ScanSlot(slot, threshold, groupThresh)
   if not GetNumLootItems then return nil end
   -- Coin first: no link, texture + amount text from the slot info.
   if Z.LootWindow and Z.LootWindow.IsCoinSlot
@@ -971,16 +1089,20 @@ function M.ScanSlot(slot, threshold)
   if not link then return nil end
   -- RollFor reads everything off the slot: GetLootSlotInfo gives
   -- texture + quantity in one call, GetItemInfo gives quality.
-  local tex, qty, slotName = nil, nil, nil
+  -- Quality prefers the SLOT's 4th return (always present client-side)
+  -- over the item cache (uncached GetItemInfo lies 0 and would
+  -- misclassify an epic as free loot).
+  local tex, qty, slotName, slotQ = nil, nil, nil, nil
   if GetLootSlotInfo then
     -- Vanilla: (texture, name, quantity, quality); retail adds args.
     local a, b, c, d = GetLootSlotInfo(slot)
     tex, slotName, qty = a, b, c
     if type(qty) ~= "number" then qty = nil end
     if type(tex) ~= "string" then tex = nil end
+    if type(d) == "number" then slotQ = d end
   end
-  local q = nil
-  if GetItemInfo then
+  local q = slotQ
+  if q == nil and GetItemInfo then
     local _, _, qq = GetItemInfo(link)
     q = qq
   end
@@ -991,64 +1113,132 @@ function M.ScanSlot(slot, threshold)
   if q >= (threshold or 3) then
     return entry -- roll row (badge added below)
   end
+  if Z.LootWindow and Z.LootWindow.IsGroupRollItem
+      and Z.LootWindow.IsGroupRollItem(q) then
+    entry.group = true -- Blizzard's Need/Greed owns it: list, don't touch
+    return entry
+  end
   entry.free = true -- leftover: one click loots, no rolling
   return entry
 end
 
--- Re-scan the corpse and patch the tracked rows (LOOT_SLOT_CLEARED path):
--- drop rows whose slots went empty, keep badge/status of the rest, append
--- genuinely new slots. Returns the live row count. Nil-safe headless.
+-- Re-scan the corpse and patch the TRACKED rows (LOOT_SLOT_CLEARED /
+-- Close path): drop rows whose slots went empty, keep badge/status of the
+-- rest, append genuinely new slots. M.items here is the LootWindow list
+-- (MasterLootUI owns no row list of its own). Returns the live row count.
+-- Nil-safe headless.
 function M.RescanLeftovers()
-  if not GetNumLootItems then return Z.Util.ArrayCount(M.items) end
+  local rows = (Z.LootWindow and Z.LootWindow.items) or M.items
+  if not GetNumLootItems then return Z.Util.ArrayCount(rows) end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
   local n = GetNumLootItems()
-  -- Slot-keyed (duplicate itemIDs across slots are distinct rows).
-  local seen = {}
-  local fresh = {}
+  -- Slot NUMBERS shift when a slot is looted (old slot 2 becomes slot 1),
+  -- so reconciliation matches by identity multiset, not slot index:
+  -- corpse entries { key, entry } in slot order; each tracked row consumes
+  -- one equal-key corpse entry. Rows with no match left the corpse.
+  -- key: "coin" | "id:<itemID>" (free rows included — a grey is a grey).
+  local corpse = {}
   for slot = 1, n do
     local e = M.ScanSlot(slot, threshold)
     if e then
-      local key = "slot:" .. slot
-      seen[key] = true
-      local tracked = false
-      if Z.LootWindow and Z.LootWindow.items then
-        for j = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
-          if Z.LootWindow.items[j].slot == slot then tracked = true break end
-        end
-      end
-      if not tracked then table.insert(fresh, e) end
+      local key = e.coin and "coin"
+        or ((e.group and "group:") or "id:") .. tostring(e.itemID)
+      table.insert(corpse, { key = key, entry = e })
     end
   end
-  -- Drop rows whose slot went empty (looted outside our rows).
-  for i = Z.Util.ArrayCount(M.items), 1, -1 do
-    local it = M.items[i]
-    if it then
-      local key = "slot:" .. tostring(it.slot or -1)
-      if not seen[key] then
-        table.remove(M.items, i)
+  local function rowKey(it)
+    if not it then return nil end
+    if it.coin then return "coin" end
+    return ((it.group and "group:") or "id:") .. tostring(it.itemID)
+  end
+  -- First pass: match armed click-to-loot rows. An armed row WITH a corpse
+  -- match is a failed LootSlot (locked, full bags, range): keep the row
+  -- (retryable), un-dim it. An armed row with NO match is a confirmed
+  -- loot: drop it. Arms always clear — and a confirm also clears the
+  -- kill-switch watch for that slot (a working path must never trip it).
+  local armed = {}
+  if M.pendingLoot then
+    for slot in pairs(M.pendingLoot) do armed[slot] = true end
+    M.pendingLoot = nil
+  end
+  local function clearSilentWatch(slot, itemID)
+    local W = Z.LootWindow and Z.LootWindow.silentLootArms
+    if not W then return end
+    for i = Z.Util.ArrayCount(W), 1, -1 do
+      local a = W[i]
+      if a and (slot == nil or a.slot == slot)
+          and (itemID == nil or a.itemID == itemID) then
+        table.remove(W, i)
       end
     end
+  end
+  local corpseUsed = {}
+  local keepRow = {}
+  for i = 1, Z.Util.ArrayCount(rows) do
+    local it = rows[i]
+    local matched = nil
+    if it then
+      for c = 1, Z.Util.ArrayCount(corpse) do
+        if not corpseUsed[c] and corpse[c].key == rowKey(it) then
+          matched = c break
+        end
+      end
+    end
+    if matched then
+      corpseUsed[matched] = true
+      keepRow[i] = true
+      -- Refresh the slot number: slots shift after each loot.
+      rows[i].slot = corpse[matched].entry.slot
+      -- Armed + still present = FAILED call (server answered by keeping
+      -- the slot), never silent: clear its kill-switch watch. A retry is
+      -- a fresh first arm, not a second silent strike.
+      if armed[rows[i].slot] or (it and armed[it.slot]) then
+        clearSilentWatch(nil, it and it.itemID)
+      end
+    elseif it and armed[it.slot] then
+      keepRow[i] = false -- confirmed click: row leaves
+      clearSilentWatch(it.slot, it.itemID) -- working path: never trip switch
+      if Z.LootWindow and Z.LootWindow.DropParked then
+        Z.LootWindow.DropParked(it.itemID)
+      end
+    elseif it then
+      keepRow[i] = false -- looted outside our rows: row leaves
+    else
+      keepRow[i] = false
+    end
+  end
+  local fresh = {}
+  for c = 1, Z.Util.ArrayCount(corpse) do
+    if not corpseUsed[c] then table.insert(fresh, corpse[c].entry) end
+  end
+  for i = Z.Util.ArrayCount(rows), 1, -1 do
+    if not keepRow[i] then table.remove(rows, i) end
+  end
+  -- Failed clicks (armed but still on the corpse) return to open state.
+  for i = 1, Z.Util.ArrayCount(rows) do
+    local it = rows[i]
+    if it and it.status == "done" then it.status = "open" end
   end
   -- Badge + append genuinely new slots (same shaping as OnLootOpened).
   for i = 1, Z.Util.ArrayCount(fresh) do
     local e = fresh[i]
     local badge = ""
-    if not e.coin and not e.free and e.itemID
+    if not e.coin and not e.free and not e.group and e.itemID
         and Z.DB and Z.DB.sheet and Z.SRData.ReserveBadge then
       badge = Z.SRData.ReserveBadge(Z.DB.sheet, e.itemID)
     end
     e.badge = badge
-    e.index = Z.Util.ArrayCount(M.items) + 1
+    e.index = Z.Util.ArrayCount(rows) + 1
     e.status = "open"
     e.source = "loot"
     if Z.LootWindow and Z.LootWindow.EnsureResolved then
       Z.LootWindow.EnsureResolved(e)
     end
-    table.insert(M.items, e)
+    table.insert(rows, e)
   end
-  for i = 1, Z.Util.ArrayCount(M.items) do M.items[i].index = i end
+  for i = 1, Z.Util.ArrayCount(rows) do rows[i].index = i end
   if Z.LootWindow and Z.LootWindow.Refresh then Z.LootWindow.Refresh() end
-  return Z.Util.ArrayCount(M.items)
+  return Z.Util.ArrayCount(rows)
 end
 
 function M.OnLootOpened()
@@ -1056,19 +1246,21 @@ function M.OnLootOpened()
   if M.pendingAwardMenu then return end -- still deciding the award
   if not GetNumLootItems then return end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
-  local found, coin, free = {}, {}, {}
+  local found, coin, free, grouped = {}, {}, {}, {}
   local n = GetNumLootItems()
   for slot = 1, n do
     local e = M.ScanSlot(slot, threshold)
     if e then
       if e.coin then table.insert(coin, e)
+      elseif e.group then table.insert(grouped, e)
       elseif e.free then table.insert(free, e)
       else table.insert(found, e) end
     end
   end
   if Z.Util.ArrayCount(found) == 0
       and Z.Util.ArrayCount(coin) == 0
-      and Z.Util.ArrayCount(free) == 0 then
+      and Z.Util.ArrayCount(free) == 0
+      and Z.Util.ArrayCount(grouped) == 0 then
     return -- corpse unreadable/empty: nothing to cover, stay out of the way
   end
   -- Announce + log the ROLL rows only (coin/free loot needs no roll call).
@@ -1082,22 +1274,29 @@ function M.OnLootOpened()
   -- Guarded: ResetFresh must never abort the scan (its pieces are
   -- independently nil-safe, but a corpse with loot open takes priority).
   if Z.Sim and Z.Sim.ResetFresh then pcall(Z.Sim.ResetFresh) end
-  -- Ours is the loot window now: (re-)detach Blizzard's frame — hiding
-  -- once is not enough, FrameXML re-shows it on every loot — while our
-  -- rows cover this corpse. Detach is idempotent (safe to repeat per loot).
+  -- Ours is the loot window now — UNLESS the kill-switch stood us down
+  -- (persisted lootTakeover=false): then stay out of the way entirely so
+  -- Blizzard's frame handles the corpse (no rows, no detach, no announce
+  -- spam — the stock UI is the loot UI until the user re-arms).
+  if Z.LootWindow and not Z.LootWindow.TakeoverWanted() then return end
+  -- (Re-)detach Blizzard's frame — hiding once is not enough, FrameXML
+  -- re-shows it on every loot — while our rows cover this corpse.
+  -- Detach is idempotent (safe to repeat per loot).
   if Z.LootWindow and Z.LootWindow.DetachBlizzardLoot then
     pcall(Z.LootWindow.DetachBlizzardLoot)
   end
-  -- RollFor-style loot window: coin first, roll rows next, free leftovers
-  -- last. The ML works each roll row from the list; coin/free rows loot
-  -- on click.
+  -- RollFor-style loot window: coin first, roll rows next, group-roll
+  -- items (Blizzard's Need/Greed owns those) after, free leftovers last.
+  -- The ML works each roll row from the list; coin/free rows loot on
+  -- click; group rows are display-only until Blizzard's roll resolves.
   if Z.LootWindow then
     local rows = {}
     local function push(e, badge)
       table.insert(rows, { itemID = e.itemID, link = e.link,
         name = e.name, texture = e.texture,
         quality = e.quality, quantity = e.quantity,
-        slot = e.slot, badge = badge or "", coin = e.coin, free = e.free })
+        slot = e.slot, badge = badge or "", coin = e.coin,
+        free = e.free, group = e.group })
     end
     for i = 1, Z.Util.ArrayCount(coin) do push(coin[i]) end
     for i = 1, Z.Util.ArrayCount(found) do
@@ -1108,6 +1307,7 @@ function M.OnLootOpened()
       end
       push(found[i], badge)
     end
+    for i = 1, Z.Util.ArrayCount(grouped) do push(grouped[i], "ROLL") end
     for i = 1, Z.Util.ArrayCount(free) do push(free[i]) end
     Z.LootWindow.SetItems(rows, "loot")
     Z.LootWindow.Show("Boss loot")
@@ -1122,5 +1322,33 @@ function M.OnEvent(event, a1, a2)
     if player then M.OnSystemRoll(player, tonumber(roll), tonumber(minR), tonumber(maxR)) end
   elseif event == "LOOT_OPENED" then
     M.OnLootOpened()
+  elseif event == "LOOT_BIND_CONFIRM" then
+    -- BoP take: confirm every armed click-to-loot slot. a1 is the slot
+    -- on 1.12 (nil-safe: confirm all armed slots when it isn't).
+    if ConfirmLootSlot then
+      if type(a1) == "number" and M.pendingLoot and M.pendingLoot[a1] then
+        pcall(ConfirmLootSlot, a1)
+      elseif M.pendingLoot then
+        for slot in pairs(M.pendingLoot) do pcall(ConfirmLootSlot, slot) end
+      end
+    end
+  elseif event == "UI_ERROR_MESSAGE" then
+    -- A dead loot call (locked, full bags, range, coin-in-master-mode)
+    -- must NEVER strand a dimmed row: drop the arms AND un-dim every
+    -- "done" row back to open immediately (don't wait for a rescan that
+    -- may never come — no LOOT_SLOT_CLEARED fires on failure). The client
+    -- already shows the error itself; stay quiet here. Also drops the
+    -- kill-switch watch: a REFUSED call is answered (not silent), so it
+    -- must never count toward the dead-path trip.
+    M.pendingLoot = nil
+    if Z.LootWindow then Z.LootWindow.silentLootArms = nil end
+    if Z.LootWindow and Z.LootWindow.items then
+      local touched = false
+      for i = 1, Z.Util.ArrayCount(Z.LootWindow.items) do
+        local it = Z.LootWindow.items[i]
+        if it and it.status == "done" then it.status = "open" touched = true end
+      end
+      if touched and Z.LootWindow.Refresh then Z.LootWindow.Refresh() end
+    end
   end
 end

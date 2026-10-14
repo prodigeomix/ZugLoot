@@ -229,13 +229,37 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   per `LOOT_OPENED`) — one-shot hiding is NOT enough, FrameXML re-shows
   the frame on every loot — so our rows are the loot window in every
   looting situation. NOTHING falls back to Blizzard: coin/free rows loot
-  their slot on click, roll rows open the detail. Each roll-row item is
+  their slot on click; grouped, roll rows open the detail, while SOLO every
+  row loots on click (Blizzard solo behavior — nobody to roll against, so
+  no detail opens). Group loot honors the PARTY threshold
+  (`GetLootThreshold`, green→epic): items at/above it enter a real group
+  roll — listed with a `ROLL` badge, click never loots (Blizzard's
+  Need/Greed frames own them, mirrored in our dice frame which votes via
+  `RollOnLoot`, never chat `/roll`); items below it are directly lootable
+  (grey/white never roll). Slot quality comes from the slot's own
+  `GetLootSlotInfo`, never the maybe-cold item cache. Click-to-loot is
+  CONFIRM-driven, never optimistic: the click issues the corpse call and
+  dims the row; the row drops only when `LOOT_SLOT_CLEARED` confirms the
+  slot left the corpse — a failed call (locked slot, full bags, out of
+  range) leaves the row up for retry, and a pcall-level blowup surfaces
+  in chat instead of dimming the row into a "done but not looted" ghost.
+  BoP takes confirm via `LOOT_BIND_CONFIRM` → `ConfirmLootSlot`.
+  Kill-switch: two consecutive solo clicks that issue clean but never
+  confirm (no `LOOT_SLOT_CLEARED`, no error) restore Blizzard's frame and
+  stand our rows down to display-only (`passthrough`) — a dead `LootSlot`
+  path must yield to the stock UI, never strand dimmed rows. Confirms,
+  errors, and failed-but-present rescans all disarm the watch; awards
+  never arm it.
+  Each roll-row item is
   announced + logged (`loot`/`seen`), awarding loots the corpse slot
-  through Blizzard's APIs (`GiveMasterLoot` to another winner under
-  master loot, plain `LootSlot` otherwise), and the overview Close button
-  re-scans leftovers (empty list closes out). `LOOT_SLOT_CLEARED` while
-  open re-scans (slot-keyed, so duplicate itemIDs track correctly); the
-  last award closes the corpse out via `CloseLoot`.
+  through Blizzard's APIs (master loot hands to another winner by
+  CANDIDATE INDEX via `GetMasterLootCandidate` — RollFor parity, never by
+  name; a non-candidate award is refused with the row kept — plain
+  `LootSlot` otherwise), and the overview Close button reconciles with
+  the corpse (empty list closes out). `LOOT_SLOT_CLEARED` while open
+  re-scans by identity multiset (slot numbers shift after each loot, so
+  duplicate itemIDs track correctly); the last award closes the corpse
+  out via `CloseLoot`.
   The **loot window
   lists every drop as a numbered row: row number, item icon, quality-colored
   item name, and the SR/HR badge on the right** (resolution chain per row —
@@ -487,6 +511,9 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl simroll <item>   roll one queued sim item (ML)
 /zl simstop          full stop: session, timers, queue, menus, windows reset
 /zl log | /zl logclear drop log
+/zl lootdebug       verbose click-to-loot logging (slot, corpse size, link)
+/zl lootframe       toggle corpse-loot window: ZugLoot vs Blizzard's (persisted;
+                    auto-stands-down if ZugLoot clicks stop reaching the server)
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)
 /zl help

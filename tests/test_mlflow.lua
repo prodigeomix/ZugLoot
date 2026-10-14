@@ -117,11 +117,16 @@ local function resetHarness(rollTime)
   ML.parkedSessions = nil
   ML.pendingAwardMenu = nil
   ML.pendingAwardMenus = nil
+  ML.pendingLoot = nil -- click confirmations in flight (see LootCorpseSlot)
+  ZugLoot.LootWindow.silentLootArms = nil -- kill-switch watch
+  ZugLoot.LootWindow.blizzardTakeover = true -- harness detaches (see §2)
+  ZugLoot.LootWindow.watchdogs = nil -- click watchdogs
   ZugLoot.LootWindow.Clear()
   printed, dropAdds, chatSent, shownItems = {}, {}, {}, {}
   grouping = "solo"
   lootSlots = {}
   ZugLoot.DB = { sheet = makeSheet(), rollTime = rollTime or 2 }
+  ZugLoot.DB.lootTakeover = true -- harness wants the takeover (see §2)
 end
 
 local function drain(step)
@@ -213,7 +218,7 @@ LootFrame = {
   SetScript = function() blizzDetached = blizzDetached + 1 end,
   Hide = function() blizzHidden = blizzHidden + 1 end,
 }
-LootSlot = function(slot) table.insert(lootedSlots, slot) end
+LootSlot = function(slot, force) table.insert(lootedSlots, { slot, force }) end
 GiveMasterLoot = function(slot, who) table.insert(masterGiven, { slot, who }) end
 UnitName = function() return "SoloPlayer" end
 lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
@@ -232,29 +237,53 @@ lootSlots = {
   { link = "item:1001:0:0:0", quality = 4 },
   { link = "item:1002:0:0:0", quality = 4 },
 }
+-- Close reconciles with the corpse: unconfirmed rows stay listed
+-- (nothing looted them), so Close parks the window instead of hiding it.
 ML.OnLootOpened()
-ZugLoot.LootWindow.RemoveItem(1001)
-eq(ZugLoot.LootWindow.CloseOverview(), "rescanned", "close with leftovers rescans")
-eq(#ZugLoot.LootWindow.items, 2, "leftovers listed again after rescan")
-ZugLoot.LootWindow.RemoveItem(1001)
-ZugLoot.LootWindow.RemoveItem(1002)
+eq(ZugLoot.LootWindow.CloseOverview(), "parked", "close with leftovers parks")
+eq(#ZugLoot.LootWindow.items, 2, "leftovers still listed after close")
+-- Loot one slot for real (corpse confirms), Close reconciles it away;
+-- the last row out closes the loot.
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } } -- slot 1 looted away
+ZugLoot.LootWindow.OnEvent("LOOT_SLOT_CLEARED")
+eq(#ZugLoot.LootWindow.items, 1, "confirmed slot drops after rescan")
+eq(ZugLoot.LootWindow.CloseOverview(), "parked", "one leftover still parks")
+lootSlots = {} -- corpse empty
+ZugLoot.LootWindow.OnEvent("LOOT_SLOT_CLEARED")
 eq(ZugLoot.LootWindow.CloseOverview(), "closed", "empty close stays shut")
+lootSlots = {
+  { link = "item:1001:0:0:0", quality = 4 },
+  { link = "item:1002:0:0:0", quality = 4 },
+}
 -- Master-loot handoff: winner ~= us under master loot mints GiveMasterLoot.
 GetLootMethod = function() return "master" end
 UnitName = function() return "SoloPlayer" end
 LootFrame = { Hide = function() end }
 LootSlot = function() error("must not plain-loot under master loot") end
 GiveMasterLoot = function(slot, who) table.insert(masterGiven, { slot, who }) end
+-- Candidate roster: winner sits at index 2 (RollFor parity: award by
+-- candidate INDEX, not name).
+GetMasterLootCandidate = function(slot, i)
+  if i == 1 then return "SoloPlayer" elseif i == 2 then return "SomebodyElse" end
+  return nil
+end
 lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
 ML.OnLootOpened()
 ML.AwardDirect(1001, "SomebodyElse", "loot")
 eq(#masterGiven, 1, "master loot handed to the winner")
 eq(masterGiven[1][1], 1, "correct corpse slot")
-eq(masterGiven[1][2], "SomebodyElse", "correct winner")
+eq(masterGiven[1][2], 2, "correct candidate index")
+-- Non-candidate award is refused: no loot call, row stays.
+ML.OnLootOpened()
+local refusedBefore = #masterGiven
+ML.AwardDirect(1001, "NobodyHere", "loot")
+eq(#masterGiven, refusedBefore, "non-candidate award issues no loot call")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "refused award keeps the row")
+GetMasterLootCandidate = nil
 -- Grey-only corpse: no Blizzard fallback — the grey is a free row in OUR
 -- window (click loots it). Golden rule: nothing falls back to Blizzard.
 GetLootMethod = nil -- solo: plain LootSlot path
-LootSlot = function(slot) table.insert(lootedSlots, slot) end
+LootSlot = function(slot, force) table.insert(lootedSlots, { slot, force }) end
 LootFrame = { UnregisterAllEvents = function() end, SetScript = function() end,
   Show = function() error("must never show Blizzard frame") end, Hide = function() end }
 lootSlots = { { link = "item:9:0:0:0", quality = 1 } } -- grey only: free row
@@ -265,10 +294,11 @@ local freeSlot = ZugLoot.LootWindow.items[1].slot
 local beforeFree = #lootedSlots
 ML.LootCorpseSlot(nil, 9, "SoloPlayer")
 eq(#lootedSlots, beforeFree + 1, "free row loots its corpse slot")
-eq(lootedSlots[#lootedSlots], freeSlot, "correct corpse slot")
+eq(lootedSlots[#lootedSlots][1], freeSlot, "correct corpse slot")
+eq(lootedSlots[#lootedSlots][2], 1, "SuperWoW force flag passed")
 -- Coin slot: first row, loots on click (client GetLootSlotType path is
 -- stubbed here via LootSlotIsCoin; the scan reads it, not the link).
-LootSlotIsCoin = function(slot) if slot == 1 then return 1 end return 0 end
+LootSlotIsCoin = function(slot) if lootSlots[slot] and lootSlots[slot].link == nil then return 1 end return 0 end
 lootSlots = { { link = nil }, { link = "item:1001:0:0:0", quality = 4 } }
 ML.OnLootOpened()
 eq(ZugLoot.LootWindow.items[1].itemID, "Coin", "coin row leads the list")
@@ -280,26 +310,196 @@ LootSlotIsCoin = nil
 -- Row click routing: coin/free rows loot at once (no detail); roll rows
 -- open the detail. Duplicate itemIDs loot the CLICKED slot only.
 local LW = ZugLoot.LootWindow
-LootSlotIsCoin = function(slot) if slot == 1 then return 1 end return 0 end
+LootSlotIsCoin = function(slot) if lootSlots[slot] and lootSlots[slot].link == nil then return 1 end return 0 end
 lootSlots = { { link = nil },
   { link = "item:9:0:0:0", quality = 1 },
   { link = "item:9:0:0:0", quality = 1 },
   { link = "item:1001:0:0:0", quality = 4 } }
 ML.OnLootOpened()
+-- Click-to-loot is confirm-driven: click issues the call and dims the
+-- row ("looting"); the row drops only when LOOT_SLOT_CLEARED confirms
+-- the slot left the corpse. Simulate the corpse: slot 1 (coin) empties.
 eq(LW.items[1].itemID, "Coin", "coin leads")
-eq(LW.OnRowClick("Coin"), "looted", "coin click loots")
-ok(LW.Find("Coin") == nil, "coin row gone after click")
+eq(LW.OnRowClick("Coin"), "looting", "coin click issues the loot call")
+eq(lootedSlots[#lootedSlots][1], 1, "coin slot called")
+ok(LW.Find("Coin") ~= nil, "row stays until the corpse confirms")
+table.remove(lootSlots, 1) -- corpse: coin gone, slots shift down
+LW.OnEvent("LOOT_SLOT_CLEARED")
+ok(LW.Find("Coin") == nil, "coin row gone after confirm")
 local freeRows = {}
 for i = 1, #LW.items do if LW.items[i].free then table.insert(freeRows, LW.items[i]) end end
 eq(#freeRows, 2, "two duplicate grey rows listed")
-eq(LW.OnRowClick(9), "looted", "grey click loots")
+local greySlot = freeRows[1].slot
+eq(LW.OnRowClick(9), "looting", "grey click issues the loot call")
+eq(lootedSlots[#lootedSlots][1], greySlot, "clicked row's own slot called")
+-- Corpse confirm: ONLY the clicked slot empties (duplicate survives).
+for i = #lootSlots, 1, -1 do
+  if lootSlots[i].link == "item:9:0:0:0" and i == greySlot then
+    table.remove(lootSlots, i) break
+  end
+end
+LW.OnEvent("LOOT_SLOT_CLEARED")
 local left = 0
 for i = 1, #LW.items do if LW.items[i].itemID == 9 then left = left + 1 end end
 eq(left, 1, "one duplicate grey still listed")
-eq(lootedSlots[#lootedSlots], 2, "clicked row's own slot looted")
-eq(LW.OnRowClick(1001), "detail", "roll row click opens detail")
+-- Solo: even threshold+ rows loot on click (nobody to roll against).
+-- Same confirm flow: click dims, corpse confirm drops the row.
+grouping = "solo"
+local soloBefore = #lootedSlots
+eq(LW.OnRowClick(1001), "looting", "solo roll row click loots to self")
+eq(#lootedSlots, soloBefore + 1, "solo click moved the corpse slot")
+ok(LW.Find(1001) ~= nil, "solo row stays until confirm")
+for i = #lootSlots, 1, -1 do
+  if lootSlots[i].link == "item:1001:0:0:0" then table.remove(lootSlots, i) break end
+end
+LW.OnEvent("LOOT_SLOT_CLEARED")
+ok(LW.Find(1001) == nil, "solo row gone after confirm")
+-- Failed loot (slot still on the corpse: locked, full bags, range)
+-- keeps the row: re-arm, rescan, row returns to open.
+LootSlotIsCoin = nil -- slot 1 is an item again, not coin
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+grouping = "solo"
+eq(LW.OnRowClick(1002), "looting", "retryable click issues the call")
+LW.OnEvent("LOOT_SLOT_CLEARED") -- corpse unchanged: slot still there
+ok(LW.Find(1002) ~= nil, "failed loot keeps the row for retry")
+eq(LW.Find(1002).status, "open", "failed row returns to open")
+-- Grouped: the same row opens the roll detail instead.
+LootSlotIsCoin = nil -- slot 1 is an item again, not coin
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+grouping = "party"
+eq(LW.OnRowClick(1001), "detail", "grouped roll row click opens detail")
 ok(LW.detail ~= nil and LW.detail.itemID == 1001, "detail tracks the roll row")
 LW.CloseDetail()
+-- Group loot honors the PARTY threshold (green 2 .. epic 4): at/above it
+-- the item enters a group roll (GROUP row, ROLL badge, click never loots
+-- — Blizzard's Need/Greed owns it, row drops on the roll's resolve);
+-- below it the item is directly lootable (free row). Grey/white never roll.
+GetLootMethod = function() return "group" end
+grouping = "party"
+LootSlotIsCoin = nil
+GetLootThreshold = function() return 2 end -- party rolls green+
+lootSlots = { { link = "item:2001:0:0:0", quality = 2 } }
+ML.OnLootOpened()
+eq(#LW.items, 1, "green listed under group loot")
+ok(LW.items[1].group, "green is a group row at threshold green")
+eq(LW.items[1].badge, "ROLL", "group row carries ROLL badge")
+eq(LW.OnRowClick(2001), "group roll", "group row click never loots")
+eq(#lootedSlots, soloBefore + 2, "no corpse call for group rows")
+-- Same green, threshold epic: below the roll cutoff -> free row.
+GetLootThreshold = function() return 4 end
+ML.OnLootOpened()
+ok(LW.items[1].free and not LW.items[1].group, "green below epic is free")
+eq(LW.OnRowClick(2001), "looting", "below-threshold green loots direct")
+-- Slot-quality wins over the cache: uncached GetItemInfo (nil) must not
+-- misclassify an epic as free loot — the slot's own quality decides.
+GetItemInfo = function(link) return nil end -- cache cold
+GetLootSlotInfo = function(slot)
+  return "tex", "Epic Sword", 1, 4 -- 4th return: slot quality
+end
+lootSlots = { { link = "item:3001:0:0:0", quality = nil } }
+ML.OnLootOpened()
+ok(LW.Find(3001) ~= nil and not LW.Find(3001).free, "slot quality classifies")
+eq(LW.Find(3001).quality, 4, "slot quality kept")
+GetLootSlotInfo = nil
+GetItemInfo = function(link)
+  for i = 1, #lootSlots do
+    if lootSlots[i].link == link then
+      return "Item" .. i, link, lootSlots[i].quality
+    end
+  end
+  return nil
+end
+GetLootThreshold = nil
+-- START_LOOT_ROLL / RollOnLoot voting lives in RaiderLootUI (mock-frame
+-- coverage in mockrun.lua); the mlflow stub only asserts the dice route
+-- votes through RollOnLoot and never RandomRoll chat spam here.
+ok(ZugLoot.RaiderLootUI.ShowItem ~= nil, "raider frame wired")
+grouping = "solo"
+GetLootThreshold = nil
+-- A pcall-level blowup in the loot call must NEVER dim the row: the
+-- error surfaces in chat and the click reports "loot failed" (the
+-- "gray and says done, still not looted" ghost this guards).
+LootSlot = function(slot) error("boom") end
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.OnRowClick(1002), "loot failed", "erroring loot call is not success")
+eq(LW.Find(1002).status, "open", "row never dims on call error")
+LootSlot = function(slot, force) table.insert(lootedSlots, { slot, force }) end
+-- BoP take: LOOT_BIND_CONFIRM confirms every armed click slot.
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.OnRowClick(1002), "looting", "bop click issues the call")
+local confirms = {}
+ConfirmLootSlot = function(slot) table.insert(confirms, slot) end
+ML.OnEvent("LOOT_BIND_CONFIRM", 1)
+eq(confirms[1], 1, "armed slot confirmed for BoP")
+ConfirmLootSlot = nil
+-- UI_ERROR_MESSAGE (locked, full bags, range) drops the arm so the next
+-- rescan returns the row to open instead of stranding it dimmed.
+ML.OnEvent("UI_ERROR_MESSAGE", "Inventory is full")
+ok(ML.pendingLoot == nil, "error clears click arms")
+-- VerifySlot: hint still holding the item wins; a shifted corpse
+-- re-resolves; a vanished item reports "gone" (caller rescans).
+eq(ML.VerifySlot(1002, 1), 1, "valid hint kept")
+lootSlots = { { link = "item:9:0:0:0", quality = 1 },
+  { link = "item:1002:0:0:0", quality = 4 } } -- 1002 shifted 1 -> 2
+LootSlotIsCoin = nil
+eq(ML.VerifySlot(1002, 1), 2, "shifted slot re-resolved")
+table.remove(lootSlots, 2) -- 1002 looted away by other means
+eq(ML.VerifySlot(1002, 1), "gone", "vanished item reports gone")
+eq(LW.OnRowClick(1002), "gone", "click on gone item reconciles")
+-- Kill-switch restore must NEVER Show() a mid-loot detached frame:
+-- FrameXML would crash on nil page state (LootFrame.lua:166). Restore
+-- only re-registers events; the stock UI repopulates on the next loot.
+local shown, regs = 0, {}
+LootFrame = {
+  UnregisterAllEvents = function() end, SetScript = function() end,
+  Hide = function() end, Show = function() shown = shown + 1 end,
+  RegisterEvent = function(self, ev) table.insert(regs, ev) end,
+}
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+LW.OnRowClick(1002) -- first silent arm
+LW.OnRowClick(1002) -- second: path dead, restore fires
+eq(shown, 0, "restore never forces Show() mid-loot")
+ok(LW.blizzardTakeover == false, "takeover stood down")
+local need = { LOOT_OPENED = true, LOOT_CLOSED = true, LOOT_SLOT_CLEARED = true }
+for i = 1, #regs do need[regs[i]] = nil end
+local missing = nil
+for k in pairs(need) do missing = k break end
+eq(missing, nil, "loot events re-registered")
+eq(LW.OnRowClick(1002), "passthrough", "rows stand down after restore")
+-- Re-arm for the rest of the suite (and prove the opt-in path): the NEXT
+-- corpse takes over again once the user re-arms.
+ZugLoot.DB.lootTakeover = true
+ZugLoot.LootWindow.DetachBlizzardLoot(true)
+ok(ZugLoot.LootWindow.TakeoverWanted(), "re-arm honored")
+-- The error path must ALSO un-dim the row at once (no rescan may ever
+-- come on failure): the reported strand was a grey [done] row that never
+-- recovered and never looted.
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.OnRowClick(1002), "looting", "click dims before the failure")
+eq(LW.Find(1002).status, "done", "row dimmed while call in flight")
+ML.OnEvent("UI_ERROR_MESSAGE", "Inventory is full")
+eq(LW.Find(1002).status, "open", "error un-dims the row immediately")
+ok(LW.Find(1002) ~= nil, "failed row kept for retry")
+-- Watchdog: a silent call (no confirm, no error) un-dims on its own after
+-- 4s instead of stranding the row grey — the exact reported symptom.
+lootSlots = { { link = "item:1002:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.OnRowClick(1002), "looting", "silent click dims")
+eq(LW.Find(1002).status, "done", "row dimmed while call in flight")
+ok(drain(1.0), "drain watchdog")
+eq(LW.Find(1002).status, "open", "watchdog un-dims silent rows")
+ok(LW.Find(1002) ~= nil, "watchdog keeps the row for retry")
+local sawWatch = false
+for i = 1, #printed do
+  if string.find(printed[i], "didn't go through", 1, true) then sawWatch = true break end
+end
+ok(sawWatch, "watchdog reports the silent call")
 LootSlotIsCoin = nil
 GetLootMethod = nil
 LootFrame, LootSlot, GiveMasterLoot, UnitName = nil, nil, nil, nil
