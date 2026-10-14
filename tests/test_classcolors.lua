@@ -140,4 +140,68 @@ local fresh = SRData.NewSheet()
 ok(fresh.players ~= nil, "players table present")
 eq(SRData.PlayerClass(fresh, "X"), nil, "no crash on empty")
 
+-- 9. Role icons: spec-aware when the raw value carries it, class
+-- default otherwise; unknown classes give no icon.
+eq(CC.RoleOf("PaladinProtection"), "tank", "prot paladin tanks")
+eq(CC.RoleOf("WarriorProtection"), "tank", "prot warrior tanks")
+eq(CC.RoleOf("DruidGuardian"), "tank", "guardian druid tanks")
+eq(CC.RoleOf("PriestShadow"), "ranged", "shadow priest DPSes, never heals")
+eq(CC.RoleOf("RogueDaggers"), "melee", "daggers rogue melees")
+eq(CC.RoleOf("WarlockAffliction"), "ranged", "affliction ranges")
+eq(CC.RoleOf("MageArcane"), "ranged", "arcane ranges")
+eq(CC.RoleOf("PriestDiscipline"), "healer", "discipline heals")
+eq(CC.RoleOf("ShamanRestoration"), "healer", "resto shaman heals")
+eq(CC.RoleOf("PaladinHoly"), "healer", "holy paladin heals")
+eq(CC.RoleOf("ShamanEnhancement"), "melee", "enh shaman melees")
+eq(CC.RoleOf("DruidFeral"), "melee", "feral druid melees")
+eq(CC.RoleOf("Hunter"), "ranged", "hunter ranges")
+eq(CC.RoleOf("MageFrost"), "ranged", "frost mage ranges")
+eq(CC.RoleOf("Warlock"), "ranged", "warlock ranges")
+eq(CC.RoleOf("Priest"), "healer", "priest heals")
+eq(CC.RoleOf("Paladin"), "healer", "paladin defaults heal")
+eq(CC.RoleOf("Druid"), "healer", "druid defaults heal")
+eq(CC.RoleOf("Shaman"), "healer", "shaman defaults heal")
+eq(CC.RoleOf("Warrior"), "melee", "warrior melees")
+eq(CC.RoleOf("Rogue"), "melee", "rogue melees")
+eq(CC.RoleOf("NotAClass"), nil, "unknown class, no role")
+eq(CC.RoleOf(nil), nil, "nil safe")
+local bowIcon, bowRole = CC.RoleIcon("Hunter")
+eq(bowRole, "ranged", "bow role")
+ok(bowIcon and string.find(bowIcon, "Bow", 1, true) ~= nil, "bow texture")
+local swordIcon, swordRole = CC.RoleIcon("Warrior")
+eq(swordRole, "melee", "sword role")
+ok(swordIcon and string.find(swordIcon, "Sword", 1, true) ~= nil, "sword texture")
+local bookIcon, bookRole = CC.RoleIcon("Priest")
+eq(bookRole, "healer", "book role")
+ok(bookIcon and string.find(bookIcon, "Book", 1, true) ~= nil, "book texture")
+local shieldIcon, shieldRole = CC.RoleIcon("WarriorProtection")
+eq(shieldRole, "tank", "shield role")
+ok(shieldIcon and string.find(shieldIcon, "Shield", 1, true) ~= nil, "shield texture")
+-- RawClassOf keeps the spec suffix ClassOf normalizes away.
+local roleSheet = SRData.NewSheet()
+SRData.SetPlayerClass(roleSheet, "HolyPal", "PaladinHoly")
+eq(CC.RawClassOf("HolyPal", roleSheet), "PaladinHoly", "raw keeps spec")
+eq(CC.ClassOf("HolyPal", roleSheet), "Paladin", "canonical normalizes")
+eq(CC.RoleOf(CC.RawClassOf("HolyPal", roleSheet)), "healer", "spec resolves role")
+-- Sheet spec beats the live roster's bare class (regression: grouped
+-- clients report bare "Paladin", hiding a Protection spec behind the
+-- healer default — Pysanka showed book instead of shield).
+SRData.SetPlayerClass(roleSheet, "ProtPal", "PaladinProtection")
+local liveRoster = { ProtPal = "Paladin" } -- bare, like GetRaidRosterInfo
+ZugLoot.DB = { sheet = roleSheet }
+eq(CC.RawClassOf("ProtPal", nil, liveRoster), "PaladinProtection", "sheet spec beats bare roster")
+eq(CC.RoleOf(CC.RawClassOf("ProtPal", nil, liveRoster)), "tank", "prot paladin tanks in raid")
+-- Roster-only names (sheet never saw them) still resolve bare.
+eq(CC.RawClassOf("RosterOnly", nil, { RosterOnly = "Warrior" }), "Warrior", "roster fallback")
+ZugLoot.DB = nil
+-- SpecName: human-readable spec only, nil when bare/unknown.
+eq(CC.SpecName("PaladinProtection"), "Protection", "prot reads")
+eq(CC.SpecName("HunterBeastMastery"), "Beast Mastery", "two-word spec splits")
+eq(CC.SpecName("RogueDaggers"), "Daggers", "weapon spec reads")
+eq(CC.SpecName("WarlockAffliction"), "Affliction", "lock spec reads")
+eq(CC.SpecName("PriestHoly"), "Holy", "holy reads")
+eq(CC.SpecName("Priest"), nil, "bare class, no spec")
+eq(CC.SpecName("NotAClass"), nil, "unknown, no spec")
+eq(CC.SpecName(nil), nil, "nil safe")
+
 return T

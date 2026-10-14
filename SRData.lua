@@ -64,7 +64,10 @@ function M.SetPlayerClass(sheet, name, rawClass)
     sheet.players[tostring(name)] = p
   end
   -- First truth wins: imports are additive across items, classes agree.
+  -- The RAW value is kept alongside (p.raw) so role icons stay
+  -- spec-aware ("PaladinHoly" heals) while matching stays canonical.
   if not p.class then p.class = c end
+  if not p.raw then p.raw = tostring(rawClass) end
   return p.class
 end
 

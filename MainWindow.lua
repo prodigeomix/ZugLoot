@@ -187,6 +187,8 @@ local function ItemIcon(parent, itemID, size)
   b.itemID = itemID
   M.zlCardLinks = M.zlCardLinks or {}
   M.zlCardLinks[tonumber(itemID) or itemID] = link
+  M.zlCardIcons = M.zlCardIcons or {}
+  M.zlCardIcons[tonumber(itemID) or itemID] = b -- placement for try-on assert
   -- quality border
   local q = QUALITY_RGB[quality or 4] or QUALITY_RGB[4]
   local bd = b:CreateTexture(nil, "OVERLAY")
@@ -204,6 +206,12 @@ local function ItemIcon(parent, itemID, size)
   end)
   b:SetScript("OnLeave", function() GameTooltip:Hide() end)
   b:SetScript("OnClick", function()
+    -- Ctrl-click: try it on (DressUp), like normal item links. Checked
+    -- first, same order as the raider window.
+    if IsControlKeyDown and IsControlKeyDown() and DressUpItemLink and b.itemID then
+      DressUpItemLink("item:" .. tostring(b.itemID))
+      return
+    end
     -- Resolve AGAIN at click time: the cache warms as you play (loot the
     -- item, see it linked), so a shift-click later must give the full
     -- link even if the icon was built while the item was unknown.
@@ -745,6 +753,7 @@ function M.RenderVersions()
     if n < 0 then n = 0 end
     return n
   end
+  M.zlGridCells = {} -- placement record for the role-icon assert
   for i = 1, total do
     local nm, grp = grid[i].name, grid[i].inGroup
     local col = Z.VersionGrid.StatusFor(nm, grp)
@@ -758,6 +767,23 @@ function M.RenderVersions()
     local cc = VER_COLORS[col] or VER_COLORS.DIM
     t:SetTexture(cc[1], cc[2], cc[3], 1)
     t:SetAllPoints(cell)
+    -- Role icon left (bow = ranged, sword = melee, book = healer),
+    -- from the sheet/live class (spec-aware). Unknown: no icon.
+    local roleTex = nil
+    if Z.ClassColors and Z.ClassColors.RawClassOf and Z.ClassColors.RoleIcon then
+      local raw = Z.ClassColors.RawClassOf(nm)
+      roleTex = raw and Z.ClassColors.RoleIcon(raw) or nil
+    end
+    local nameX = 0
+    if roleTex and cell.CreateTexture then
+      local ric = cell:CreateTexture(nil, "ARTWORK")
+      if ric.SetTexture then ric:SetTexture(roleTex) end
+      if ric.SetWidth then ric:SetWidth(14) ric:SetHeight(14) end
+      if ric.SetPoint then ric:SetPoint("LEFT", cell, "LEFT", 3, 0) end
+      if ric.Show then ric:Show() end
+      cell.zlRoleIcon = roleTex -- placement record for the layout assert
+      nameX = 9
+    end
     -- Full name in the member's class color, outlined for contrast
     -- against the status fill (1.12 FontString outline primitive).
     local label = nm
@@ -765,7 +791,7 @@ function M.RenderVersions()
       label = "|c" .. Z.ClassColors.ClassColorHex(Z.ClassColors.ClassOf(nm)) .. nm .. "|r"
     end
     local fs = FS(cell, "GameFontNormal", label)
-    fs:SetPoint("CENTER", cell, "CENTER", 0, 0)
+    fs:SetPoint("CENTER", cell, "CENTER", nameX, 0)
     -- Outline for contrast against the status fill (nil-safe on mocks:
     -- GetFont/SetFont may not exist; pcall guards exotic returns).
     if fs.GetFont and fs.SetFont then
@@ -777,11 +803,20 @@ function M.RenderVersions()
     cell:EnableMouse(true)
     local seen = Z.VersionGrid.seen[nm]
     local tipSub = "v" .. tostring((seen and seen.version) or "?")
+    -- Spec line: human-readable spec only (name color already says the
+    -- class). Missing spec = no line, not a placeholder.
+    local tipSpec = nil
+    if Z.ClassColors and Z.ClassColors.RawClassOf and Z.ClassColors.SpecName then
+      local rawSpec = Z.ClassColors.RawClassOf(nm)
+      tipSpec = rawSpec and Z.ClassColors.SpecName(rawSpec) or nil
+    end
     local tipWhat = col == "GREEN" and "In group, SR ready"
       or col == "AMBER" and "In group, SR ready — outdated addon, update"
       or col == "GREY" and "Not in group, SR ready"
       or "In group, SR not ready"
-    Tip(cell, PName(nm), tipSub, tipWhat)
+    Tip(cell, PName(nm), tipSpec or tipSub, tipSpec and (tipSub .. "  " .. tipWhat) or tipWhat)
+    cell.zlTipSpec = tipSpec -- placement record for the spec assert
+    table.insert(M.zlGridCells, { name = nm, roleIcon = cell.zlRoleIcon, spec = cell.zlTipSpec })
     if i == total then ri = r end
   end
   local gh = 8 + (ri + 1) * (chh + gap)
@@ -989,10 +1024,23 @@ function M.DebugCardLink(itemID)
   return t[itemID]
 end
 
+-- Test hook: the sheet icon buttons (for the ctrl-click try-on assert).
+-- Icons record themselves at build time (mock frames track no children).
+function M.DebugCardIcons()
+  return M.zlCardIcons
+end
+
 -- Test hook: drop-count corner number per card (#N sessions).
 function M.DebugCardDrops(itemID)
   local t = M.zlCardDrops or {}
   return t[itemID]
+end
+
+-- Test hook: member-grid cells of the last versions render
+-- ({ {name, roleIcon}... }). Recorded at build time (mock frames
+-- track no children).
+function M.DebugGridCells()
+  return M.zlGridCells
 end
 
 -- Test hook: tracked visual rows of a tab body for the sheet column

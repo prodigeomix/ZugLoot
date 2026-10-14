@@ -139,9 +139,145 @@ function M.ClassOf(name, sheet, roster)
   return nil
 end
 
+-- RAW class/spec string for a name (roster first, sheet fallback) —
+-- feeds RoleOf so spec suffixes survive (ClassOf normalizes them away).
+-- Nil-safe: nil with no client APIs (headless).
+-- Roster entries carry BARE classes (no spec suffix) and therefore can
+-- only ever resolve to class defaults; check the SHEET first so a
+-- spec'd import value (PaladinProtection) wins over the roster's bare
+-- class (Paladin). The roster only fills names the sheet never saw.
+function M.RawClassOf(name, sheet, roster)
+  if not name or tostring(name) == "" then return nil end
+  name = tostring(name)
+  local sh = sheetOf(sheet)
+  if sh and sh.players and sh.players[name] then
+    local p = sh.players[name]
+    -- Prefer the raw import value (spec suffix intact for RoleOf).
+    if type(p) == "table" and p.raw and p.raw ~= "" then return tostring(p.raw) end
+    if type(p) == "table" and p.class then return tostring(p.class) end
+    if type(p) == "string" and p ~= "" then return p end
+  end
+  roster = roster or M.RosterMap()
+  if roster and roster[name] and roster[name] ~= "" then
+    return tostring(roster[name])
+  end
+  return nil
+end
+
 -- Hex (no "|c") for a class, white fallback.
 function M.ClassColorHex(class)
   return M.COLORS[M.NormalizeClass(class)] or "FFFFFFFF"
+end
+
+-- Combat role for the member-tab role icon: "ranged" (bow+arrow),
+-- "melee" (sword), "healer" (holy book), "tank" (shield). Spec-aware
+-- when the raw value carries it (PaladinHoly, DruidResto, ShamanEnh...);
+-- otherwise the classic class default (Priest/Druid-heavy classes heal,
+-- hunters + casters range, the rest melee). Nil when unknown.
+-- Pure (headless-testable): raw class/spec string in, role out.
+local HEAL_SPECS = {
+  holy = true, disc = true, discipline = true, resto = true,
+  restoration = true, mist = true, mistweaver = true,
+}
+local TANK_SPECS = {
+  prot = true, protection = true, guardian = true, blood = true,
+  brewmaster = true,
+}
+-- NOTE: mage specs (frost/fire/arcane) are NOT here — mages range
+-- regardless of spec. Hunter specs likewise range (see RoleOf).
+local MELEE_SPECS = {
+  arms = true, fury = true,
+  ret = true, retribution = true, enh = true, enhancement = true,
+  feral = true, combat = true, assassination = true,
+  subtlety = true, sub = true, unholy = true,
+  windwalker = true,
+}
+-- DPS caster specs: explicit ranged (shadow priests DPS — never healers).
+local RANGED_SPECS = {
+  shadow = true, affliction = true, demonology = true, destruction = true,
+  arcane = true, fire = true, frost = true, balance = true,
+  elemental = true,
+}
+-- Rogue specs: all melee (incl. daggers builds).
+local ROGUE_SPECS = {
+  daggers = true, swords = true, maces = true, fists = true,
+}
+function M.RoleOf(raw)
+  local canon = M.NormalizeClass(raw)
+  if not canon then return nil end
+  local lower = string.lower(tostring(raw or ""))
+  local spec = string.sub(lower, string.len(string.lower(canon)) + 1)
+  -- Spec suffix decides first ("PaladinHoly" heals, "ShamanEnh" melees).
+  -- Hunters/mages/warlocks range in EVERY spec (incl. survival) — their
+  -- suffixes never flip them to melee.
+  if canon == "Hunter" or canon == "Mage" or canon == "Warlock" then
+    return "ranged"
+  end
+  if spec ~= "" then
+    if HEAL_SPECS[spec] then return "healer" end
+    if TANK_SPECS[spec] then return "tank" end
+    if MELEE_SPECS[spec] then return "melee" end
+    if RANGED_SPECS[spec] then return "ranged" end
+    if ROGUE_SPECS[spec] then return "melee" end
+    -- Unknown suffix: fall to class default below.
+  end
+  if canon == "Priest" then return "healer" end
+  if canon == "Paladin" then return "healer" end
+  if canon == "Druid" then return "healer" end
+  if canon == "Shaman" then return "healer" end
+  if canon == "Hunter" or canon == "Mage" or canon == "Warlock" then
+    return "ranged"
+  end
+  return "melee" -- Warrior, Rogue
+end
+
+-- Icon texture per role (stock 1.12 paths): bow, sword, holy book, shield.
+M.ROLE_ICONS = {
+  ranged = "Interface\\Icons\\INV_Weapon_Bow_07",
+  melee = "Interface\\Icons\\INV_Sword_04",
+  healer = "Interface\\Icons\\INV_Misc_Book_09",
+  tank = "Interface\\Icons\\INV_Shield_04",
+}
+function M.RoleIcon(raw)
+  local role = M.RoleOf(raw)
+  if role and M.ROLE_ICONS[role] then return M.ROLE_ICONS[role], role end
+  return nil, nil
+end
+
+-- Human-readable spec from a raw class/spec string: "PaladinProtection"
+-- -> "Protection", "HunterBeastMastery" -> "Beast Mastery",
+-- "Priest" -> nil (no spec known, nothing to show). Pure
+-- (headless-testable): raw string in, display string-or-nil out.
+local SPEC_WORDS = {
+  beastmastery = "Beast Mastery", marksmanship = "Marksmanship",
+  survival = "Survival", protection = "Protection", arms = "Arms",
+  fury = "Fury", retribution = "Retribution", holy = "Holy",
+  restoration = "Restoration", resto = "Restoration",
+  enhancement = "Enhancement", enh = "Enhancement",
+  elemental = "Elemental", feral = "Feral", guardian = "Guardian",
+  balance = "Balance", shadow = "Shadow", discipline = "Discipline",
+  disc = "Discipline", frost = "Frost", fire = "Fire", arcane = "Arcane",
+  affliction = "Affliction", demonology = "Demonology",
+  destruction = "Destruction", assassination = "Assassination",
+  combat = "Combat", subtlety = "Subtlety", sub = "Subtlety",
+  daggers = "Daggers", swords = "Swords", blood = "Blood",
+  unholy = "Unholy", brewmaster = "Brewmaster",
+  windwalker = "Windwalker", mistweaver = "Mistweaver",
+  mist = "Mistweaver", beastmaster = "Beast Mastery",
+  beast = "Beast Mastery", marks = "Marksmanship",
+  ret = "Retribution", prot = "Protection", fists = "Fists",
+  maces = "Maces",
+}
+function M.SpecName(raw)
+  local canon = M.NormalizeClass(raw)
+  if not canon then return nil end
+  local lower = string.lower(tostring(raw or ""))
+  local spec = string.sub(lower, string.len(string.lower(canon)) + 1)
+  if spec == "" then return nil end
+  if SPEC_WORDS[spec] then return SPEC_WORDS[spec] end
+  -- Unknown suffix: title-case it so something readable still shows
+  -- ("FooBar" -> "Bar").
+  return string.upper(string.sub(spec, 1, 1)) .. string.sub(spec, 2)
 end
 
 -- Display name in class color ("|cHEXname|r"), plain name when the class is

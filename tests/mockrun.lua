@@ -125,6 +125,19 @@ print("sheet drop-count corner OK");
 local cardLink = Z.MainWindow.DebugCardLink(17063);
 assert(cardLink and string.find(cardLink, "|Hitem:", 1, true), "card link is a full link, got: " .. tostring(cardLink));
 print("sheet card link OK");
+-- Ctrl-click try-on: DressUpItemLink fires for the card's item.
+local tried = {};
+DressUpItemLink = function(link) table.insert(tried, link) end;
+IsControlKeyDown = function() return true end;
+local sheetIcons = Z.MainWindow.DebugCardIcons and Z.MainWindow.DebugCardIcons();
+assert(sheetIcons and sheetIcons[17063] and sheetIcons[17063].GetScript, "sheet icon tracked");
+local sheetClick = sheetIcons[17063]:GetScript("OnClick");
+assert(sheetClick, "sheet icon click wired");
+sheetClick();
+IsControlKeyDown = function() return false end;
+DressUpItemLink = nil;
+assert(#tried == 1 and string.find(tried[1], "17063", 1, true), "ctrl-click tries on 17063, got: " .. tostring(tried[1]));
+print("sheet card try-on OK");
 -- Drop-count badge + roll-log window data for the rolled item.
 local log = Z.MainWindow.ItemLogLines(17063);
 assert(log and log.header and log.header.itemID == 17063, "log header targets the item");
@@ -261,6 +274,35 @@ assert(Z.LootWindow.detail == nil, "detail closed");
 assert(Z.LootWindow.moreDropdown == nil, "dropdown closed with detail");
 print("loot frames OK");
 Z.RaidArchive.ArchiveActive(Z.DB, 2000);
+-- Member-tab role icons: hunter (ranged/bow), warrior (melee/sword),
+-- priest (healer/book) via the sheet classes; unknown gets no icon.
+ZugLoot.ClassColors = ZugLoot.ClassColors or {};
+local roleSheet = ZugLoot.SRData.NewSheet();
+ZugLoot.SRData.SetPlayerClass(roleSheet, "RangedR", "HunterBeastMastery");
+ZugLoot.SRData.SetPlayerClass(roleSheet, "MeleeM", "WarriorProtection");
+ZugLoot.SRData.SetPlayerClass(roleSheet, "HealH", "PriestHoly");
+-- Save the raid sheet: the role-icon render overwrites it, the header
+-- asserts below need the raid back.
+local savedSheet = ZugLoot.DB.sheet;
+ZugLoot.DB.sheet = roleSheet;
+ZugLoot.VersionGrid.GridNames = function()
+  return { { name = "RangedR", inGroup = true }, { name = "MeleeM", inGroup = true },
+    { name = "HealH", inGroup = true }, { name = "Nobody", inGroup = true } }
+end;
+Z.MainWindow.SelectTab("versions");
+local gridCells = Z.MainWindow.DebugGridCells and Z.MainWindow.DebugGridCells() or nil;
+assert(gridCells and #gridCells == 4, "four member cells, got: " .. tostring(gridCells and #gridCells));
+assert(gridCells[1].roleIcon and string.find(gridCells[1].roleIcon, "Bow", 1, true), "hunter gets bow");
+assert(gridCells[2].roleIcon and string.find(gridCells[2].roleIcon, "Shield", 1, true), "prot warrior gets shield");
+assert(gridCells[3].roleIcon and string.find(gridCells[3].roleIcon, "Book", 1, true), "priest gets book");
+assert(gridCells[4].roleIcon == nil, "unknown class gets no icon");
+assert(gridCells[1].spec == "Beast Mastery", "hunter spec shows, got: " .. tostring(gridCells[1].spec));
+assert(gridCells[2].spec == "Protection", "prot spec shows, got: " .. tostring(gridCells[2].spec));
+assert(gridCells[3].spec == "Holy", "holy spec shows, got: " .. tostring(gridCells[3].spec));
+assert(gridCells[4].spec == nil, "unknown class shows no spec");
+print("member role icons OK");
+ZugLoot.DB.sheet = savedSheet;
+Z.MainWindow.Refresh();
 for _,tab in ipairs({"sheet","raids","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
