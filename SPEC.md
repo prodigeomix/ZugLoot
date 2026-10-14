@@ -163,10 +163,12 @@ Sheet = {
   change, clamped-to-screen dragging; movable, flat dark palette,
   gold accent strip, tab rail with gold underline on the active tab, per-tab
   scroll bodies with scrollbar + mouse wheel). Tabs: **Sheet** (default) |
-  **Raids** | **Rolls** | **Versions** | **Setup**. `/zl log` opens Rolls,
-  `/zl ver` opens Versions, `/zl raids` opens Raids. (`SRView`/`DropLog`/
-  `VersionGrid` standalone frames retired into tabs; their modules keep pure
-  logic + slash commands.)
+  **Raids** | **Members** | **Setup**. `/zl log` prints the drop log to
+  chat, `/zl ver` opens Members, `/zl raids` opens Raids. Header row:
+  Reset rolls | Get sheet (in-group, sheetless only) | Import | File —
+  Setup holds options only (no duplicate import/clear buttons). (`SRView`/
+  `VersionGrid` standalone frames retired into tabs; their modules keep
+  pure logic + slash commands. DropLog has no tab: `Show()` prints.)
 - **Sheet tab**, one card per item: SR'd items sorted by itemID ascending,
   unreserved items (rolled but never SR'd — auto-added at the bottom, see §3.3):
   - icon button (texture via `GetItemInfo(tonumber(id))` numeric-ID trick, cf.
@@ -379,7 +381,7 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
 ### 4.8 Class-colored names (`ClassColors.lua`)
 
 - Every character name the addon renders — Sheet tab rollers/history,
-  Rolls tab winners, loot-window roll lists/award rows/`...` choices, award
+  loot-window roll lists/award rows/`...` choices, award
   menu + confirm, winner banner, version grid + `/zl verlist`, drop-log
   lines — shows in its Blizzard **class color** (Paladin pink etc.).
 - Source order: the **live party/raid member list first** (raid roster,
@@ -394,12 +396,29 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   color codes** — result/kind lines print plain names. Pure + headless-safe
   (nil-guarded roster APIs) with `tests/test_classcolors.lua` coverage.
 
-### 4.4 Version grid (`VersionGrid.lua`)
+### 4.4 Members grid (`VersionGrid.lua`, Members tab)
 
 - `/zl ver` requests versions (`VER_REQ` → all clients answer `VER_ANS`).
-- Grid of **squares**, one per raid member, colored:
-  green = current version, yellow = outdated, red = no addon / no response,
-  grey = offline/absent. Tooltip: name, version, auto-roll on/off.
+- Sheet fetch (Members tab “Request SR sheet” button, `/zl sheetreq`):
+  `SHEET_REQ` → the **master looter answers at once** with their sheet;
+  the **raid leader/assistant answers after a 5s delay, only when no ML
+  sheet exists** (no master loot, ML absent/unknown, or ML sheetless) —
+  an arriving SHEET cancels the pending leader reply, so the group never
+  gets two competing sheets. Raiders never answer. Receivers trust ONLY
+  ML/leader sheets (`CanAcceptFrom` — a raider's sheet is refused even if
+  one arrives). Solo: nobody to ask.
+- Wire encoding (`Comm.EncodeSheetPayload` / `SRImport.DecodeSheetPayload`):
+  base64-wrapped when an encoder exists, else `%`-escaped raw (`%` →
+  `%P`, `|` → `%B`). NEVER a bare `|`: ChatThrottleLib (bundled with other
+  addons on this client) rejects bare pipes in chat/addon traffic with
+  “Invalid escape code in chat message”. Decode order: `%B` → `|` first,
+  `%P` → `%` last.
+- Grid of **rectangles**: group first, then SR-sheet players not in the
+  group. Full name in class color (outlined). Colors (muted):
+  green = in group + on the sheet, red = in group + no SR,
+  amber = outdated addon (beats sheet green), grey = sheet, not in group.
+  Tooltip: name, version, what the color means. Self seeds on request
+  (solo sends nothing, so the grid must not claim we lack the addon).
 - Text list fallback via `/zl verlist`. Grid doubles as auto-resolve readiness:
   all-green ⇒ ML's `Auto-resolve` button enabled.
 
@@ -493,7 +512,7 @@ actual roll flow, not a separate code path:
 
 - Every observed drop (ML loot window / announced item) appended:
   `{ time, itemID, itemLink, source(boss/manual), strategy, winner, price:nil }`.
-- `/zl log` window (scrollable, newest first), `/zl logclear` (ML/RL only).
+- `/zl log` prints the log to chat (newest first), `/zl logclear` (ML/RL only).
 - Persisted in `ZugLootDB.drops` (cap 500, ring buffer).
 
 ## 5. File layout (skeleton)
@@ -517,7 +536,7 @@ ZugLoot/
   LootWindow.lua     ML loot list (numbered icon/name/SR-HR rows + row detail)
   RaiderLootUI.lua   LootBlare-like frame incl. group-loot display
   AutoRoll.lua       auto-roll + auto-resolve eligibility
-  VersionGrid.lua    squares grid + version request handling
+  VersionGrid.lua    members grid + version request handling
   BossData.lua       static fallback boss→items tables for simboss
   pfLoot.lua         pfQuest loot lookup (name->entry->weighted drops)
   RaidArchive.lua    raid history snapshots: view / continue past raids

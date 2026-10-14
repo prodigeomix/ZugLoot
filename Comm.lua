@@ -18,15 +18,35 @@ function M.Channel()
   return "PARTY"
 end
 
--- SHEET:<ver>:<raidID>:<payload(base64 json of normalized sheet)|raw>
+-- SHEET_REQ: ask the group for the current sheet. Only the ML answers
+-- with a sheet they actually hold (AnySheet), else the raid leader /
+-- assistant with theirs — priority ML > leader, never anyone else.
+-- SHEET:<ver>:<raidID>:<payload>. Payload encoding: base64-wrapped when
+-- the encoder exists, else escape-quoted raw. NEVER raw: the line format
+-- uses "|" as its row separator and ChatThrottleLib (bundled with other
+-- addons on this client) rejects bare pipes in chat/addon traffic with
+-- "Invalid escape code in chat message" (ChatThrottleLib.lua:261).
+-- Escape scheme (both directions, see DeserializeSheet): "%" -> "%P",
+-- "|" -> "%B"; base64 output needs no escaping (A-Za-z0-9+/= only).
 -- Solo: no one to send to — skip silently (local preview only).
+function M.EncodeSheetPayload(sheet)
+  local raw = Z.SRImport.SerializeSheet(sheet)
+  if Base64Encode then
+    local ok, enc = pcall(Base64Encode, raw)
+    if ok and enc and enc ~= "" then return "B64" .. enc end
+  end
+  -- NOTE: gsub REPLACEMENTS escape % too: "%P" must be written "%%P"
+  -- or lua reads %P as a (nonexistent) capture ("invalid use of %").
+  local esc = string.gsub(tostring(raw), "%%", "%%P")
+  esc = string.gsub(esc, "|", "%%B")
+  return "ESC" .. esc
+end
 function M.BroadcastSheet(sheet, raidID)
   if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return end
   local channel = M.Channel()
   if not channel then return end
   local ver = 1
-  local payload = Z.SRImport.SerializeSheet(sheet)
-  send("SHEET:" .. ver .. ":" .. tostring(raidID) .. ":" .. payload, channel)
+  send("SHEET:" .. ver .. ":" .. tostring(raidID) .. ":" .. M.EncodeSheetPayload(sheet), channel)
 end
 
 function M.SendRollReq(sessionID, itemLink, mode)
@@ -41,6 +61,20 @@ function M.RequestVersions()
   local c = M.Channel()
   if not c then return end
   send("VER_REQ", c)
+end
+
+-- Ask the group for the SR sheet (Members tab button, /zl sheetreq).
+-- Solo: nobody to ask. Everyone hears it; only the ML (or the leader
+-- when no ML sheet exists) answers — see OnMessage/SHEET_REQ.
+function M.RequestSheet()
+  local c = M.Channel()
+  if not c then
+    Z.Print("No group to ask — solo has no sheet source.")
+    return
+  end
+  local me = (UnitName and UnitName("player")) or "?"
+  send("SHEET_REQ", c)
+  Z.Print("Sheet requested from the master looter (" .. tostring(me) .. " asked).")
 end
 function M.AnnounceVersion()
   local c = M.Channel()
@@ -101,6 +135,19 @@ end
 
 function M.OnMessage(msg, sender)
   local tag = string.match(msg, "^(%S+):")
+  -- Sheet request: answer ONLY when entitled, ML first. The ML answers
+  -- at once when they hold a sheet; the raid leader/assistant answers
+  -- after a short delay — but ONLY when no ML sheet exists in the group
+  -- (no ML in the group, ML has no sheet/addon). The delay lets the ML's
+  -- answer arrive first; a SHEET landing meanwhile cancels the leader's
+  -- reply so the client never gets two competing sheets. Nobody else
+  -- answers, ever — receivers only trust ML/leader sheets (CanAcceptFrom).
+  if msg == "SHEET_REQ" then
+    if Z.SRSecurity and Z.SRSecurity.ShouldAnswerSheetReq then
+      Z.SRSecurity.ShouldAnswerSheetReq(sender)
+    end
+    return
+  end
   -- Version traffic is open to all.
   if string.sub(msg, 1, 7) == "VER_REQ" then
     M.AnnounceVersion()
@@ -128,6 +175,11 @@ function M.OnMessage(msg, sender)
     return
   end
   if string.sub(msg, 1, 6) == "SHEET:" then
+    -- A sheet landed: cancel any pending leader reply (the ML answered
+    -- first — the group must never get two competing sheets).
+    if Z.SRSecurity and Z.SRSecurity.NoteSheetArrived then
+      Z.SRSecurity.NoteSheetArrived()
+    end
     -- SECURITY: only ML or raid leader/assistant may push sheets.
     if not Z.SRSecurity.CanAcceptFrom(sender) then
       Z.Print("Ignored sheet from " .. tostring(sender) .. " (not ML/leader).")

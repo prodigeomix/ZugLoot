@@ -46,16 +46,37 @@ function M.SerializeSheet(sheet)
   return table.concat(lines, "|")
 end
 
-function M.DeserializeSheet(payload)
-  -- Accept raw line payload (tests) or base64-wrapped (client sends wrapped
-  -- only if Base64Encode exists; skeleton client keeps it simple: raw).
+-- Decode a broadcast payload: tagged wire form (B64/ESC, see
+-- Comm.EncodeSheetPayload) or legacy raw line text (old clients, tests).
+-- ESC unescapes in the SAFE order: %B -> | first, %P -> % last (a
+-- literal "%B" arrived as "%PB", so restoring % first would corrupt).
+function M.DecodeSheetPayload(payload)
+  payload = tostring(payload or "")
+  if string.sub(payload, 1, 3) == "B64" then
+    if not Base64Decode then return nil, "base64 sheet needs a decoder" end
+    local ok, raw = pcall(Base64Decode, string.sub(payload, 4))
+    if not ok or not raw or raw == "" then return nil, "bad base64 sheet" end
+    return raw
+  end
   local text = payload
-  -- Our SerializeSheet joins multi lines with \n; addon messages strip none.
-  -- Convert single-line "a|b" fallback back to lines.
-  if not string.find(text, ";") then return nil, "empty sheet" end
+  local tagged = string.sub(text, 1, 3) == "ESC"
+  if tagged then text = string.sub(text, 4) end
+  if tagged then
+    -- Unescape first (%B -> |, then %P -> % — order matters, see above),
+    -- THEN split rows: the wire form joins rows with "|" exactly like
+    -- the legacy raw form did.
+    text = string.gsub(text, "%%B", "|")
+    text = string.gsub(text, "%%P", "%%")
+  end
   if not string.find(text, "\n") and string.find(text, "|") then
     text = string.gsub(text, "|", "\n")
   end
+  return text
+end
+function M.DeserializeSheet(payload)
+  local text, err = M.DecodeSheetPayload(payload)
+  if not text then return nil, err end
+  if not string.find(text, ";") then return nil, "empty sheet" end
   -- Per-name lines with single entries parse via line format.
   return Z.SRData.ParseLineFormat(text)
 end

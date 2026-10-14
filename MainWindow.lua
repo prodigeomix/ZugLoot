@@ -123,8 +123,7 @@ local QUALITY_RGB = {
 local TABS = {
   { key = "sheet",    label = "SHEET" },
   { key = "raids",    label = "RAIDS" },
-  { key = "rolls",    label = "ROLLS" },
-  { key = "versions", label = "VERSIONS" },
+  { key = "versions", label = "MEMBERS" },
   { key = "setup",    label = "SETUP" },
 }
 
@@ -493,98 +492,88 @@ function M.RenderRaids()
 end
 
 -------------------------------------------------------------------------------
--- Rolls tab: flat session log (newest first), each drop on its own block
+-- (ROLLS tab removed: DropLog.Show() prints to chat. Kept out of the
+-- tab rail so the window stays Sheet | Raids | Members | Setup.)
 -------------------------------------------------------------------------------
-function M.RenderRolls()
-  local key = "rolls"
-  ClearBody(key)
-  local b = bodies[key]
-  local drops = (Z.DB and Z.DB.drops) or {}
-  local n = Z.Util.ArrayCount(drops)
-  if n == 0 then
-    local row = CreateFrame("Frame", nil, b.child)
-    row:SetWidth(BODY_WIDTH) row:SetHeight(40)
-    local fs = FS(row, "GameFontHighlight", "(no drops logged yet)")
-    fs:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -8)
-    TrackRow(key, row, 40)
-    return
-  end
-  for i = n, 1, -1 do
-    local d = drops[i]
-    local row = CreateFrame("Frame", nil, b.child)
-    row:SetWidth(BODY_WIDTH)
-    local title = FS(row, "GameFontNormal", "")
-    title:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
-    title:SetWidth(BODY_WIDTH - 16) title:SetJustifyH("LEFT")
-    local linkTxt = d.link or ("item:" .. tostring(d.itemID or "?"))
-    local wtxt = d.winner and ("  |cFF00FF00-> " .. PName(d.winner) .. "|r") or ""
-    title:SetText(linkTxt .. "  |cff888888[" .. tostring(d.source or "?") .. " / " .. tostring(d.outcome or "?") .. "]|r" .. wtxt)
-    row:SetHeight(28)
-    TrackRow(key, row, 28)
-  end
-end
-
+-- Members tab (key "versions"): grid of group + SR sheet, one rectangle per player
 -------------------------------------------------------------------------------
--- Versions tab: squares grid, one per raid member
--------------------------------------------------------------------------------
+-- Status fills: comfortable, muted. GREEN = soft sage (SR'd + here),
+-- AMBER = warm ochre (outdated addon), RED = dusty rose (no SR here),
+-- GREY = slate (sheet, not in group), DIM = faint slate (no addon).
 local VER_COLORS = {
-  GREEN  = { 0.2, 0.9, 0.2 },
-  YELLOW = { 1.0, 0.82, 0.0 },
-  RED    = { 1.0, 0.3, 0.3 },
-  GREY   = { 0.4, 0.4, 0.4 },
+  GREEN  = { 0.30, 0.55, 0.32 },
+  AMBER  = { 0.65, 0.52, 0.25 },
+  RED    = { 0.60, 0.32, 0.32 },
+  GREY   = { 0.32, 0.34, 0.38 },
+  DIM    = { 0.22, 0.23, 0.26 },
 }
 
 function M.RenderVersions()
   local key = "versions"
   ClearBody(key)
   local b = bodies[key]
-  local names = Z.VersionGrid.RosterNames()
-  local perRow = 12
-  local sq = 28
-  local row = CreateFrame("Frame", nil, b.child)
-  row:SetWidth(BODY_WIDTH) row:SetHeight(40)
-  local hint = FS(row, "GameFontHighlightSmall", "ZugLoot " .. tostring(Z.VERSION) .. " — squares: raid roster, class-colored initials (green=current, yellow=outdated, red=no addon). (auto-refreshes on open)")
-  hint:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -4)
-  hint:SetWidth(BODY_WIDTH - 16) hint:SetJustifyH("LEFT")
-  TrackRow(key, row, 30)
-  local grid = CreateFrame("Frame", nil, b.child)
-  grid:SetWidth(BODY_WIDTH)
+  local grid = Z.VersionGrid.GridNames()
+  local perRow = 5
+  local cw, chh, gap = 112, 22, 4
+  -- No header line: the grid speaks for itself (colors + tooltips).
+  -- Request lives in the header row now (Get sheet, next to Reset
+  -- rolls): no in-grid button, no duplicate. Grid starts at the top.
+  local gridTop = -4
+  local gridF = CreateFrame("Frame", nil, b.child)
+  gridF:SetWidth(BODY_WIDTH)
   local ri = 0
-  for i = 1, Z.Util.ArrayCount(names) do
-    local nm = names[i]
-    local col = Z.VersionGrid.ColorFor(nm)
-    local cell = CreateFrame("Frame", nil, grid)
-    cell:SetWidth(sq) cell:SetHeight(sq)
+  local total = Z.Util.ArrayCount(grid)
+  -- Center each row: a short last row sits mid-body, not left-hugging.
+  local function rowCount(r0)
+    local n = total - r0 * perRow
+    if n > perRow then n = perRow end
+    if n < 0 then n = 0 end
+    return n
+  end
+  for i = 1, total do
+    local nm, grp = grid[i].name, grid[i].inGroup
+    local col = Z.VersionGrid.StatusFor(nm, grp)
+    local cell = CreateFrame("Frame", nil, gridF)
+    cell:SetWidth(cw) cell:SetHeight(chh)
     local r = math.floor((i - 1) / perRow)
     local c = math.mod(i - 1, perRow)
-    cell:SetPoint("TOPLEFT", grid, "TOPLEFT", 4 + c * (sq + 6), -4 - r * (sq + 6))
+    local x0 = 4 + (BODY_WIDTH - 8 - (rowCount(r) * cw + (rowCount(r) - 1) * gap)) / 2
+    cell:SetPoint("TOPLEFT", gridF, "TOPLEFT", x0 + c * (cw + gap), gridTop - r * (chh + gap))
     local t = cell:CreateTexture(nil, "BACKGROUND")
-    local cc = VER_COLORS[col] or VER_COLORS.GREY
+    local cc = VER_COLORS[col] or VER_COLORS.DIM
     t:SetTexture(cc[1], cc[2], cc[3], 1)
     t:SetAllPoints(cell)
-    -- Initials in the member's class color on the status-colored square.
-    local initials = string.sub(nm, 1, 2)
+    -- Full name in the member's class color, outlined for contrast
+    -- against the status fill (1.12 FontString outline primitive).
+    local label = nm
     if Z.ClassColors and Z.ClassColors.ClassColorHex and Z.ClassColors.ClassOf then
-      initials = "|c" .. Z.ClassColors.ClassColorHex(Z.ClassColors.ClassOf(nm)) .. initials .. "|r"
+      label = "|c" .. Z.ClassColors.ClassColorHex(Z.ClassColors.ClassOf(nm)) .. nm .. "|r"
     end
-    local fs = FS(cell, "GameFontNormalSmall", initials)
+    local fs = FS(cell, "GameFontNormal", label)
     fs:SetPoint("CENTER", cell, "CENTER", 0, 0)
+    -- Outline for contrast against the status fill (nil-safe on mocks:
+    -- GetFont/SetFont may not exist; pcall guards exotic returns).
+    if fs.GetFont and fs.SetFont then
+      local okF, fpath, fsize = pcall(fs.GetFont, fs)
+      if okF and fpath then
+        pcall(fs.SetFont, fs, fpath, fsize or 12, "OUTLINE")
+      end
+    end
     cell:EnableMouse(true)
     local seen = Z.VersionGrid.seen[nm]
-    Tip(cell, PName(nm), "v" .. tostring((seen and seen.version) or "no addon"), col == "GREEN" and "ready for auto-resolve" or "needs update / no addon")
-    if i == Z.Util.ArrayCount(names) then ri = r end
+    local tipSub = "v" .. tostring((seen and seen.version) or "?")
+    local tipWhat = col == "GREEN" and "In group, SR ready"
+      or col == "AMBER" and "In group, SR ready — outdated addon, update"
+      or col == "GREY" and "Not in group, SR ready"
+      or "In group, SR not ready"
+    Tip(cell, PName(nm), tipSub, tipWhat)
+    if i == total then ri = r end
   end
-  local gh = 8 + (ri + 1) * (sq + 6)
-  grid:SetHeight(gh)
-  TrackRow(key, grid, gh)
-  local rowB = CreateFrame("Frame", nil, b.child)
-  rowB:SetWidth(BODY_WIDTH) rowB:SetHeight(36)
-  local btn = CreateFrame("Button", nil, rowB, "UIPanelButtonTemplate")
-  btn:SetWidth(140) btn:SetHeight(22)
-  btn:SetPoint("TOPLEFT", rowB, "TOPLEFT", 4, -6)
-  btn:SetText("Refresh versions")
-  btn:SetScript("OnClick", function() Z.VersionGrid.Request() M.Refresh() end)
-  TrackRow(key, rowB, 36)
+  local gh = 8 + (ri + 1) * (chh + gap)
+  gridF:SetHeight(gh)
+  TrackRow(key, gridF, gh)
+  -- No refresh button: the grid auto-refreshes on open (Show fires
+  -- Request), so versions are always fresh when the tab is visible.
 end
 
 -------------------------------------------------------------------------------
@@ -601,36 +590,21 @@ function M.RenderSetup()
   local sub = FS(row, "GameFontHighlightSmall", "Role: " .. Z.SRSecurity.RoleLabel() .. " — only ML / raid leader may broadcast sheets.")
   sub:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -28)
   sub:SetWidth(BODY_WIDTH - 16) sub:SetJustifyH("LEFT")
-  local b1 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  b1:SetWidth(150) b1:SetHeight(24)
-  b1:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -52)
-  b1:SetText("Import (paste)")
-  b1:SetScript("OnClick", function() Z.SRImport.ShowPaste() end)
-  local b2 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  b2:SetWidth(150) b2:SetHeight(24)
-  b2:SetPoint("LEFT", b1, "RIGHT", 8, 0)
-  b2:SetText("Load from File")
-  b2:SetScript("OnClick", function() Z.SRImport.LoadFromFile() end)
-  Tip(b1, "Import", "Paste a raidres export or line-format sheet.", "ML / raid leader only in group; solo preview allowed.")
-  Tip(b2, "Load from File", "Reads CustomData/ZugLoot_SR.txt (blob or lines).", "Requires Nampower.")
+  -- Import + File live in the header row now (no duplicates here).
   local b3 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b3:SetWidth(150) b3:SetHeight(24)
-  b3:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -84)
+  b3:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -52)
   if Z.CharDB and Z.CharDB.autoRoll then b3:SetText("Auto-roll: ON") else b3:SetText("Auto-roll: OFF") end
   b3:SetScript("OnClick", function()
     Z.AutoRoll.Set((Z.CharDB and Z.CharDB.autoRoll) and "off" or "on")
     M.Refresh()
   end)
   Tip(b3, "Auto-roll", "Automatically /roll SR items when the ML starts a roll.")
-  local b4 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  b4:SetWidth(150) b4:SetHeight(24)
-  b4:SetPoint("LEFT", b3, "RIGHT", 8, 0)
-  b4:SetText("Clear won marks")
-  b4:SetScript("OnClick", function() Z.SRImport.RequestResetRollLog() end)
-  Tip(b4, "Clear won marks", "Same as Reset rolls: confirmation window first.")
+  -- (Clear won marks removed: header Reset rolls is the same action,
+  -- no duplicates.)
   local b5 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b5:SetWidth(150) b5:SetHeight(24)
-  b5:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -116)
+  b5:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -84)
   b5:SetText("Reset all settings")
   b5:SetScript("OnClick", function() Z.RequestResetAllSettings() end)
   Tip(b5, "Reset all settings",
@@ -663,7 +637,7 @@ function M.RenderSetup()
   -- Right beside it: auto-start toggle (same as /zl rollauto).
   local b7 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b7:SetWidth(150) b7:SetHeight(24)
-  b7:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -148)
+  b7:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -116)
   local function rehLabel()
     if Z.DB and Z.DB.rehearse then return "Rehearse: ON" end
     return "Rehearse: OFF"
@@ -693,9 +667,9 @@ function M.RenderSetup()
     "OFF (default): the ML picks each item's Roll button. General master-loot behaviour.")
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
-    "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (see Rolls tab)\n" ..
+    "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (/zl log)\n" ..
     "Simulate (needs sheet, writes back): /zl sim <link> — /zl simboss <boss>")
-  info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -180)
+  info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -148)
   info:SetWidth(BODY_WIDTH - 16) info:SetJustifyH("LEFT")
   TrackRow(key, row, 264)
 end
@@ -706,7 +680,6 @@ end
 local RENDER = {
   sheet = M.RenderSheet,
   raids = M.RenderRaids,
-  rolls = M.RenderRolls,
   versions = M.RenderVersions,
   setup = M.RenderSetup,
 }
@@ -730,6 +703,15 @@ function M.Refresh()
     .. "   |   " .. tostring((meta and meta.raidName) or "—")
     .. "   |   started " .. started
     .. "   |   " .. tostring(nItems) .. " items   |   " .. tostring(nRolls) .. " rolled")
+  -- Get-sheet button visibility: in-group with no sheet only. Solo has
+  -- nobody to ask; sheet holders (and the ML/leader, who import) need
+  -- no fetch button.
+  if M.reqSheetBtn and M.reqSheetBtn.Show and M.reqSheetBtn.Hide then
+    local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
+      and Z.SRSecurity.IsSolo()
+    if not solo and not sheet then M.reqSheetBtn:Show()
+    else M.reqSheetBtn:Hide() end
+  end
   for _, tb in ipairs(tabBtns) do
     if tb.key == M.activeTab then
       tb.fs:SetTextColor(PAL.ink[1], PAL.ink[2], PAL.ink[3])
@@ -783,6 +765,22 @@ function M.DebugActiveRaid()
   return nil
 end
 
+-- Test hook: header buttons presence + Get-sheet visibility.
+function M.DebugHeaderButtons()
+  local out = {}
+  local function present(b)
+    return b ~= nil
+  end
+  local hb = M.headerBtns or {}
+  out.reset = present(hb.reset or M.resetBtn)
+  out.getsheet = present(hb.getsheet or M.reqSheetBtn)
+  out.import = present(hb.import)
+  out.file = present(hb.file)
+  out.getsheetVisible = M.reqSheetBtn and M.reqSheetBtn.IsVisible
+    and M.reqSheetBtn:IsVisible() or false
+  return out
+end
+
 function M.Build()
   if not M.winW or not M.winH then M.RefreshSize() end
   local winW, winH = M.winW, M.winH
@@ -824,8 +822,12 @@ function M.Build()
   local xb = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   xb:SetPoint("TOPRIGHT", f, "TOPRIGHT", -6, -6)
   xb:SetScript("OnClick", function() f:Hide() end)
-  -- Reset-rolls button, top of the window next to the close button.
-  -- Opens a confirmation window; in party/raid only ML / raid leader may use it.
+  -- Top-row action buttons, right of the header next to the close button:
+  -- Reset rolls (was the only one) + Request SR sheet + Import + Load
+  -- from File. One row, no duplicates elsewhere: Setup keeps options
+  -- only (no import/clear buttons there anymore).
+  -- Reset-rolls button. Opens a confirmation window; in party/raid only
+  -- ML / raid leader may use it.
   local resetB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   resetB:SetWidth(96) resetB:SetHeight(20)
   resetB:SetPoint("TOPRIGHT", f, "TOPRIGHT", -34, -32)
@@ -835,6 +837,43 @@ function M.Build()
     "Clear all recorded rolls and won marks for this raid. The SR sheet itself is kept.",
     "Solo: always allowed. In party/raid: master looter or raid leader only.")
   M.resetBtn = resetB
+  M.headerBtns = M.headerBtns or {}
+  M.headerBtns.reset = resetB
+  -- Request SR sheet: asks the ML (else the raid leader) for the sheet.
+  -- Visible in-group only when we hold no sheet (nothing to fetch).
+  local reqB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  reqB:SetWidth(96) reqB:SetHeight(20)
+  reqB:SetPoint("RIGHT", resetB, "LEFT", -6, 0)
+  reqB:SetText("Get sheet")
+  reqB:SetScript("OnClick", function()
+    if Z.Comm and Z.Comm.RequestSheet then Z.Comm.RequestSheet() end
+  end)
+  Tip(reqB, "Request SR sheet",
+    "Asks the master looter for the current sheet (raid leader answers when no ML sheet exists).",
+    "Sheets from anyone else are ignored.")
+  M.reqSheetBtn = reqB
+  M.headerBtns = M.headerBtns or {}
+  M.headerBtns.getsheet = reqB
+  -- Import (paste): same entry as the old Setup button.
+  local impB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  impB:SetWidth(70) impB:SetHeight(20)
+  impB:SetPoint("RIGHT", reqB, "LEFT", -6, 0)
+  impB:SetText("Import")
+  M.headerBtns = M.headerBtns or {}
+  M.headerBtns.import = impB
+  impB:SetScript("OnClick", function() Z.SRImport.ShowPaste() end)
+  Tip(impB, "Import", "Paste a raidres export or line-format sheet.",
+    "ML / raid leader only in group; solo preview allowed.")
+  -- Load from File: same entry as the old Setup button.
+  local fileB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  fileB:SetWidth(70) fileB:SetHeight(20)
+  fileB:SetPoint("RIGHT", impB, "LEFT", -6, 0)
+  fileB:SetText("File")
+  M.headerBtns = M.headerBtns or {}
+  M.headerBtns.file = fileB
+  fileB:SetScript("OnClick", function() Z.SRImport.LoadFromFile() end)
+  Tip(fileB, "Load from File", "Reads CustomData/ZugLoot_SR.txt (blob or lines).",
+    "Requires Nampower.")
   hairline(f, -56, 14, -14)
   -- tab rail (Aegis BuildSpecTabs pattern: buttons + gold underline)
   local n = Z.Util.ArrayCount(TABS)

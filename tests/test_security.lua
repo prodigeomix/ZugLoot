@@ -76,4 +76,102 @@ eq(Comm.Channel(), "PARTY", "party channel")
 meIsPartyLeader = false
 ok(not Sec.CanImport(), "party non-leader cannot import")
 
+-- 5b. Party leader recognition, SELF and REMOTE. Regression: the old
+-- code ran IsPartyLeader() (self-only) for every sender, so a real
+-- party leader's sheet arrived as "not ML / leader" and was refused.
+UnitIsPartyLeader = function(unit)
+  if unit == "party1" then return 1 end
+  return nil
+end
+local partyRosterP = { "PartyMe", "LeadGal" }
+UnitName = function(unit)
+  if unit == "player" then return "PartyMe" end
+  if unit == "party1" then return "LeadGal" end
+  return nil
+end
+GetNumPartyMembers = function() return 1 end
+raidMembers = 0
+partyMembers = 1
+meIsPartyLeader = false
+ok(not Sec.IsLeader("PartyMe"), "non-leader self not leader")
+ok(Sec.IsLeader("LeadGal"), "remote party leader recognized")
+ok(Sec.CanAcceptFrom("LeadGal"), "party leader sheet trusted")
+ok(not Sec.CanAcceptFrom("PartyMe"), "plain member sheet refused")
+ok(not Sec.CanAcceptFrom("Stranger"), "off-roster name refused")
+-- Self-as-leader still works through the no-arg call.
+meIsPartyLeader = true
+ok(Sec.IsLeader("PartyMe"), "self leader via IsPartyLeader()")
+meIsPartyLeader = false
+-- Fail closed: no per-unit API means remote leaders are unknowable.
+UnitIsPartyLeader = nil
+ok(not Sec.IsLeader("LeadGal"), "no unit API: remote leader refused")
+ok(not Sec.CanAcceptFrom("LeadGal"), "no unit API: sheet refused")
+UnitName = function() return "SoloPlayer" end
+GetNumPartyMembers = function() return partyMembers end
+
+-- 6. SHEET_REQ answer policy: ML answers, leader only when no ML sheet
+-- exists, raiders never. Needs sheet + timer + comm shims.
+dofile("Timer.lua")
+local sent = {}
+SendAddonMessage = function(prefix, msg, channel)
+  table.insert(sent, { prefix = prefix, msg = msg, channel = channel })
+end
+ZugLoot.PREFIX = "ZugLoot"
+ZugLoot.Timer = ZugLoot.Timer
+ZugLoot.Print = function() end
+ZugLoot.DB = { sheet = nil }
+ZugLoot.SRImport = { SerializeSheet = function() return "A;1:1" end }
+local meIsML = false
+GetLootMethod = function() return "master" end
+GetLootMaster = function() return "MasterLou" end
+-- Raid of 3: ML present, me plain raider, leader present.
+raidMembers = 3
+raidRoster = { { "MasterLou", 0 }, { "SoloPlayer", 0 }, { "LeadGal", 2 } }
+partyMembers = 0
+ZugLoot.DB.sheet = { items = {}, meta = {} }
+-- Plain raider WITH a sheet still never answers.
+eq(Sec.SheetReqAnswer(), nil, "raider never answers sheetreq")
+-- Trust: raider sheet is refused even if one arrived.
+ok(not Sec.CanAcceptFrom("SoloPlayer"), "raider sheet untrusted")
+ok(Sec.CanAcceptFrom("MasterLou"), "ML sheet trusted")
+ok(Sec.CanAcceptFrom("LeadGal"), "leader sheet trusted")
+-- ML (by loot master) answers at once.
+raidRoster[2] = { "MasterLou", 0 } -- me == ML now via name match below
+local oldName = UnitName
+UnitName = function() return "MasterLou" end
+eq(Sec.SheetReqAnswer(), "ml", "ML answers sheetreq")
+UnitName = oldName
+-- Leader with ML present defers (nil); ML absent => leader answers.
+raidRoster[1] = { "MasterLou", 0 }
+raidRoster[2] = { "SoloPlayer", 0 }
+raidRoster[3] = { "LeadGal", 2 }
+UnitName = function() return "LeadGal" end
+eq(Sec.SheetReqAnswer(), nil, "leader defers while ML present")
+raidRoster[1] = { "GoneGuy", 0 } -- ML left the raid
+raidRoster[2] = { "SoloPlayer", 0 }
+eq(Sec.SheetReqAnswer(), "leader", "leader answers when ML absent")
+-- Non-master loot: no ML exists, leader answers.
+GetLootMethod = function() return "group" end
+eq(Sec.SheetReqAnswer(), "leader", "leader answers under group loot")
+GetLootMethod = function() return "master" end
+-- No sheet held: nobody answers, not even the ML.
+ZugLoot.DB.sheet = nil
+UnitName = function() return "MasterLou" end
+eq(Sec.SheetReqAnswer(), nil, "no sheet: ML stays silent")
+UnitName = oldName
+-- Leader reply is delayed (timer) and cancelled by an arriving sheet.
+ZugLoot.DB.sheet = { items = {}, meta = {} }
+UnitName = function() return "LeadGal" end
+raidRoster = { { "SoloPlayer", 0 }, { "LeadGal", 2 } }
+GetLootMaster = function() return "NobodyHere" end
+sent = {}
+Comm.OnMessage("SHEET_REQ", "SoloPlayer")
+eq(ZugLoot.Timer.Pending(), 1, "leader reply delayed, not instant")
+eq(#sent, 0, "nothing sent yet")
+Comm.OnMessage("SHEET:1:r1:A;1:1", "MasterLou") -- ML answered first
+eq(ZugLoot.Timer.Pending(), 0, "ML sheet cancels leader reply")
+ZugLoot.Timer.Update(10)
+eq(#sent, 0, "leader never double-sent")
+UnitName = oldName
+
 return T

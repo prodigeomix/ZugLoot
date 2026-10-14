@@ -53,6 +53,7 @@ function M.Lines()
 end
 
 function M.Show()
-  -- Rolls tab in the main window owns the log view now; kept for API compat.
-  if Z.MainWindow then Z.MainWindow.Toggle("rolls") return end
+  -- No tab owns the log view (ROLLS tab removed): print it to chat.
+  local lines = M.Lines and M.Lines() or {}
+  for i = 1, Z.Util.ArrayCount(lines) do Z.Print(lines[i]) end
 end

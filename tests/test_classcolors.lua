@@ -95,6 +95,37 @@ ok(back ~= nil, "round-trip parses: " .. tostring(berr))
 eq(SRData.PlayerClass(back, "NewPala"), "Paladin", "class survives broadcast")
 eq(SRData.PlayerClass(back, "LegDruid"), "Druid", "role survives broadcast")
 
+-- 6b. Wire encoding: serialized sheets never carry a bare "|" (the
+-- ChatThrottleLib:261 "Invalid escape code" crash) and decode back
+-- losslessly — both with and without a base64 encoder present.
+dofile("Comm.lua")
+ZugLoot.Comm = ZugLoot.Comm
+local wire = ZugLoot.Comm.EncodeSheetPayload(s3)
+ok(not string.find(wire, "|", 1, true), "wire payload has no bare pipe")
+local backW, berrW = ZugLoot.SRImport.DeserializeSheet(wire)
+ok(backW ~= nil, "wire payload parses: " .. tostring(berrW))
+eq(SRData.PlayerClass(backW, "NewPala"), "Paladin", "class survives wire")
+-- Percent edge: a name holding "%B" must not decode into a pipe.
+local tricky = SRData.NewSheet()
+tricky.items[7] = { quality = 4, rollers = { { name = "Pct%BName", rolls = 1 } } }
+local wireT = ZugLoot.Comm.EncodeSheetPayload(tricky)
+local backT, berrT = ZugLoot.SRImport.DeserializeSheet(wireT)
+ok(backT ~= nil, "tricky payload parses: " .. tostring(berrT))
+local foundTricky = false
+for _, r in pairs((backT.items[7] or {}).rollers or {}) do
+  if r.name == "Pct%BName" then foundTricky = true end
+end
+ok(foundTricky, "%B in a name survives the escape round-trip")
+-- Base64 path when the encoder exists (alphabet needs no escaping).
+Base64Encode = function(s) return "QUI=" end -- stub: decodes to "AB"
+Base64Decode = function(s) if s == "QUI=" then return "X;1:1" end end
+local wireB = ZugLoot.Comm.EncodeSheetPayload(s3)
+eq(string.sub(wireB, 1, 3), "B64", "base64 path tagged")
+local backB = ZugLoot.SRImport.DeserializeSheet(wireB)
+ok(backB ~= nil and backB.items[1] ~= nil, "base64 wire decodes")
+Base64Encode = nil
+Base64Decode = nil
+
 -- 7. Archive snapshot + restore keep classes (Raids tab activate path).
 local db = { sheet = s3, raidArchive = {} }
 ZugLoot.RaidArchive.ArchiveActive(db, 1000)

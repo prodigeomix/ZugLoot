@@ -73,7 +73,7 @@ dofile("SRSecurity.lua");
 dofile("Comm.lua");
 ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
 ZugLoot.AutoRoll = { Set=function() end };
-ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, ColorFor=function() return "GREEN" end, Request=function() end };
+ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, GridNames=function() return {{name="A",inGroup=true},{name="B",inGroup=true}} end, StatusFor=function() return "GREEN" end, ColorFor=function() return "GREEN" end, Request=function() end };
 dofile("MainWindow.lua");
 dofile("LootWindow.lua");
 dofile("MasterLootUI.lua");
@@ -198,14 +198,14 @@ assert(Z.LootWindow.detail == nil, "detail closed");
 assert(Z.LootWindow.moreDropdown == nil, "dropdown closed with detail");
 print("loot frames OK");
 Z.RaidArchive.ArchiveActive(Z.DB, 2000);
-for _,tab in ipairs({"sheet","raids","rolls","versions","setup"}) do
+for _,tab in ipairs({"sheet","raids","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end
 -- scrollbar invariant, checked on every tab: a visible slider may only belong
 -- to the active tab. Hidden tabs must never paint a thumb (the old bug left
 -- stale sliders from hidden tabs over the live list).
-for _,tab in ipairs({"sheet","raids","rolls","versions","setup"}) do
+for _,tab in ipairs({"sheet","raids","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   local sliderState = Z.MainWindow.DebugSliderState();
   for other, vis in pairs(sliderState) do
@@ -233,6 +233,14 @@ assert(string.find(act, "Molten Core", 1, true), "active raid name, got: " .. to
 assert(string.find(act, "started 2024", 1, true), "active raid start, got: " .. tostring(act));
 assert(not string.find(act, "MOCK-RAID-1", 1, true), "ID stays on sub-line, got: " .. tostring(act));
 print("header invariant OK");
+-- header buttons: Reset rolls + Get sheet + Import + File exist exactly
+-- once each (Setup holds no duplicates). Get sheet hides solo/with sheet.
+local hb = Z.MainWindow.DebugHeaderButtons();
+assert(hb and hb.reset, "header Reset rolls button built");
+assert(hb.getsheet, "header Get sheet button built");
+assert(hb.import, "header Import button built");
+assert(hb.file, "header File button built");
+assert(hb.getsheetVisible == false, "mock is solo: Get sheet hidden");
 -- LootBlare-style roll window: build, show item, feed grouped rolls.
 Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
 -- icon + name resolve link-first (regression: bare-ID call showed no
