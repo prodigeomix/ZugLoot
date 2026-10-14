@@ -109,6 +109,22 @@ print("sheet 3-column layout OK");
 local twoCol = Z.MainWindow.DebugCardColumns(17063);
 assert(twoCol and twoCol.left == 1 and twoCol.right == 1, "rollers split 1+1 across two columns, got " .. tostring(twoCol and (twoCol.left .. "+" .. twoCol.right)));
 print("sheet roller 2-column split OK");
+-- My-SR badge: mock player is SoloPlayer — add them to 17063's rollers
+-- (Blackfang + Carbon otherwise), re-render, then check.
+table.insert(s.items[17063].rollers, { name = "SoloPlayer", rolls = 1 });
+Z.MainWindow.SelectTab("sheet");
+assert(Z.MainWindow.DebugCardMine(17063) == true, "my-SR card flagged");
+assert(Z.MainWindow.DebugCardMine(18646) ~= true, "other card not flagged");
+print("sheet my-SR badge OK");
+-- Drop-count corner: 17063 rolled once (RecordRolls above) -> #1;
+-- 18646 never rolled -> #0. No "not rolled yet" text anywhere.
+assert(Z.MainWindow.DebugCardDrops(17063) == 1, "rolled card shows #1, got: " .. tostring(Z.MainWindow.DebugCardDrops(17063)));
+assert(Z.MainWindow.DebugCardDrops(18646) == 0, "unrolled card shows #0, got: " .. tostring(Z.MainWindow.DebugCardDrops(18646)));
+print("sheet drop-count corner OK");
+-- Shift-click link: full color link, never a bare item id.
+local cardLink = Z.MainWindow.DebugCardLink(17063);
+assert(cardLink and string.find(cardLink, "|Hitem:", 1, true), "card link is a full link, got: " .. tostring(cardLink));
+print("sheet card link OK");
 -- Drop-count badge + roll-log window data for the rolled item.
 local log = Z.MainWindow.ItemLogLines(17063);
 assert(log and log.header and log.header.itemID == 17063, "log header targets the item");
@@ -189,7 +205,7 @@ local function barBox(b)
   return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
 end
 local vis = {}
-for _, n in ipairs({ "awardB", "tmogB", "moreB", "closeB" }) do
+for _, n in ipairs({ "awardB", "tmogB", "moreB" }) do
   local btn = df[n]
   if btn and btn.hidden ~= true then
     local box = barBox(btn)
@@ -215,7 +231,27 @@ local function hasAnchor(pts, want)
   end
   return false
 end
-assert(hasAnchor(df.rolls.points, "BOTTOMRIGHT"), "rolls text ends above the bar");
+-- Raider-style columns: header icon + two roll columns (names left,
+-- rolls right), fixed 220-wide frame.
+assert(df.dicon ~= nil, "detail header icon built");
+assert(df.rollsL ~= nil and df.rollsR ~= nil, "two roll columns built");
+assert(hasAnchor(df.rollsL.points, "TOPLEFT"), "left column anchored");
+assert(hasAnchor(df.rollsR.points, "TOPRIGHT"), "right column anchored");
+-- X buttons (standard close): loot overview + detail both carry one
+-- top-right, wired to the same actions as the old bottom Close buttons.
+local lwX = Z.LootWindow.frame and Z.LootWindow.frame.closeB;
+assert(lwX ~= nil, "loot overview has top-right X");
+local dfX = Z.LootWindow.detailFrame and Z.LootWindow.detailFrame.closeB;
+assert(dfX ~= nil, "detail has top-right X");
+local function hasTopRight(pts)
+  for _, p in ipairs(pts or {}) do
+    if p[1] == "TOPRIGHT" then return true end
+  end
+  return false
+end
+assert(hasTopRight(lwX.points), "overview X anchored top-right");
+assert(hasTopRight(dfX.points), "detail X anchored top-right");
+print("top-right X buttons OK");
 -- ... dropdown builds under the mock API, rows clickable, closes cleanly.
 Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
 assert(Z.LootWindow.moreDropdown ~= nil, "more dropdown opened");
@@ -289,6 +325,76 @@ s.players["Thrall"] = { class = "PaladinHoly" };
 assert(Z.ClassColors.ClassOf("Thrall") == "Paladin", "roll window sheet class");
 assert(Z.ClassColors.ColoredName("Thrall") == "|cFFF58CBAThrall|r", "roll window pink");
 Z.RaiderLootUI.ShowResult("The winner is Jaina (50) !");
+-- Pysanka-style roll calls pop the raider window ONLY on the actual
+-- roll call ("Roll for X: ..." dice line, full link). Everything else
+-- Pysanka says — drop lists, winners, countdowns, stop-rolls, raid-roll
+-- numbering, bare item names, other senders — never pops it.
+GetLootMethod = function() return "master" end;
+GetLootMaster = function() return "Pysanka" end;
+GetNumRaidMembers = function() return 3 end;
+Z.RaiderLootUI.Hide();
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Roll for Nemesis Gloves: /roll (MS) or /roll 99 (OS) or /roll 98 (TMOG)", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText == "Nemesis Gloves", "dice line pops window with item, got: " .. tostring(Z.RaiderLootUI.itemNameText));
+Z.RaiderLootUI.Hide();
+Z.RaiderLootUI.itemNameText = nil;
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Nemesis Gloves", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText == nil, "bare item name does not pop window, got: " .. tostring(Z.RaiderLootUI.itemNameText));
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Firemaw dropped 2 items:", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText ~= "Firemaw dropped 2 items:", "drop head does not pop window");
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "1. Legguards of the Fallen Crusader (SR by Shawty)", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText ~= "1. Legguards of the Fallen Crusader (SR by Shawty)", "drop line does not pop window");
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Stopping rolls in 3", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText ~= "Stopping rolls in 3", "stop-rolls does not pop window");
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "2", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText ~= "2", "countdown does not pop window");
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Ahjinn rolled the highest (10) for Nemesis Gloves.", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText ~= "Ahjinn rolled the highest (10) for Nemesis Gloves.", "winner line does not pop window");
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "[1]:Evilson, [2]:Broman", "Pysanka");
+assert(Z.RaiderLootUI.itemNameText ~= "[1]:Evilson, [2]:Broman", "raid-roll numbering does not pop window");
+Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Roll for Nemesis Gloves: /roll (MS)", "RandomRaider");
+assert(Z.RaiderLootUI.itemNameText ~= "Nemesis Gloves", "non-ML sender does not pop window");
+GetLootMethod = nil;
+GetLootMaster = nil;
+GetNumRaidMembers = function() return 0 end;
+print("roll-call trigger OK");
+-- Roll-window icon hover: full link -> SetHyperlink tooltip; bare name
+-- (Pysanka-style call, unseen item) -> name + hint, never a dead tip.
+local tipCalls = {};
+GameTooltip.SetHyperlink = function(self, link) table.insert(tipCalls, { "hyper", link }) end;
+GameTooltip.SetText = function(self, txt) table.insert(tipCalls, { "text", txt }) end;
+local function hoverIcon()
+  local scripts = Z.RaiderLootUI.DebugIconScripts and Z.RaiderLootUI.DebugIconScripts();
+  assert(scripts and scripts.OnEnter, "icon hover wired");
+  scripts.OnEnter();
+end
+Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
+tipCalls = {};
+hoverIcon();
+assert(#tipCalls == 1 and tipCalls[1][1] == "hyper", "link hover shows item tooltip");
+Z.RaiderLootUI.ShowItem("Nemesis Gloves", 15);
+tipCalls = {};
+hoverIcon();
+assert(#tipCalls >= 1 and tipCalls[1][1] == "text" and tipCalls[1][2] == "Nemesis Gloves", "bare-name hover shows name, got: " .. tostring(tipCalls[1] and tipCalls[1][2]));
+-- Bare id ("item:NNNN"): resolves through the cache to a full tooltip.
+Z.RaiderLootUI.ShowItem("item:17063:0:0:0", 15);
+tipCalls = {};
+hoverIcon();
+assert(#tipCalls == 1 and tipCalls[1][1] == "hyper", "bare-id hover resolves to item tooltip");
+print("roll icon tooltip OK");
+-- Shift-click inserts a FULL link even when the window opened on a bare
+-- id (click-time cache resolve + upgrade).
+local inserted = {};
+ChatFrameEditBox = { IsVisible = function() return true end, Insert = function(self, s) table.insert(inserted, s) end };
+IsShiftKeyDown = function() return true end;
+IsControlKeyDown = function() return false end;
+Z.RaiderLootUI.ShowItem("item:17063:0:0:0", 15);
+local clickScripts = Z.RaiderLootUI.DebugIconScripts and Z.RaiderLootUI.DebugIconScripts();
+assert(clickScripts and clickScripts.OnClick, "icon click wired");
+clickScripts.OnClick();
+assert(#inserted == 1 and string.find(inserted[1], "|Hitem:", 1, true), "shift-click inserts full link, got: " .. tostring(inserted[1]));
+IsShiftKeyDown = function() return false end;
+ChatFrameEditBox = { IsVisible = function() return false end };
+print("roll icon shift-click OK");
 -- START_LOOT_ROLL mirrors a group roll in OUR dice frame; the dice vote
 -- through RollOnLoot (Need 1 / Greed 2 / Pass 0), never RandomRoll chat
 -- spam (which would forfeit the roll). CANCEL hides the frame.

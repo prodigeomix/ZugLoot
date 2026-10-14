@@ -180,4 +180,16 @@ local okOther = RI.ApplySheet(other, "paste", "ML")
 ok(okOther ~= false, "other raid applies")
 eq(ZugLoot.DB.sheet.meta.raidID, "R2", "raid switched")
 
+-- 10. Import guards: truncated payloads fail FAST with a message
+-- (regression: importing a truncated CustomData file hung the client —
+-- JsonDecode ran on a partial payload).
+-- Truncated base64 (length not a multiple of 4 after whitespace strip).
+local trunc, truncErr = SRData.ParseRaidResExport("eyJtZXRhZGF0YSI6eyJ")
+ok(trunc == nil and truncErr ~= nil, "truncated base64 refused")
+ok(string.find(tostring(truncErr), "truncated", 1, true) ~= nil, "truncated message")
+-- Valid-length but JSON-cut payload also refuses cleanly.
+local cutJson = "eyJhIjox" -- base64("{") + junk -> decodes, tail isn't }/]
+local cut, cutErr = SRData.ParseRaidResExport(cutJson)
+ok(cut == nil, "cut JSON refused (no hang, no sheet)")
+
 return T

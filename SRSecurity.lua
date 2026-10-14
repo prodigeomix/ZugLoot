@@ -93,12 +93,13 @@ function M.AmML() return M.IsML() end
 function M.AmLeader() return M.IsLeader() end
 
 -- May this client load a sheet locally (import = parse + store + view/sim)?
--- Solo (out of party/raid) is always allowed: there is no raid to protect
--- and no one to broadcast to; it is preview-only (see CanBroadcast).
--- In a group, only the ML or raid leader/assistant may import.
+-- ALWAYS: anyone can import for their own view (raiders want to see the
+-- sheet too). Importing never pushes anything (see CanBroadcast) and
+-- never overwrites trust: synced sheets still only come from ML/leader
+-- (see CanAcceptFrom). Kept as a function (not a constant) so callers
+-- and tests keep working.
 function M.CanImport()
-  if M.IsSolo() then return true end
-  return M.AmML() or M.AmLeader()
+  return true
 end
 
 -- May this client push the sheet to the group? Never solo (no channel),

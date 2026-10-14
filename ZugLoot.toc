@@ -30,3 +30,4 @@ BossData.lua
 pfLoot.lua
 Sim.lua
 DropLog.lua
+Minimap.lua

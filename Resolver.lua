@@ -348,37 +348,57 @@ local function takeNames(names, n, skip)
   return out
 end
 
--- Simulate rolls for testing/sim. Keeps the rolling group small (3-7
--- total): all SR holders roll SR, then a few extra sheet members roll
--- TMOG or an invalid (over-cap MS) roll for flavor; off-sheet items get
--- 3-7 sheet members rolling MS/OS/TMOG (caps 100/99/98).
+-- THE fake-roll generator: sim AND rehearsal share this (one code path).
+-- Every roll is math.random(1-100) for the number; the KIND (MS/OS/TMOG)
+-- is drawn at random per roller. SR holders roll SR (their reserve),
+-- everyone else rolls a random kind — same as a live mixed roll.
+-- Roster: SR holders first, then the rest of the sheet roster; invented
+-- names (rehearsal) arrive as an opts.roster override. Off-sheet items
+-- (no holders) roll the whole roster with random kinds.
+-- Group size: 3-7 total (opts.count pins it for tests).
 -- rng: function(lo,hi) default math.random. Returns rolls list.
--- opts.tmog = {names}: extra TMOG-typed entries (cap 98) for TMOG demos.
+-- opts.tmog = {names}: those rollers roll TMOG instead of their draw
+--   (TMOG demos: the player still rolls, just a different die).
+-- opts.roster = {names}: use instead of the sheet roster (rehearsal).
 -- opts.count = exact roller total (tests pin the size deterministically).
+-- opts.srOnly = holders roll SR, extras roll MS only (legacy sim shape;
+--   prefer the random-kind default for new callers).
 function M.FakeRolls(sheetLike, itemID, opts, rng)
   opts = opts or {}
-  local cap = opts.cap or 100
   rng = rng or function(lo, hi) return math.random(lo, hi) end
-  local players = {}
-  -- Roster source: the live SRData module when loaded (client + most
-  -- tests), else the sheet's own rollers straight off the passed sheet
-  -- (pure harness: Resolver.lua alone under stock lua).
-  local SRD = (Z and Z.SRData) or ZugLoot.SRData
-  if SRD and SRD.AllPlayerNames then
-    players = SRD.AllPlayerNames(sheetLike) or {}
+  local kinds = { "MS", "OS", "TMOG" }
+  local function drawKind()
+    return kinds[rng(1, 3)]
   end
-  if count(players) == 0 and sheetLike and sheetLike.items then
-    local seen = {}
-    for _, item in pairs(sheetLike.items) do
-      local rr = (item or {}).rollers or {}
-      local j = 1
-      while rr[j] ~= nil do
-        local nm = rr[j].name
-        if nm and nm ~= "" and not seen[nm] then
-          seen[nm] = true
-          table.insert(players, nm)
+  local function rollFor(kind)
+    return rng(1, M.TypeCap(kind))
+  end
+  -- Roster: explicit override (rehearsal invented names) else sheet.
+  local players = {}
+  if type(opts.roster) == "table" then
+    for i = 1, count(opts.roster) do
+      if opts.roster[i] and opts.roster[i] ~= "" then
+        table.insert(players, opts.roster[i])
+      end
+    end
+  else
+    local SRD = (Z and Z.SRData) or ZugLoot.SRData
+    if SRD and SRD.AllPlayerNames then
+      players = SRD.AllPlayerNames(sheetLike) or {}
+    end
+    if count(players) == 0 and sheetLike and sheetLike.items then
+      local seen = {}
+      for _, item in pairs(sheetLike.items) do
+        local rr = (item or {}).rollers or {}
+        local j = 1
+        while rr[j] ~= nil do
+          local nm = rr[j].name
+          if nm and nm ~= "" and not seen[nm] then
+            seen[nm] = true
+            table.insert(players, nm)
+          end
+          j = j + 1
         end
-        j = j + 1
       end
     end
   end
@@ -387,43 +407,57 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
     total = rng(M.SIM_ROLLERS_MIN, M.SIM_ROLLERS_MAX)
   end
   if total < 1 then total = 1 end
+  local tmogSet = {}
+  if type(opts.tmog) == "table" then
+    for t = 1, count(opts.tmog) do tmogSet[opts.tmog[t]] = true end
+  end
   local rolls = {}
-  local rollers = {}
-  if sheetLike and sheetLike.items and sheetLike.items[itemID] then
-    rollers = sheetLike.items[itemID].rollers or {}
-  end
-  local i = 1
   local skip = {}
-  while rollers[i] ~= nil and count(rolls) < total do
-    table.insert(rolls, { name = rollers[i].name, roll = rng(1, cap), type = "SR" })
-    skip[rollers[i].name] = true
-    i = i + 1
+  -- SR holders roll SR (their reserve); a tmog-forced holder rolls TMOG.
+  if sheetLike and sheetLike.items and sheetLike.items[itemID] then
+    local rollers = sheetLike.items[itemID].rollers or {}
+    local i = 1
+    while rollers[i] ~= nil and count(rolls) < total do
+      local nm = rollers[i].name
+      if nm and nm ~= "" then
+        local kind = tmogSet[nm] and "TMOG" or "SR"
+        table.insert(rolls, { name = nm, roll = rollFor(kind), type = kind })
+        skip[nm] = true
+      end
+      i = i + 1
+    end
   end
-  -- Sheet too small to fill the budget: wrap around the roster again so
-  -- the headcount still lands in 3-7 (names stay unique via suffix).
-  -- Deterministic pick order: TMOG, invalid (over-cap MS), then plain MS.
+  -- Fill the rest of the budget from the roster with random kinds.
+  -- Wrap on small rosters (names stay unique via suffix).
   local n = 1
   while count(rolls) < total and count(players) > 0 do
     local nm = players[((n - 1) % count(players)) + 1]
     local tag = nm
     if skip[nm] then tag = nm .. n end
     skip[tag] = true
-    local pick = ((n - 1) % 3) + 1
-    if pick == 1 then
-      table.insert(rolls, { name = tag, roll = rng(1, 98), type = "TMOG" })
-    elseif pick == 2 then
-      -- invalid: over-cap MS (flagged, never wins) for visible
-      -- invalid-roll flavor.
-      table.insert(rolls, { name = tag, roll = cap + rng(1, 20), type = "MS" })
+    local kind
+    if tmogSet[tag] or tmogSet[nm] then
+      kind = "TMOG"
+    elseif opts.srOnly then
+      kind = "MS"
     else
-      table.insert(rolls, { name = tag, roll = rng(1, cap), type = "MS" })
+      kind = drawKind()
     end
+    table.insert(rolls, { name = tag, roll = rollFor(kind), type = kind })
     n = n + 1
+    if n > total + count(players) + 5 then break end -- paranoia
   end
-  -- transmog rollers (cap 98): may win and pass the item along.
-  if type(opts.tmog) == "table" then
-    for t = 1, count(opts.tmog) do
-      table.insert(rolls, { name = opts.tmog[t], roll = rng(1, 98), type = "TMOG" })
+  -- Named fillers (legacy /sim <link> N path): RollerN entries with random
+  -- kinds, only while the budget is unfilled (never past total).
+  if type(opts.fillers) == "number" then
+    for f = 1, opts.fillers do
+      if count(rolls) >= total then break end
+      local tag = "Roller" .. f
+      if not skip[tag] then
+        skip[tag] = true
+        local kind = drawKind()
+        table.insert(rolls, { name = tag, roll = rollFor(kind), type = kind })
+      end
     end
   end
   return rolls

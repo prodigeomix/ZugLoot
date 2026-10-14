@@ -1,5 +1,5 @@
 -- tests/test_lootwindow.lua
--- RollFor-style loot window: numbered rows (icon/name/SR-HR badge), and the
+-- Raider-style loot window: icon/name/SR-HR rows (no numbers), and the
 -- row detail that STAYS OPEN as the roll window (pick -> rolling -> award):
 -- live roll list with kinds, finish-early, award-in-window.
 local T = { pass = 0, fail = 0, errors = {} }
@@ -83,7 +83,7 @@ local tRes = LW.RowText(LW.items[1])
 ok(string.find(tRes, "Dragonfang", 1, true) ~= nil
   and string.find(tRes, "item:1001", 1, true) == nil, "row text named, no bare id")
 LW.SetItems({ { itemID = 4242, link = "item:4242" } }, "sim")
-eq(LW.RowText(LW.items[1]), "1. item:4242", "unknown falls back to item:id")
+eq(LW.RowText(LW.items[1]), "item:4242", "unknown falls back to item:id")
 
 -- 1. ReserveBadge: HR wins, SR / SR:n, "" when unreserved.
 local sheet = makeSheet()
@@ -104,8 +104,18 @@ eq(LW.DisplayName({ itemID = 7 }), "item:7", "itemID fallback")
 eq(LW.TooltipLink({ itemID = 17182, link = "|cffa335ee|Hitem:17182:0:0:0|h[Sulfuras]|h|r" }),
   "item:17182:0:0:0", "tooltip link extracted")
 eq(LW.TooltipLink({ itemID = 8 }), "item:8:0:0:0", "tooltip link synthesized")
+-- BuildLink: real clickable link from parts (RollFor parity) — used when
+-- the cache has no full link but the name is known (uncached sheet items).
+local builtHex = string.match(LW.BuildLink(17063, "Thunderfury", 5) or "", "^(|c%x+)")
+ok(builtHex ~= nil, "built link has color prefix")
+eq(LW.BuildLink(17063, "Thunderfury", 5), builtHex .. "|Hitem:17063:0:0:0|h[Thunderfury]|h|r", "built link shape")
+eq(LW.BuildLink(8, nil, 4), nil, "no name, no link")
+-- ResolveItemInfo upgrades bare ids to full links when the name is known.
+-- (Cache cold: stub misses 17063, so no full link comes from GetItemInfo.)
+local bn, bl = LW.ResolveItemInfo(17063, "item:17063:0:0:0", 5, nil, "Thunderfury")
+ok(bl and string.find(bl, "|Hitem:17063", 1, true) ~= nil, "bare id upgraded to full link, got: " .. tostring(bl))
 
--- 2. Rows: numbered, badge from SetItems, RowText mirrors the paint.
+-- 2. Rows: icon/name/badge (no numbers), RowText mirrors the paint.
 ZugLoot.DB = { sheet = sheet }
 LW.SetItems({
   { itemID = 1001, link = "item:1001", quality = 4, badge = SRData.ReserveBadge(sheet, 1001) },
@@ -119,7 +129,7 @@ for i, want in ipairs({ "SR:2", "HR", "" }) do
   eq(LW.items[i].badge, want, "row " .. i .. " badge")
 end
 local t1 = LW.RowText(LW.items[1])
-ok(string.find(t1, "^1%.", 1) ~= nil or string.find(t1, "1.", 1, true) == 1, "row text numbered")
+ok(string.find(t1, "^1%.") == nil, "row text unnumbered (raider style)")
 ok(string.find(t1, "SR:2", 1, true) ~= nil, "row text shows badge")
 -- legacy sr= input still derives the badge.
 for _, tc in ipairs({ { 2, "SR:2" }, { 1, "SR" } }) do
@@ -191,9 +201,11 @@ ok(#lines == 3, "three detail lines")
 ok(string.find(lines[1], "SR:2", 1, true) ~= nil, "title carries badge")
 ok(string.find(lines[2], "Aaa", 1, true) ~= nil, "rollers listed")
 local choices = LW.MoreChoices()
-eq(#choices, 3, "roll + two awards")
-eq(choices[3].name, "Bbb", "award row carries the name")
-ok(string.len("Award ganghorde") * 7 < LW.DETAIL_WIDTH - 60, "detail fits long award labels")
+eq(#choices, 4, "roll + raid-roll + two awards")
+eq(choices[1].id, "roll", "first choice is SR roll")
+eq(choices[2].id, "raidroll", "second choice is raid-roll")
+eq(choices[4].name, "Bbb", "award row carries the name")
+ok(LW.DETAIL_WIDTH == 220, "raider-style detail width")
 
 -- 6. Persistent roll window: pick -> rolling -> award in ONE window.
 -- Roll from the detail: it stays open and tracks the session.

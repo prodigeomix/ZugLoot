@@ -38,6 +38,11 @@ function Z.InitDB()
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
   ZugLootCharDB.autoRoll = ZugLootCharDB.autoRoll or false
   ZugLootCharDB.verSeen = ZugLootCharDB.verSeen or {}
+  -- Minimap button angle (degrees, 0 = top, clockwise). Persisted per
+  -- character; nil = default position (Minimap.GetAngle handles it).
+  if ZugLootCharDB.minimapAngle ~= nil then
+    ZugLootCharDB.minimapAngle = tonumber(ZugLootCharDB.minimapAngle)
+  end
   Z.DB = ZugLootDB
   Z.CharDB = ZugLootCharDB
 end
@@ -87,6 +92,8 @@ function Z.OnEvent(event, arg1, arg2, arg3, arg4)
       pcall(Z.LootWindow.DetachBlizzardLoot)
     end
     if Z.VersionGrid then Z.VersionGrid.Announce() end
+    -- Minimap die button (nil-safe: Build no-ops without frame APIs).
+    if Z.Minimap then pcall(Z.Minimap.Build) end
   elseif Z.Comm then
     Z.Comm.OnEvent(event, arg1, arg2, arg3, arg4)
   end
@@ -136,7 +143,7 @@ function Z.Slash(msg)
   elseif cmd == "loadfile" then Z.SRImport.LoadFromFile()
   elseif cmd == "rf" then Z.MasterLootUI.StartRoll(rest, "SR")
   elseif cmd == "arf" then Z.MasterLootUI.StartRoll(rest, "OPEN")
-  elseif cmd == "rr" then Z.MasterLootUI.StartRoll(rest, "RAID")
+  elseif cmd == "rr" then Z.MasterLootUI.StartRaidRoll(rest)
   elseif cmd == "2x" then Z.MasterLootUI.StartRoll(rest, "TWO")
   elseif cmd == "fr" then Z.MasterLootUI.FinishEarly(Z.Util.ItemID(rest))
   elseif cmd == "cr" then Z.MasterLootUI.Cancel(Z.Util.ItemID(rest))

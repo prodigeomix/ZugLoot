@@ -165,18 +165,28 @@ end
 
 -- Item icon with hover = full item tooltip, click = link into chat.
 -- Uses LootBlare fix #8: GetItemInfo(tonumber(id)) for the icon texture.
+-- iconLink is ALWAYS a full color link when the client knows the item
+-- (shift-click inserts a real link, never "item:NNNN"): resolved via
+-- the shared link-first chain, which upgrades bare ids.
 local function ItemIcon(parent, itemID, size)
   local b = CreateFrame("Button", nil, parent)
   b:SetWidth(size or 36) b:SetHeight(size or 36)
   local tex = b:CreateTexture(nil, "ARTWORK")
   tex:SetAllPoints(b)
   local _, link, quality, _, _, _, _, _, icon = nil, nil, nil, nil, nil, nil, nil, nil, nil
-  if GetItemInfo then
+  if Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+    local _, fullLink, q, texPath = Z.LootWindow.ResolveItemInfo(itemID, nil, nil, nil, nil)
+    if fullLink and fullLink ~= "" then link = fullLink end
+    if q ~= nil then quality = q end
+    if texPath and texPath ~= "" then icon = texPath end
+  elseif GetItemInfo then
     _, link, quality, _, _, _, _, _, icon = GetItemInfo(tonumber(itemID))
   end
   tex:SetTexture(icon or "Interface\\Icons\\INV_Misc_QuestionMark")
   b.iconLink = link
   b.itemID = itemID
+  M.zlCardLinks = M.zlCardLinks or {}
+  M.zlCardLinks[tonumber(itemID) or itemID] = link
   -- quality border
   local q = QUALITY_RGB[quality or 4] or QUALITY_RGB[4]
   local bd = b:CreateTexture(nil, "OVERLAY")
@@ -194,10 +204,22 @@ local function ItemIcon(parent, itemID, size)
   end)
   b:SetScript("OnLeave", function() GameTooltip:Hide() end)
   b:SetScript("OnClick", function()
-    if b.iconLink and ChatFrameEditBox and ChatFrameEditBox:IsVisible() then
-      ChatFrameEditBox:Insert(b.iconLink)
-    elseif b.iconLink then
-      Z.Print(b.iconLink)
+    -- Resolve AGAIN at click time: the cache warms as you play (loot the
+    -- item, see it linked), so a shift-click later must give the full
+    -- link even if the icon was built while the item was unknown.
+    local clickLink = b.iconLink
+    if (not clickLink or not string.find(tostring(clickLink), "|Hitem:", 1, true))
+        and Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+      local _, fullLink = Z.LootWindow.ResolveItemInfo(b.itemID, b.iconLink, nil, nil, nil)
+      if fullLink and string.find(tostring(fullLink), "|Hitem:", 1, true) then
+        clickLink = fullLink
+        b.iconLink = fullLink -- upgrade: hover + next clicks skip lookup
+      end
+    end
+    if clickLink and ChatFrameEditBox and ChatFrameEditBox:IsVisible() then
+      ChatFrameEditBox:Insert(clickLink)
+    elseif clickLink then
+      Z.Print(clickLink)
     end
   end)
   return b
@@ -365,7 +387,7 @@ function M.RenderSheet()
     return math.ceil(n / 2)
   end
   local function cardH(card)
-    local h = 30 + (rollerRows(card) * 13) + 14 -- + hint line
+    local h = 30 + (rollerRows(card) * 13) + 6 -- padding, no hint line
     if h < 52 then h = 52 end
     return h
   end
@@ -382,15 +404,42 @@ function M.RenderSheet()
     title:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -4)
     title:SetWidth(w - 56) title:SetJustifyH("LEFT")
     local nice = ItemName(card.itemID, card.quality)
+    -- My SR: this item has MY name on its roller list — a gold square
+    -- around the card (no text badge) so my items pop at a glance.
+    local me = UnitName and UnitName("player") or nil
+    local mySR = false
+    if me and me ~= "" then
+      for i = 1, Z.Util.ArrayCount(card.rollers) do
+        if card.rollers[i] and card.rollers[i].name == me then
+          mySR = true break
+        end
+      end
+    end
+    if mySR and row.CreateTexture then
+      local hl = row:CreateTexture(nil, "OVERLAY")
+      if hl.SetTexture then hl:SetTexture(1, 0.82, 0, 0.28) end
+      if hl.SetAllPoints then hl:SetAllPoints(row) end
+      if hl.Show then hl:Show() end
+      row.zlMineHL = hl
+    end
     local badges = ""
     if card.hardres then badges = badges .. "  |cFFFF8000[HR]|r" end
     if card.unsr then badges = badges .. "  |cff888888[not SR'd]|r" end
     local nRolls = Z.Util.ArrayCount(card.rollSessions)
-    if nRolls > 0 then
-      -- Drop count: how many times this item came up for a roll.
-      badges = badges .. "  |cFF00FF00[x" .. nRolls .. "]|r"
-    end
     title:SetText(nice .. badges)
+    -- Drop count top-right: #N sessions this raid (#0 = never rolled).
+    -- Replaces the old [xN] title badge + "not rolled yet" hint line.
+    local dropN = FS(row, "GameFontNormalSmall", "#" .. nRolls)
+    dropN:SetPoint("TOPRIGHT", row, "TOPRIGHT", -6, -6)
+    dropN:SetJustifyH("RIGHT")
+    if dropN.SetTextColor then
+      if nRolls > 0 then dropN:SetTextColor(0.3, 1, 0.3)
+      else dropN:SetTextColor(0.55, 0.55, 0.6) end
+    end
+    M.zlCardDrops = M.zlCardDrops or {}
+    M.zlCardDrops[card.itemID] = nRolls
+    M.zlCardMine = M.zlCardMine or {}
+    M.zlCardMine[card.itemID] = mySR
     -- body: SR rollers in TWO columns (left half, right half).
     local nR = Z.Util.ArrayCount(card.rollers)
     M.zlCardCols = M.zlCardCols or {}
@@ -418,12 +467,8 @@ function M.RenderSheet()
       bodyE:SetPoint("TOPLEFT", row, "TOPLEFT", 48, -22)
       bodyE:SetWidth(w - 56) bodyE:SetJustifyH("LEFT") bodyE:SetJustifyV("TOP")
     end
-    -- hint line: click opens the roll-log window for this item.
-    local hint = FS(row, "GameFontHighlightSmall",
-      nRolls > 0 and ("|cff888888(click: " .. nRolls .. " roll log" .. (nRolls == 1 and "" or "s") .. ")|r")
-        or "|cff888888(not rolled yet)|r")
-    hint:SetPoint("BOTTOMLEFT", row, "BOTTOMLEFT", 48, 4)
-    hint:SetWidth(w - 56) hint:SetJustifyH("LEFT")
+    -- No hint line (the #N corner count says it all; the card still
+    -- opens the roll-log window on click).
     local h = cardH(card)
     row:SetHeight(h)
     -- zebra
@@ -444,7 +489,7 @@ function M.RenderSheet()
     row:EnableMouse(true)
     Tip(row, "item:" .. tostring(card.itemID),
       card.hardres and "HARD RESERVED" or ("SR: " .. (table.concat(srNames, ", ") ~= "" and table.concat(srNames, ", ") or "none")),
-      nRolls > 0 and (nRolls .. " roll session(s) this raid — click for the log") or "not rolled yet this raid")
+      nRolls > 0 and (nRolls .. " roll session(s) this raid — click for the log") or "no rolls yet — click for the log")
     -- Left click: roll-log window for this item (icon keeps its own
     -- link-in-chat click; the card body opens the log).
     local logID = card.itemID
@@ -931,6 +976,25 @@ function M.DebugCardColumns(itemID)
   return t[itemID]
 end
 
+-- Test hook: whether a card carries the player's own SR (gold badge).
+function M.DebugCardMine(itemID)
+  local t = M.zlCardMine or {}
+  return t[itemID]
+end
+
+-- Test hook: a card's shift-click link (must be a full color link, never
+-- a bare "item:NNNN" id). Recorded at icon build time.
+function M.DebugCardLink(itemID)
+  local t = M.zlCardLinks or {}
+  return t[itemID]
+end
+
+-- Test hook: drop-count corner number per card (#N sessions).
+function M.DebugCardDrops(itemID)
+  local t = M.zlCardDrops or {}
+  return t[itemID]
+end
+
 -- Test hook: tracked visual rows of a tab body for the sheet column
 -- layout assert ({ { h, cells = { {x, w}... } }... }). Card cells record
 -- their placement at build time (mock frames track no children).
@@ -1049,7 +1113,7 @@ function M.Build()
   M.headerBtns.import = impB
   impB:SetScript("OnClick", function() Z.SRImport.ShowPaste() end)
   Tip(impB, "Import", "Paste a raidres export or line-format sheet.",
-    "ML / raid leader only in group; solo preview allowed.")
+    "Anyone may import (local view); broadcast stays ML / raid leader.")
   -- Load from File: same entry as the old Setup button.
   local fileB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   fileB:SetWidth(70) fileB:SetHeight(20)
@@ -1090,13 +1154,8 @@ function M.Build()
   hairline(f, -86, 14, -14)
   -- bodies
   for _, td in ipairs(TABS) do MakeBody(f, td.key) end
-  -- footer
+  -- footer (no Close button: X sits top-right next to the other X).
   hairline(f, -(winH - 30), 14, -14)
-  local closeB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  closeB:SetWidth(80) closeB:SetHeight(20)
-  closeB:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -14, 6)
-  closeB:SetText("Close")
-  closeB:SetScript("OnClick", function() f:Hide() end)
   M.frame = f
   f:Hide()
 end

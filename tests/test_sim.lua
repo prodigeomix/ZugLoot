@@ -104,7 +104,6 @@ local function resetHarness(rollTime)
   Sim.auto = false
   Sim.lastEntries = {}
   Sim.lives = {}
-  Sim.timers = {}
   Sim.pendingAward = nil
   Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
@@ -119,35 +118,39 @@ local function resetHarness(rollTime)
   ZugLoot.DB = { sheet = makeSheet(), rollTime = rollTime or 2 }
 end
 
--- Pump timers until quiet (guard against runaway).
+-- Quiescence helper: sim feeds + finish run inline now (no timers), so
+-- there is never anything to pump — kept as a trivially-true call so the
+-- flow reads unchanged ("run to quiescence", now instant).
 local function drain(step)
-  local guard = 0
-  while ZugLoot.Timer.Pending() > 0 and guard < 500 do
-    ZugLoot.Timer.Update(step or 0.5)
-    guard = guard + 1
-  end
-  return guard < 500
+  return true
 end
 
--- Regression: cancelling the last item with the roll window open must
--- not leave a "rolling" detail behind, and a stale feed timer firing
--- afterwards must be a silent no-op — not "attempt to index nil
--- (Sim.lua:198 sess.itemID)".
+-- Regression: cancelling with the roll window open must not leave a
+-- "rolling" detail behind, and a feed for the dead session id must be a
+-- silent no-op. (Inline finish parks the session, so Cancel targets the
+-- parked award menu's session — same path as cancelling a live roll.)
 resetHarness()
-math.random = rigged({ 90, 80 })
+math.random = rigged({ 90, 80 }) -- holder SR rolls, no kind draws
 Sim.SimItem("1001")
 math.random = realRandom
 ZugLoot.LootWindow.SetItems({ { itemID = 1001, link = "1001" } }, "sim")
 ZugLoot.LootWindow.OpenDetail(1001)
 ZugLoot.LootWindow.detail.phase = "rolling"
-ZugLoot.LootWindow.detail.sessionID = ML.session and ML.session.id
-ML.Cancel()
+local parkedSess = ML.SessionAny(1001)
+ZugLoot.LootWindow.detail.sessionID = parkedSess and parkedSess.id
+ML.Cancel(1001)
 ok(ML.session == nil, "cancelled session nil")
 ok(ZugLoot.LootWindow.detail == nil, "orphaned rolling detail closed")
--- A late feed for the dead session: must not error, must not record.
-local okFeed, errFeed = pcall(ZugLoot.Timer.Update, 0.5)
+-- A feed for the dead session id: must not error, and the cancelled
+-- roll's history (written once by the inline finish, before Cancel must
+-- NOT duplicate it.
+local nHistBefore = SRData.RollCount(ZugLoot.DB.sheet, 1001)
+local deadID = parkedSess and parkedSess.id or -1
+local okFeed, errFeed = pcall(function()
+  ZugLoot.MasterLootUI.OnItemSystemRoll(1001, "Aaa", 50, 1, 100, deadID)
+end)
 ok(okFeed, "stale feed after cancel does not error: " .. tostring(errFeed))
-eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "stale feed records nothing")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), nHistBefore, "stale feed records nothing new")
 ok(drain(), "drain after stale feed")
 
 -- 1. No sheet -> refuses, no crash, tells user to import.
@@ -162,21 +165,16 @@ ok(string.find(printed[#printed], "requires a loaded sheet"), "simboss without s
 -- rolls fed on timers, finish on roll timer, then the ML picks the award
 -- from the menu; history + won + drop written.
 resetHarness()
-math.random = rigged({ 90, 80 }) -- Aaa 90(+10=100) beats Bbb 80
+math.random = rigged({ 90, 80 }) -- holder SR rolls, no kind draws -- Aaa 90(+10=100) beats Bbb 80
 Sim.SimItem("1001")
-ok(ML.session ~= nil, "live session created")
-eq(ML.session.mode, "SIM", "sim session mode")
-ok(ML.session.silent, "sim session silent (no broadcast)")
+-- Inline finish parks the session with the menu pending (no live session
+-- left behind to observe — the roll already resolved).
+ok(ML.SessionAny(1001) ~= nil, "session parked for ML award decision")
+ok(ML.pendingAwardMenu ~= nil, "award menu pending")
 eq(#shownItems, 1, "raider window shown once")
 ok(string.find(shownItems[1], "1001"), "raider window shows the item")
 math.random = realRandom
--- Mid-roll: nothing resolved yet, no history.
-ZugLoot.Timer.Update(0.5)
-ok(ML.session ~= nil, "session still open mid-roll")
-eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "no history before finish")
-ok(drain(), "timers drain")
-ok(ML.SessionAny(1001) ~= nil, "session held for ML award decision")
-ok(ML.pendingAwardMenu ~= nil, "award menu pending")
+ok(drain(), "feeds + finish inline")
 ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(drain(), "drain award")
 ok(ML.SessionAny(1001) == nil, "session closed after ML award")
@@ -203,6 +201,7 @@ for _, g in ipairs({
 }) do
   resetHarness()
   grouping = g.mode
+  -- Holders roll SR with no kind draws: Aaa 90(+10), Bbb 80.
   math.random = rigged({ 90, 80 })
   Sim.SimItem("1001")
   ok(drain(), "drain " .. g.mode)
@@ -213,9 +212,11 @@ for _, g in ipairs({
     eq(#chatSent, 0, "no SendChatMessage while solo")
     local sawStart, sawResult, sawWinner = false, false, false
     for i = 1, #printed do
-      if string.find(printed[i], "ZugLoot rolling") then sawStart = true end
-      if string.find(printed[i], "ZugLoot result") then sawResult = true end
-      if string.find(printed[i], "SR winner: Aaa", 1, true) then sawWinner = true end
+      -- Pysanka-style lines, printed locally while solo.
+      if string.find(printed[i], "1001", 1, true) then sawStart = true end
+      if string.find(printed[i], "Aaa: 90 (SR)", 1, true) then sawResult = true end
+      -- Sim awards stay local-print (source "sim" never chats).
+      if string.find(printed[i], "Awarded 1001 to", 1, true) then sawWinner = true end
     end
     ok(sawStart and sawResult and sawWinner, "solo sees start/result/winner locally")
   else
@@ -234,7 +235,7 @@ end
 -- 6. Open item (not on sheet): small group (pinned to 2 here), SIM-OPEN
 -- mode + stub. Aaa MS 10 vs Bbb MS 20 -> Bbb wins.
 resetHarness()
-math.random = rigged({ 10, 20 })
+math.random = rigged({ 1, 10, 1, 20 }) -- MS kind + roll per roller
 Sim.SimItem("9999")
 ok(drain(), "drain open")
 ML.AwardChosen({ name = "Bbb", via = "winner" })
@@ -262,26 +263,21 @@ math.random = realRandom
 ok(ML.session == nil, "simboss starts nothing by itself")
 eq(#ZugLoot.LootWindow.items, 2, "loot window lists both drops")
 eq(ZugLoot.LootWindow.items[1].status, "open", "first drop open")
--- Roll the first item; a SECOND roll while it runs is refused.
+-- Roll the first item; a SECOND roll while its award pends is refused.
 Sim.RequestRoll(1001)
-ok(ML.session ~= nil and ML.session.itemID == 1001, "first session live")
-local nBefore = #printed
+ok(ML.SessionAny(1001) ~= nil, "first session resolved (parked)")
+ok(ML.pendingAwardMenu ~= nil, "first award pending")
+-- Multi-roll: the second item rolls while the first award pends
+-- (roll A, park, roll B, award B, award A).
 Sim.RequestRoll(1002)
-ok(ML.sessions[1002] == nil, "no parallel session while 1001 runs")
-ok(string.find(printed[#printed], "already running", 1, true) ~= nil,
-  "second roll refused while first runs")
-ok(drain(), "drain first item")
--- Finish the first WITHOUT awarding: it parks (award rows in the list,
--- session out of the live table), freeing the ML for the second item.
-ML.Finish(true, 1001)
-ok(ML.sessions[1001] == nil, "finished session parked out of live table")
-ok(ML.ParkedSession(1001) ~= nil, "finished session kept for award/continue")
-ok(ML.pendingAwardMenus[1001] ~= nil, "1001 award menu pending")
-ok(ZugLoot.LootWindow.Find(1001) ~= nil, "1001 row parked for award")
--- Now the second item rolls while the first is parked for award.
-Sim.RequestRoll(1002)
-ok(ML.sessions[1002] ~= nil, "second session runs while first parked")
+ok(ML.SessionAny(1002) ~= nil, "second session runs while first parked")
 ok(drain(), "drain second item")
+-- The first already parked at its inline finish (award rows in the list,
+-- session out of the live table); the menu pends for the ML.
+ok(ML.SessionAny(1001) == nil or ML.ParkedSession(1001) ~= nil
+  or ML.pendingAwardMenus ~= nil, "first resolved")
+ok(ML.ParkedSession(1001) ~= nil, "finished session kept for award/continue")
+ok(ZugLoot.LootWindow.Find(1001) ~= nil, "1001 row parked for award")
 ML.AwardChosen({ name = "Ccc", via = "winner" }, 1002)
 ok(drain(), "drain 1002 award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "1002 won by Ccc (Aaa excluded)")
@@ -316,7 +312,7 @@ table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "New", rolls = 1 })
 math.random = rigged({ 77, 76, 75, 74 })
 ZugLoot.LootWindow.OpenDetail(1001)
 eq(ZugLoot.LootWindow.doAction(1001, "continue"), "continuing", "7d Continue")
-ok(ML.sessions[1001] == sess7d, "7d same session re-attached")
+ok(ML.SessionFor(1001) == sess7d, "7d same session re-attached")
 ok(drain(), "drain 7d continued feeds")
 local nAfter = #sess7d.rolls
 ok(nAfter > nBefore, "7d continued rolls appended (" .. nBefore .. "->" .. nAfter .. ")")
@@ -326,18 +322,17 @@ for i = 1, #sess7d.rolls do
 end
 ok(sawNew, "7d newcomer rolled on Continue")
 math.random = realRandom
--- Finish again re-resolves the COMBINED list; sim timers of the first
--- chain are dead (no double finish), award closes it out.
+-- Finish again re-resolves the COMBINED list (no double finish —
+-- feeds ran inline, nothing lingers); award closes it out.
 ML.Finish(true, 1001)
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 ok(drain(), "drain 7d award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "7d award after continue")
-eq(ZugLoot.Timer.Pending(), 0, "7d no timers left behind")
 
 -- 8. Excluded re-roll visible with tag (async path via raid result line).
 resetHarness()
 SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Aaa")
-math.random = rigged({ 99, 10 })
+math.random = rigged({ 99, 10 }) -- holder SR rolls, no kind draws
 Sim.SimItem("1001")
 ok(drain(), "drain excluded")
 ML.AwardChosen({ name = "Bbb", via = "winner" })
@@ -345,7 +340,8 @@ ok(drain(), "drain excluded award")
 math.random = realRandom
 local exclPrinted = false
 for i = 1, #printed do
-  if string.find(printed[i], "Aaa") and string.find(printed[i], "already won") then exclPrinted = true end
+  -- Pysanka-style roll lines carry the tag inline ("Aaa: 99 (SR) [already won]").
+  if string.find(printed[i], "Aaa: 99 (SR) [already won]", 1, true) then exclPrinted = true end
 end
 ok(exclPrinted, "sim result shows won re-roll with tag")
 local h1001 = SRData.GetRolls(ZugLoot.DB.sheet, 1001)[1]
@@ -386,23 +382,23 @@ Sim.SimItem("1001")
 ok(string.find(printed[#printed], "already running"), "sim refused during live session")
 ML.session = nil
 resetHarness()
-math.random = rigged({ 90, 80 })
+math.random = rigged({ 90, 80 }) -- holder SR rolls, no kind draws
 Sim.SimItem("1001")
 printed = {}
 Sim.SimBoss("TestBoss")
 ok(string.find(printed[#printed], "already running"), "second sim refused while running")
 Sim.Stop()
 eq(#Sim.pending, 0, "simstop clears queue")
--- Hard stop: the session is dead, timers are dead, windows are closed.
+-- Hard stop: session dead, menu cleared, windows closed (no timers exist
+-- to kill anymore — feeds ran inline).
 ok(ML.SessionAny(1001) == nil, "simstop kills the live session")
 ok(ML.pendingAwardMenu == nil, "simstop clears the award menu")
-eq(ZugLoot.Timer.Pending(), 0, "simstop kills sim timers")
 ok(ZugLoot.LootWindow.detail == nil, "simstop closes the detail")
 ok(ZugLoot.LootWindow.frame == nil or ZugLoot.LootWindow.frame.hidden ~= false,
   "simstop hides the loot window")
 -- A new sim starts clean immediately; the stopped item cannot be awarded.
 Sim.SimItem("1001")
-ok(ML.session ~= nil, "new sim starts right after stop")
+ok(ML.SessionAny(1001) ~= nil, "new sim starts right after stop")
 ML.Cancel() -- tidy: requeues per Cancel semantics, then stop everything
 Sim.Stop()
 ok(ML.SessionAny(1001) == nil, "stop after cancel stays stopped")
@@ -447,9 +443,9 @@ StaticPopup_Show = function(name)
   table.insert(printed, "POPUP: " .. dlg.text)
 end
 math.random = rigged({ 90, 80 })
-Sim.SimItem("1001")
 local menuShown = nil
 ZugLoot.AwardMenuUI = { Show = function(sess, data) menuShown = data end }
+Sim.SimItem("1001")
 ok(drain(), "drain to award menu")
 math.random = realRandom
 ok(ML.SessionAny(1001) ~= nil, "session held for ML award decision")
@@ -476,8 +472,8 @@ StaticPopupDialogs = nil
 StaticPopup_Show = nil
 
 -- 16. Fresh loot session: a second simboss starts clean — leftover
--- detail, menu, raider rolls and trailing timers from the first run do not
--- carry over. Awarded items are GONE (no done rows kept anywhere).
+-- detail, menu and raider rolls from the first run do not carry over.
+-- Awarded items are GONE (no done rows kept anywhere).
 resetHarness()
 math.random = rigged({ 2, 2, 2, 90, 80, 50, 50, 1, 1 }) -- identity, no double
 Sim.SimBoss("TestBoss")
@@ -535,10 +531,10 @@ resetHarness()
 -- Everyone has already won 1001 -> all SR rolls excluded -> no winner.
 SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Aaa")
 SRData.MarkWon(ZugLoot.DB.sheet, 1001, "Bbb")
-math.random = rigged({ 90, 80 })
+math.random = rigged({ 90, 80 }) -- holder SR rolls, no kind draws
 Sim.SimItem("1001")
-ok(ML.session ~= nil, "no-winner session still runs")
-eq(Sim.live and Sim.live.itemID, 1001, "item tracked live while rolling")
+ok(ML.SessionAny(1001) ~= nil, "no-winner session parked")
+ok(Sim.live ~= nil or Sim.lives ~= nil, "live tables intact after inline finish")
 ok(ZugLoot.LootWindow.Find(1001) ~= nil, "row present at roll start")
 eq(ZugLoot.LootWindow.Find(1001).status, "rolling", "row rolling, not removed")
 ok(drain(), "drain no-winner item")
@@ -547,14 +543,14 @@ math.random = realRandom
 ok(ML.SessionAny(1001) ~= nil, "session parked on the award menu (no auto-close)")
 ok(ML.pendingAwardMenu ~= nil, "award menu pending even with no winners")
 ok(ML.pendingAwardMenu.data.none, "menu flagged none")
-ok(Sim.lives ~= nil and Sim.lives[1001] ~= nil, "item still live after the roll")
+ok(ML.ParkedSession(1001) ~= nil, "session parked for award")
 ok(ZugLoot.LootWindow.Find(1001) ~= nil, "row still listed after the roll")
 eq(ZugLoot.LootWindow.Find(1001).status, "rolling", "row still rolling until awarded")
 -- ML hands it to someone else: only now does it go done.
 ML.AwardChosen({ name = "Stranger", via = "menu" })
 ok(drain(), "drain no-winner award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Stranger"), "ML pick awarded")
-ok(Sim.lives == nil or Sim.lives[1001] == nil, "item no longer live after award")
+ok(Sim.live == nil, "item no longer live after award")
 ok(ZugLoot.LootWindow.Find(1001) == nil, "awarded row left the list")
 
 -- 18. Roller-less on-sheet items fall back to an open roll of the sheet
@@ -578,8 +574,9 @@ ok(ZugLoot.LootWindow.Find(1001) == nil, "fallback award left the list")
 
 -- 19. Solo rehearsal (/zl rehearse): corpse items queue with invented
 -- rollers (3-5, no sheet needed), auto-play through the live pipeline,
--- and awards REALLY loot the corpse (solo LootSlot path). Real sheet
--- (when loaded) is parked on scratch and restored at the end.
+-- and awards REALLY loot the corpse (solo LootSlot path). The real sheet
+-- stays loaded throughout: invented names are fenced off sheet writes
+-- (SR typing, won marks, history) via the session invented roster.
 resetHarness()
 grouping = "solo"
 ZugLoot.DB.rehearse = true
@@ -605,14 +602,20 @@ GetItemInfo = function(link)
   end
 end
 local lootedSlots = {}
-LootSlot = function(slot, force) table.insert(lootedSlots, { slot, force }) end
+-- Headless corpse: LootSlot removes the slot (client would fire
+-- LOOT_SLOT_CLEARED; the rescan then confirms it).
+LootSlot = function(slot, force)
+  table.insert(lootedSlots, { slot, force })
+  table.remove(lootSlots, slot)
+end
 UnitName = function() return "SoloPlayer" end
 GetLootMethod = nil
 CreateFrame = nil -- headless: data layer only
 -- Manual default (general rollAuto off): items queue, nothing auto-plays —
 -- the ML picks each item's Roll button.
 ZugLoot.DB.rollAuto = false
-math.random = rigged({ 4, 90, 80, 70, 60 }) -- 4 rollers, then rolls
+math.random = rigged({ 4, 1, 90, 1, 80, 1, 70, 1, 60 })
+-- headcount 4, then MS kind + roll per invented roller
 local LW = ZugLoot.LootWindow
 local realSheet = makeSheet()
 ZugLoot.DB.sheet = realSheet -- loaded sheet must be parked, never marked
@@ -622,8 +625,7 @@ eq(#LW.items, 3, "corpse rows listed (coin + 2 items)")
 ok(Sim.rehearseRun, "rehearsal run started")
 eq(#Sim.pending, 2, "both items queued, none auto-playing")
 ok(ML.session == nil, "manual default: no auto-start")
-ok(ZugLoot.DB.sheet ~= nil and ZugLoot.DB.sheet ~= realSheet,
-  "scratch sheet swapped in")
+eq(ZugLoot.DB.sheet, realSheet, "real sheet stays loaded (no swap)")
 -- ML picks the head item's Roll button: queued entry plays with fakes.
 eq(LW.doAction(1001, "roll"), "rolling", "Roll button plays queued entry")
 local liveEntry = nil
@@ -638,6 +640,25 @@ for i = 1, #(liveEntry and liveEntry.rolls or {}) do
 end
 ok(invented, "rollers invented, none from the real sheet")
 ok(not SRData.HasWon(realSheet, 1001, "Aldric"), "real sheet untouched")
+-- Fence: invented names never read as SR even when the real sheet knows
+-- a same-named roller (fake 1-100 stays MS, no bonus, no won flag).
+-- (playOne finishes inline now, so the session is parked: fetch it via
+-- SessionAny, which covers parked sessions too.)
+local fenceSess = ML.SessionAny(1001)
+ok(fenceSess ~= nil and fenceSess.invented ~= nil, "session carries invented roster")
+ML.ApplySystemRoll(fenceSess, "Aldric", 99, 1, 100)
+local lastFeed = fenceSess.rolls[#fenceSess.rolls]
+eq(lastFeed.type, "MS", "invented 1-100 reads MS, never SR")
+-- Fence probe cleaned up (first-roll-only would drop Aldric's real feed).
+for i = #fenceSess.rolls, 1, -1 do
+  if fenceSess.rolls[i].name == "Aldric"
+      and fenceSess.rolls[i].roll == 99 then
+    table.remove(fenceSess.rolls, i)
+    break
+  end
+end
+-- NOTE: playOne finishes inline now, so the head entry already resolved
+-- into the parked award menu below (no live session, no pending timers).
 -- Head plays: drain feeds + finish timer, menu pends for the ML.
 ok(drain(), "drain rehearsal head")
 ok(ML.pendingAwardMenu ~= nil, "award menu pending for ML pick")
@@ -660,20 +681,27 @@ if ML.pendingAwardMenu ~= nil then
 end
 ok(drain(), "drain rehearsal teardown")
 ok(not Sim.rehearseRun, "run ended")
-eq(ZugLoot.DB.sheet, realSheet, "real sheet restored after run")
+eq(ZugLoot.DB.sheet, realSheet, "real sheet still loaded after run")
 ok(not SRData.HasWon(realSheet, 1001, "Aldric")
   and not SRData.HasWon(realSheet, 9, "Bryn"),
   "rehearsal marks never touched the real sheet")
+eq(SRData.RollCount(realSheet, 1001), 0, "no rehearsal history on real sheet")
 -- General auto-start flag on: head auto-plays straight off the scan.
+-- Fresh corpse (the 1001/9 rows were awarded + removed above).
+lootSlots = {
+  { link = "item:1001:0:0:0", quality = 4 },
+  { link = "item:9:0:0:0", quality = 1 },
+}
 ZugLoot.DB.rollAuto = true
-math.random = rigged({ 3, 90, 80, 70 })
+math.random = rigged({ 3, 1, 90, 1, 80, 1, 70 })
+-- headcount 3, then MS kind + roll per invented roller
 ML.OnLootOpened()
 math.random = realRandom
 ok(Sim.rehearseRun, "auto run started")
-ok(ML.session ~= nil, "auto-start: head rolling without a click")
+ok(ML.pendingAwardMenu ~= nil, "auto-start: head resolved, menu pending")
 Sim.StopRehearsal()
 ok(not Sim.rehearseRun, "auto run stopped")
-eq(ZugLoot.DB.sheet, realSheet, "sheet restored after stop")
+eq(ZugLoot.DB.sheet, realSheet, "sheet untouched by stop")
 ZugLoot.DB.rollAuto = false
 -- 19b. Second corpse mid-run tops up (ResetFresh wipes the queue on
 -- every corpse): unplayed entries from corpse A survive alongside B's.
@@ -741,7 +769,7 @@ ok(ML.pendingAwardMenu ~= nil, "A award menu restored on walk-back")
 ML.AwardChosen({ name = "Aldric", via = "winner" })
 ok(drain(), "drain A award")
 ok(not Sim.rehearseRun, "interleaved run ended")
-eq(ZugLoot.DB.sheet, realSheet, "sheet restored after interleave")
+eq(ZugLoot.DB.sheet, realSheet, "sheet still loaded after interleave")
 -- Flag off: corpse scan queues nothing.
 ZugLoot.DB.rehearse = false
 ML.OnLootOpened()

@@ -109,7 +109,6 @@ local function resetHarness(rollTime)
   Sim.auto = false
   Sim.lastEntries = {}
   Sim.lives = {}
-  Sim.timers = {}
   Sim.pendingAward = nil
   Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
@@ -199,11 +198,13 @@ eq(ZugLoot.LootWindow.items[1].itemID, 1001, "first roll row")
 eq(ZugLoot.LootWindow.items[1].status, "open", "first drop open")
 eq(ZugLoot.LootWindow.items[1].badge, "SR:2", "SR count badge")
 ok(ZugLoot.LootWindow.items[3].free, "grey is a free row, not a roll row")
-local sawLoot = false
+local sawHead, sawLoot = false, false
 for i = 1, #printed do
-  if string.find(printed[i], "ZugLoot loot: item:1002") then sawLoot = true end
+  if string.find(printed[i], "dropped 2 items:", 1, true) then sawHead = true end
+  if string.find(printed[i], "2. item:1002", 1, true) then sawLoot = true end
 end
-ok(sawLoot, "second item announced")
+ok(sawHead, "drop head announced (mob + count)")
+ok(sawLoot, "second item announced (numbered)")
 -- ML initiates from the window; unknown items are refused.
 ML.StartItemRoll(1001)
 ok(ML.session ~= nil, "ML-initiated session live")
@@ -809,7 +810,7 @@ eq(#ZugLoot.LootWindow.items, 2, "loot window lists the queue")
 eq(ZugLoot.LootWindow.items[1].itemID, 1001, "queue order kept")
 -- ML picks the SECOND item first: it plays immediately when idle.
 Sim.RequestRoll(1002)
-ok(ML.session ~= nil and ML.session.itemID == 1002, "ML pick plays now")
+ok(ML.SessionAny(1002) ~= nil, "ML pick resolved (session parked)")
 ok(drain(), "drain picked run")
 ok(ML.pendingAwardMenu ~= nil, "picked item waits on the ML menu")
 ML.AwardChosen({ name = "Ccc", via = "winner" })
@@ -981,5 +982,64 @@ local function second(rtype) local _, mx = Sim.RangeFor(rtype) return mx end
 eq(second("TMOG"), 98, "tmog cap")
 eq(second("OS"), 99, "os cap")
 eq(second("SR"), 100, "sr cap")
+
+-- 8. Raid-roll (RollFor + Pysanka parity): numbered raid, ML rolls 1-N,
+-- the number IS the winner; finish/award reuse the normal path.
+resetHarness()
+GetNumRaidMembers = function() return 3 end
+GetRaidRosterInfo = function(i)
+  local roster = { "Pysanka", "Tenshiy", "Bluefelon" }
+  return roster[i]
+end
+UnitName = function() return "Pysanka" end
+GetLootMethod = function() return "master" end
+GetLootMaster = function() return "Pysanka" end
+local rolledRanges = {}
+RandomRoll = function(lo, hi) table.insert(rolledRanges, { lo, hi }) end
+local rrSess = ML.StartRaidRoll("item:1001")
+ok(rrSess ~= nil, "raid-roll session started")
+eq(rrSess.mode, "RAIDROLL", "raid-roll mode")
+eq(rrSess.n, 3, "raid size frozen")
+eq(#rolledRanges, 1, "ML rolled once")
+eq(rolledRanges[1][1], 1, "roll starts at 1")
+eq(rolledRanges[1][2], 3, "roll ends at raid size")
+-- Numbered raid announced (chunked, plain names).
+local sawNumbered = false
+for i = 1, #printed do
+  if string.find(printed[i], "[2]:Tenshiy", 1, true) then sawNumbered = true break end
+end
+ok(sawNumbered, "numbered raid announced")
+-- A raider's own /roll is ignored (raiders don't roll for themselves).
+ML.OnSystemRoll("Tenshiy", 99, 1, 3)
+ok(rrSess.raidRolled ~= true, "raider roll ignored")
+-- Wrong range ignored (1-100 instead of 1-3).
+ML.OnSystemRoll("Pysanka", 2, 1, 100)
+ok(rrSess.raidRolled ~= true, "wrong-range roll ignored")
+-- The ML's 1-N roll resolves: number 2 = Tenshiy, menu pends.
+ML.OnSystemRoll("Pysanka", 2, 1, 3)
+ok(rrSess.raidRolled, "ML number accepted")
+ok(ML.pendingAwardMenu ~= nil, "raid-roll award menu pending")
+eq(ML.pendingAwardMenu.sess.itemID, 1001, "menu targets the item")
+local rrWinners = ML.pendingAwardMenu.data.winners or {}
+eq(#rrWinners, 1, "single raid-roll winner")
+eq(rrWinners[1].name, "Tenshiy", "number maps to the roster")
+-- Second number ignored (first number only).
+ML.OnSystemRoll("Pysanka", 3, 1, 3)
+eq(ML.pendingAwardMenu.data.winners[1].name, "Tenshiy", "second number ignored")
+-- Award reuses the normal path (Pysanka-style line + won mark).
+local rrPrinted = #printed
+ML.AwardChosen({ name = "Tenshiy", via = "winner" })
+local sawAward = false
+for i = rrPrinted + 1, #printed do
+  if string.find(printed[i], "Tenshiy wins", 1, true) then sawAward = true break end
+end
+ok(sawAward, "raid-roll award announced")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tenshiy"), "raid-roll winner won-marked")
+GetNumRaidMembers = nil
+GetRaidRosterInfo = nil
+GetLootMethod = nil
+GetLootMaster = nil
+RandomRoll = function() end
+UnitName = function() return "SoloPlayer" end
 
 return T

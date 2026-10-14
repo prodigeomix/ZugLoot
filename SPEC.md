@@ -40,10 +40,11 @@ Rules:
    - receiver side: `Comm.OnSheetReceived` verifies the sender `IsML(sender) or
      IsRaidLeaderOrAssistant(sender)` against the *current* roster and drops +
      warns on violation.
-1b. **Solo (out of party/raid) may always load a sheet locally** (paste or
-   `Load from File`) for preview/sim/sheet-view. No broadcast happens solo
-   (`Comm.Channel()` is nil there; `VER_REQ`/`AWARD` also skip). `CanImport()`
-   covers local loading; `CanBroadcast()` covers pushing to the group.
+1b. **Anyone may load a sheet locally** (paste or `Load from File`, solo or
+grouped) for their own view/sim — importing never pushes anything.
+Broadcasting stays ML/leader-only (`CanBroadcast()`); synced sheets are
+trusted from ML/leader only (`CanAcceptFrom()`). No broadcast happens solo
+(`Comm.Channel()` is nil there; `VER_REQ`/`AWARD` also skip).
 2. Sheet broadcasts carry `raidID` (= leader name + import timestamp), `version`,
    and a META envelope (raid name + revision stamp). Same-raid updates keep
    the raidID and apply by revision (`importedAt`: raidres export time, else
@@ -134,8 +135,15 @@ Sheet = {
 - TMOG is directly awardable: the award window offers `Award <name> (TMOG)`
   for the kind winner next to the outright winner rows. The ML awards the
   SR, MS, OS or TMOG winner; anything after the award (e.g. a trade) is
-  outside the addon. Chat announces per kind (`SR winner: …`, `MS winner:
-  …`, `OS winner: …`, `TMOG winner: …`).
+  outside the addon. Chat follows the raid-roll style (Pysanka parity):
+  one `Name: roll (TYPE)` line per roller (already-won tagged inline),
+  then `Name wins Item (raid-roll).` on award.
+- Raid-roll (`/zl rr <link>`, loot ... `Raid-roll` choice — RollFor +
+  Pysanka parity): the raid is announced numbered (`[1]:Name, ...`,
+  chunked), the ML rolls 1-N with `/roll`, the number IS the winner
+  (frozen roster, so leavers/joiners mid-roll change nothing; only the
+  ML's 1-N roll counts, first number only). Finish/award reuse the
+  normal path, including the `(raid-roll).` award line.
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; resolver excludes them from later sessions for that itemID.
   Excluded rollers stay visible everywhere: their rolls are kept in a separate
@@ -173,6 +181,9 @@ Sheet = {
   Setup holds options only (no duplicate import/clear buttons). (`SRView`/
   `VersionGrid` standalone frames retired into tabs; their modules keep
   pure logic + slash commands. DropLog has no tab: `Show()` prints.)
+- Minimap die button (`Minimap.lua`, `INV_Misc_Dice_02` on the classic
+  tracking-ring look): click toggles the main window, hover shows
+  version/raid/role, drag repositions (angle persisted per character).
 - **Sheet tab**, one card per item in **3 even columns** (row-major flow,
   single shared scroll body — columns scroll together; card styling
   unchanged): SR rollers in **two columns** inside each card, drop count as
@@ -230,8 +241,13 @@ Roll sessions: triggered by `/zl rf <link>`, `/zl arf <link>`, `/zl rr <link>`,
 RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message
 (auto-roll path). Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`),
 first-roll-only per player; over-rolls flagged, ties auto re-roll.
-- **Loot window** (`LootWindow.lua`, RollFor modern-skin style — always
-  ours, never Blizzard's): on
+Raider clients pop their roll window off the ML/RL's RAID_WARNING roll
+call ONLY (`MatchRollCall`: `Roll for X: /roll ...` dice line or full
+item link — Pysanka parity). Drop lists, winners, countdowns, stop
+lines, raid-roll numbering, bare names and non-ML senders never trigger.
+- **Loot window** (`LootWindow.lua`, raider-window style (220px dark
+  frame, icon + quality-colored name rows, roll detail with header icon
+  + two-column roll list) — always ours, never Blizzard's): on
   `LOOT_OPENED`, whoever opened the corpse (solo, any loot method, ML or
   not), EVERY corpse slot gets a row (RollFor parity): coin first, then
   roll-worthy items (quality ≥ `minLootQuality`, default rare+), then
@@ -447,20 +463,21 @@ first-roll-only per player; over-rolls flagged, ties auto re-roll.
   on, ML resolves immediately from `ROLL_ANS` messages (no chat-roll wait), with a
   5s fallback to normal rolling if answers are missing.
 
-### 4.6 Simulation (`Sim.lua` + `BossData.lua` + `pfLoot.lua` + `Timer.lua`)
+### 4.6 Simulation (`Sim.lua` + `BossData.lua` + `pfLoot.lua`)
 
 In-game, no raid needed. **Requires the loaded sheet** — without one both
 commands refuse with a pointer to `/zl import`. Every roller is a player from
 the sheet; there are no fake Filler/Missroller names unless you pass N > 0.
 
-Sim **replays the real live pipeline** (`MasterLootUI` session + timers +
+Sim **replays the real live pipeline** (`MasterLootUI` session +
 routed chat + both windows), one item at a time — it is a rehearsal of the
-actual roll flow, not a separate code path:
+actual roll flow, not a separate code path. Feeds + finish run inline
+(no timers: every fake roll is a direct call, ties re-roll in a loop):
 
 - `/zl sim <itemLink> [N]` — one-shot: the ML chose it by typing, so it
   auto-plays immediately (still through the real pipeline: silent session,
-  both windows, group-routed chat, fake rolls fed live, finish on the roll
-  timer, ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
+  both windows, group-routed chat, fake rolls fed inline, finish at once,
+  ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
   rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
   item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
 - `/zl simboss <boss>` — rolls the boss's OWN drops: with pfQuest loaded,
@@ -486,8 +503,8 @@ actual roll flow, not a separate code path:
   decides the winner (headless: `/zl award <name>`); the awarded item leaves
   the list and stays gone, won marks apply immediately, so the one-win rule
   chains across drops exactly like a real
-  raid night. `/zl simstop` is a full stop: kills the live session and
-  all sim timers, drops the queue, clears the award menu, and closes the
+  raid night. `/zl simstop` is a full stop: kills the live session,
+  drops the queue, clears the award menu, and closes the
   loot window (+ detail) and raider window — a fresh `/zl sim` can start
   immediately. `/zl cr` mid-sim returns the item to the queue head for
   a re-roll.
@@ -510,7 +527,7 @@ actual roll flow, not a separate code path:
   master-loot practice, no sheet needed. While on, every solo corpse's
   non-coin rows queue with 3–5 invented rollers (Aldric, Bryn, Cora, ...) 
   and wait for the ML: each item's Roll button starts its roll through the
-  same pipeline (roll window, feed/finish timers, award menu; the ML's own
+  same pipeline (roll window, inline feeds, award menu; the ML's own
   dice work too). `/zl rollauto [on|off]` (Setup `Auto-start`
   checkbox, default OFF) auto-starts rolls instead. Awarding is a REAL
   live award — the item leaves the solo corpse via the normal
@@ -519,8 +536,9 @@ actual roll flow, not a separate code path:
   and restored after; invented marks never touch it). `/zl simstop` and
   flag-off both end the run, keeping already-looted items.
 - `RunSimSession()` remains as the synchronous core (instant resolve, no
-  timers/windows/chat) for tests. `Timer.lua` is the vanilla-safe scheduler
-  (hidden-frame `OnUpdate` driver; hand-pumped in tests).
+  timers/windows/chat) for tests. `Timer.lua` stays for the
+  click-to-loot watchdog (`LootWindow.WatchClick`) and the delayed
+  sheet-reply (`SRSecurity`) — sim chains no longer use it.
 - Uses the **same** `Resolver` pure module as real sessions and as `tests/`, so
   sim output matches tested logic. Randomness via `math.random`, seeded by time.
 
@@ -578,10 +596,10 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl sheet            open sheet view
 /zl raids            open raid history
 /zl raid <raidID>   activate an archived raid (continue it)
-/zl import           open import frame (ML/RL only for broadcast)
-/zl loadfile         import from CustomData/ZugLoot_SR.txt (ML/RL only)
+/zl import           open import frame (anyone; broadcast stays ML/RL)
+/zl loadfile         import from CustomData/ZugLoot_SR.txt (anyone)
 /zl rf <link>        start SR roll (ML)        /zl arf <link>  open roll
-/zl rr <link>        raid-roll                 /zl 2x<link>    two-top-win
+/zl rr <link>        raid-roll: numbered raid, ML rolls 1-N (RollFor parity)
 /zl roll <item>      roll one loot-window item (ML, live corpse loot)
 /zl award <name>     award the finished roll to <name> (ML, from the menu)
 /zl fr [item]      finish a roll early (parks it for award; Continue reopens)
@@ -601,7 +619,8 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
                     auto-stands-down if ZugLoot clicks stop reaching the server)
 /zl rehearse [on|off] solo master-loot practice: corpse items roll with invented
                     raiders (3-5 rolls), awards loot the corpse for real.
-                    No sheet needed; real sheet parked on scratch, restored after.
+                    No sheet needed; real sheet stays loaded, invented names
+                    fenced off it.
 /zl rollauto [on|off] auto-start rolls as corpses are looted (default OFF:
                     the ML picks each item's Roll button). General master-loot
                     behaviour; rehearsal inherits it.

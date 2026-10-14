@@ -220,11 +220,8 @@ function M.DoPasteImport(text)
 end
 
 function M.LoadFromFile()
-  -- CanImport() is true solo (preview) and for ML/leader in group.
-  if not Z.SRSecurity.CanImport() then
-    Z.Print("Only the master looter or raid leader/assistant can import sheets.")
-    return
-  end
+  -- Anyone may import (local view only; broadcast stays ML/leader).
+  -- CanImport() is therefore always true; kept for API shape.
   local text, err = Z.FileIO.ReadSRFile()
   if not text then
     Z.Print("Load from file failed: " .. tostring(err))
@@ -371,10 +368,7 @@ function M.ShowPaste()
     importBtn:SetPoint("BOTTOMLEFT", pasteFrame, "BOTTOMLEFT", 20, 15)
     importBtn:SetText("Import!")
     importBtn:SetScript("OnClick", function()
-      if not Z.SRSecurity.CanImport() then
-        Z.Print("Only the master looter or raid leader/assistant can import sheets.")
-        return
-      end
+      -- Anyone may import (local view only; broadcast stays ML/leader).
       M.DoPasteImport(editBox:GetText())
       pasteFrame:Hide()
     end)

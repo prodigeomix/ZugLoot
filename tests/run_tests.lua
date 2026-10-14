@@ -33,6 +33,7 @@ run("test_window_size.lua")
 run("test_timer.lua")
 run("test_classcolors.lua")
 run("test_versiongrid.lua")
+run("test_minimap.lua")
 run("test_settings_reset.lua")
 run("test_mlflow.lua")
 run("test_lootwindow.lua")
@@ -56,7 +57,7 @@ end
 -- 5.0-syntax sanity: all shipped lua files must parse (loadfile without running).
 local files = { "Constants.lua", "Util.lua", "Timer.lua", "ClassColors.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "SRView.lua",
   "SRSecurity.lua", "SRImport.lua", "BossData.lua", "MainWindow.lua", "Sim.lua", "MasterLootUI.lua",
-  "RaidArchive.lua", "Comm.lua", "Core.lua", "LootWindow.lua", "pfLoot.lua", "RaiderLootUI.lua", "DropLog.lua", "VersionGrid.lua" }
+  "RaidArchive.lua", "Comm.lua", "Core.lua", "LootWindow.lua", "pfLoot.lua", "RaiderLootUI.lua", "DropLog.lua", "VersionGrid.lua", "Minimap.lua" }
 for _, f in ipairs(files) do
   local c, e = loadfile(f)
   if not c then print("PARSE FAIL " .. f .. ": " .. tostring(e)) totalFail = totalFail + 1

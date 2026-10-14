@@ -151,7 +151,13 @@ local function SetItemInfo(link)
     -- Sheet-style resolution via the shared link-first chain
     -- (GetItemInfo(link), then GetItemInfo(id), then [Name] parse): the
     -- bare-ID call alone misses whenever the cache key is the full link.
-    if Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+    -- A bare item NAME (Pysanka-style roll call, no link/id at all)
+    -- skips resolution entirely: the name IS the display.
+    local isBareName = not string.find(tostring(link), "|Hitem:", 1, true)
+      and not string.find(tostring(link), "item:", 1, true)
+    if isBareName then
+      name = tostring(link)
+    elseif Z.LootWindow and Z.LootWindow.ResolveItemInfo then
       local id = string.match(tostring(link), "item:(%d+)")
       local n, fullLink, q, tex = Z.LootWindow.ResolveItemInfo(
         id and tonumber(id), link, nil, nil, nil)
@@ -174,6 +180,12 @@ local function SetItemInfo(link)
     end
     if not name then
       name = string.match(tostring(link), "%[(.-)%]")
+    end
+    -- A bare item NAME (Pysanka-style roll call, no link) has no cache
+    -- entry: keep the name itself instead of falling back to "?".
+    if not name and not string.find(tostring(link), "|Hitem:", 1, true)
+        and not string.find(tostring(link), "item:", 1, true) then
+      name = tostring(link)
     end
   end
   if itemIcon then itemIcon:SetTexture(iconPath) end
@@ -239,9 +251,37 @@ function M.Build()
   iconButton:SetWidth(40) iconButton:SetHeight(40)
   iconButton:SetPoint("TOP", frame, "TOP", 0, -10)
   iconButton:SetScript("OnEnter", function()
-    if GameTooltip and M.itemLink then
+    if GameTooltip then
       GameTooltip:SetOwner(iconButton, "ANCHOR_RIGHT")
-      GameTooltip:SetHyperlink(M.itemLink)
+      local link = M.itemLink
+      -- Full item link: real item tooltip. Bare id ("item:12345"):
+      -- resolve through the cache first (seen items get the full
+      -- tooltip), else fall through to the name + hint below.
+      local shown = false
+      if link and GameTooltip.SetHyperlink then
+        if string.find(tostring(link), "|Hitem:", 1, true) then
+          GameTooltip:SetHyperlink(link)
+          shown = true
+        elseif GetItemInfo then
+          local id = string.match(tostring(link), "item:(%d+)")
+          if id then
+            local ok, _, fullLink = pcall(GetItemInfo, tonumber(id))
+            if ok and fullLink and string.find(tostring(fullLink), "|Hitem:", 1, true) then
+              M.itemLink = fullLink -- upgrade: later hovers skip lookup
+              GameTooltip:SetHyperlink(fullLink)
+              shown = true
+            end
+          end
+        end
+      end
+      if not shown then
+        -- Bare name (Pysanka-style roll call, client hasn't seen the
+        -- item): name + hint instead of a dead tooltip.
+        GameTooltip:SetText(M.itemNameText or tostring(link or "?"), 1, 1, 1)
+        if GameTooltip.AddLine then
+          GameTooltip:AddLine("Details load when the client has seen this item.", 0.7, 0.7, 0.7, 1)
+        end
+      end
       GameTooltip:Show()
     end
   end)
@@ -250,9 +290,30 @@ function M.Build()
     if IsControlKeyDown and IsControlKeyDown() and DressUpItemLink then
       DressUpItemLink(M.itemLink)
     elseif IsShiftKeyDown and IsShiftKeyDown() and ChatFrameEditBox
-        and ChatFrameEditBox:IsVisible() and M.itemLink and GetItemInfo then
-      local n, link, q = GetItemInfo(M.itemLink)
-      if n and link then ChatFrameEditBox:Insert(link) end
+        and ChatFrameEditBox:IsVisible() and M.itemLink then
+      -- Resolve at click time (cache warms as you play): prefer a full
+      -- color link, never insert a bare "item:NNNN" id.
+      local insert = M.itemLink
+      if not string.find(tostring(insert), "|Hitem:", 1, true)
+          and Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+        local id = string.match(tostring(insert), "item:(%d+)")
+        local _, fullLink = Z.LootWindow.ResolveItemInfo(
+          id and tonumber(id), insert, nil, nil, nil)
+        if fullLink and string.find(tostring(fullLink), "|Hitem:", 1, true) then
+          insert = fullLink
+          M.itemLink = fullLink -- upgrade for hover + next clicks
+        end
+      end
+      if insert and string.find(tostring(insert), "|Hitem:", 1, true) then
+        ChatFrameEditBox:Insert(insert)
+      elseif GetItemInfo then
+        -- Last resort: direct cache read (may still be bare if unseen).
+        local n, link = GetItemInfo(M.itemLink)
+        if n and link and string.find(tostring(link), "|Hitem:", 1, true) then
+          M.itemLink = link
+          ChatFrameEditBox:Insert(link)
+        end
+      end
     end
   end)
 
@@ -446,13 +507,47 @@ end
 -- parity), the dice vote through RollOnLoot, CANCEL_LOOT_ROLL hides it.
 -- RollOnLoot is guarded: without it (headless) the dice are inert.
 M.groupRollID = nil
+-- Roll-call matching: the ML's RW line for one item. Pysanka-style calls
+-- are the plain item NAME ("Nemesis Gloves"), possibly with an (SR)-style
+-- suffix and kind dice ("Roll for X: /roll (MS) or /roll 99 (OS) ...").
+-- Pure helper (headless-testable): text + optional sender -> item text.
+-- Empty string = not a roll call (never pop the window on raid chatter).
+function M.MatchRollCall(text, sender)
+  local t = tostring(text or "")
+  if t == "" then return "" end
+  -- ML-only (raid-safe): never pop on anyone else's chat. Nil sender =
+  -- untrusted in-client (tests pass explicit nil through the ML path).
+  if sender and Z.SRSecurity and not Z.SRSecurity.IsML(sender) then
+    -- ...unless the sender is the raid leader/assistant running the roll
+    -- (Pysanka runs rolls as RL). Accept ML or leader.
+    local okLeader = Z.SRSecurity.IsLeader and Z.SRSecurity.IsLeader(sender)
+    if not okLeader then return "" end
+  end
+  -- Full item link anywhere in the line: the item, verbatim.
+  local link = string.match(t, "(|c%x+|Hitem.-|h%[.-%]|h|r)")
+  if link then return link end
+  -- "Roll for <item>[: ...]" — strip the kind-dice suffix. This is the
+  -- ONLY chat shape that opens the window (Pysanka's actual roll call).
+  local item = string.match(t, "^[Rr]oll for (.+)$")
+  if item then
+    item = string.gsub(item, "%s*:%s*/roll.*$", "")
+    item = string.gsub(item, "%s+%([Ss][Rr]%s*[^)]*%)%s*$", "")
+    item = Z.Util.Trim(item)
+    if item ~= "" then return item end
+  end
+  -- Everything else (drop lists, winners, countdowns, stop-rolls,
+  -- raid-roll numbering, plain chatter) NEVER opens the window — no
+  -- bare-name guessing.
+  return ""
+end
+
 function M.OnEvent(event, a1, a2)
   if event == "CHAT_MSG_RAID_WARNING" then
-    -- LootBlare trigger: ML links item in RW. Verify sender is ML (raid-safe).
-    local sender = a2
-    local link = string.match(tostring(a1 or ""), "(|c%x+|Hitem.-|h%[.-%]|h|r)")
-    if link and sender and Z.SRSecurity.IsML(sender) then
-      M.ShowItem(link, (Z.DB and Z.DB.rollTime) or 15)
+    -- ML/RL roll call in RW (Pysanka style): plain item name, "Roll for
+    -- X: ..." dice line, or full link (LootBlare trigger). Verify sender.
+    local item = M.MatchRollCall(a1, a2)
+    if item ~= "" then
+      M.ShowItem(item, (Z.DB and Z.DB.rollTime) or 15)
     end
   elseif event == "START_LOOT_ROLL" then
     -- a1 = rollID (1.12 passes the roll id as first arg). Resolve the
@@ -474,6 +569,14 @@ function M.OnEvent(event, a1, a2)
       M.Hide()
     end
   end
+end
+
+-- Test hook: icon hover + click scripts (mock frames record handlers).
+function M.DebugIconScripts()
+  if not iconButton or not iconButton.GetScript then return nil end
+  return { OnEnter = iconButton:GetScript("OnEnter"),
+    OnLeave = iconButton:GetScript("OnLeave"),
+    OnClick = iconButton:GetScript("OnClick") }
 end
 
 function M.Show() if not frame then M.Build() end frame:Show() end

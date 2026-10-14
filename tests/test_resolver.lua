@@ -198,17 +198,50 @@ eq(resW3.winners[1].name, "A", "won SR roll excluded")
 
 -- 8. FakeRolls: small group (3-7), SR rollers + rolls. Deterministic
 -- size via opts.count so the test doesn't depend on the seed.
-local rolls = R.FakeRolls(s, 17063, { cap = 100, count = 4 })
+-- Shared generator: every roll is 1-100 math.random; kinds drawn random.
+-- rigged draws feed kind+roll in order (kind draw, roll, kind draw, roll).
+local function kindRig(seq)
+  local i = 0
+  return function(lo, hi)
+    i = i + 1
+    local v = seq[((i - 1) % #seq) + 1]
+    if v < lo then v = lo elseif v > hi then v = hi end
+    return v
+  end
+end
+local realRandom = math.random
+math.random = kindRig({ 1, 90, 1, 80 })
+local rolls = R.FakeRolls(s, 17063, { count = 4 })
+math.random = realRandom
 eq(#rolls, 4, "pinned group size")
 eq(rolls[1].name, "A", "SR holder rolls first")
 eq(rolls[1].type, "SR", "holder rolls SR")
 eq(rolls[2].name, "B", "second holder rolls")
+eq(rolls[2].type, "SR", "second holder rolls SR")
+eq(rolls[3].type, "MS", "extra rolls random kind (MS drawn)")
+-- Roster order is sorted (AllPlayerNames): extras wrap with suffix n.
+eq(rolls[3].name, "A1", "wrapped holder name suffixed")
+eq(rolls[3].roll, 80, "roll value is 1-100 math.random")
+eq(rolls[4].type, "MS", "fourth extra MS drawn")
+eq(rolls[4].name, "B2", "second wrapped name")
+eq(rolls[4].roll, 90, "fourth roll value")
+-- Every roll value comes from a 1-100 draw (rigged sequence cycles).
 local res8 = R.ResolveItem(s, 17063, rolls, { cap = 100, requireSR = true })
 ok(res8.winners[1].name == "A" or res8.winners[1].name == "B", "sim resolves to SR roller")
 -- 8b. Small-group budget respected across roster sizes.
-local rolls3 = R.FakeRolls(s, 17063, { cap = 100, count = 3 })
+math.random = kindRig({ 2, 90, 2, 80 })
+local rolls3 = R.FakeRolls(s, 17063, { count = 3 })
+math.random = realRandom
 eq(#rolls3, 3, "budget of 3")
 local res8b = R.ResolveItem(s, 17063, rolls3, { cap = 100, requireSR = true })
 ok(res8b.winners[1].name == "A" or res8b.winners[1].name == "B", "budget-3 resolves to SR roller")
+-- 8c. Off-sheet items roll random kinds (no holders): drawn OS lands 1-99.
+math.random = kindRig({ 2, 42 })
+-- NOTE: kinds index {MS,OS,TMOG}: draw 2 = OS.
+local rollsO = R.FakeRolls(s, 9999, { count = 1 })
+math.random = realRandom
+eq(#rollsO, 1, "one roller")
+eq(rollsO[1].type, "OS", "drawn kind kept")
+eq(rollsO[1].roll, 42, "OS roll in range")
 
 return T

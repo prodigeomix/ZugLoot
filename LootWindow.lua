@@ -55,10 +55,10 @@ M.BTN_HEIGHT = 22
 M.BTN_GAP = 8
 M.BTN_MARGIN = 10
 M.BTN_MORE_W = 44
-M.BTN_CLOSE_W = 60
 -- Wide enough for "Award <name>" on ONE line (RollFor sizes rows to the
--- widest content). 320 fits ~35-char names next to the ... / Close buttons.
-M.DETAIL_WIDTH = 320
+-- widest content). 320 fits ~35-char names next to the ... button.
+-- (Close lives top-right as X, no bar width needed.)
+M.DETAIL_WIDTH = 220 -- raider-window width (was 320)
 
 function M.Clear()
   M.items = {}
@@ -427,13 +427,15 @@ function M.BuildFrame()
       or type(f.CreateFontString) ~= "function" then
     return nil -- no usable client frame (minimal test stubs)
   end
-  f:SetWidth(340) f:SetHeight(120)
+  -- Raider-window style: compact dark frame (same palette/backdrop).
+  f:SetWidth(220) f:SetHeight(120)
   f:SetPoint("CENTER", UIParent, "CENTER", 250, 0)
   f:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 16,
     insets = { left = 4, right = 4, top = 4, bottom = 4 } })
-  f:SetBackdropColor(0, 0, 0, 0.9)
+  f:SetBackdropColor(0, 0, 0, 0.85)
+  f:SetBackdropBorderColor(0.2, 0.2, 0.2)
   f:SetMovable(true) f:EnableMouse(true)
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", function() f:StartMoving() end)
@@ -441,19 +443,21 @@ function M.BuildFrame()
   f:SetClampedToScreen(true)
   -- No header/title: rows start at the top edge (more room for loot).
   -- f.title stays nil; Refresh guards it.
-  local closeB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  closeB:SetWidth(70) closeB:SetHeight(20)
-  closeB:SetPoint("BOTTOM", f, "BOTTOM", 0, 8)
-  closeB:SetText("Close")
+  -- X in the top-right corner (standard close button, same action as the
+  -- old bottom Close button: reconcile + park, never strand loot).
+  local closeB = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+  closeB:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
   closeB:SetScript("OnClick", function() M.CloseOverview() end)
+  f.closeB = closeB
   M.frame = f
   return f
 end
 
--- Row display line (headless/text): "1. [link] SR" (+status tag).
--- Mirrors what the client row paints: number, name, right-side badge.
+-- Row display line (headless/text): "[name] SR" (+status tag).
+-- Mirrors what the client row paints: icon, name, right-side badge
+-- (raider-window style — no row numbers).
 function M.RowText(it)
-  local s = tostring(it.index) .. ". " .. M.DisplayName(it)
+  local s = M.DisplayName(it)
   if it.badge and it.badge ~= "" then s = s .. " " .. it.badge end
   if it.status == "rolling" then s = s .. " [rolling]"
   elseif it.status == "done" then s = s .. " [done]" end
@@ -517,6 +521,13 @@ function M.ResolveItemInfo(itemID, link, quality, texture, name)
   if (rName == nil or rName == "") and rLink then
     local nm = string.match(tostring(rLink), "%[(.-)%]")
     if nm and nm ~= "" then rName = nm end
+  end
+  -- No full link from the cache but name known: synthesize a REAL link
+  -- (BuildLink) so shift-click/tooltip always have a clickable link.
+  if (rLink == nil or rLink == "" or not string.find(tostring(rLink), "|Hitem:", 1, true))
+      and rName and rName ~= "" then
+    local built = M.BuildLink(itemID or Z.Util.ItemID(rLink), rName, rQ)
+    if built then rLink = built end
   end
   return rName, rLink, rQ, rTex
 end
@@ -638,6 +649,20 @@ function M.QualityHex(q)
   return "|cFFFFFFFF"
 end
 
+-- Build a REAL clickable item link from parts (RollFor parity):
+-- "|c<qualityhex>|Hitem:<id>:<suffix>|h[<name>]|h|r". Used whenever the
+-- client cache has no full link (uncached items, bare ids) but we know
+-- the name + quality from the sheet/scan — shift-click inserts this, and
+-- it renders + tooltips like any real link. Pure (headless-testable).
+function M.BuildLink(itemID, name, quality, suffix)
+  local id = tonumber(itemID)
+  if not id or not name or name == "" then return nil end
+  local hex = M.QualityHex(quality)
+  local code = string.match(hex or "", "^|c(%x%x%x%x%x%x%x%x)$") or "FFFFFFFF"
+  return "|c" .. code .. "|Hitem:" .. id .. ":" .. tostring(suffix or "0:0:0")
+    .. "|h[" .. tostring(name) .. "]|h|r"
+end
+
 function M.Refresh()
   if not M.frame then return end
   -- No header: nothing to retitle (title widget removed in BuildFrame).
@@ -657,36 +682,25 @@ function M.Refresh()
       M.rows = {} -- minimal-frame stubs: data layer already updated above
       return
     end
-    row:SetWidth(310) row:SetHeight(M.ROW_HEIGHT)
+    -- Raider-window style rows: icon left, quality-colored name, badge.
+    -- (No row number — the roll list reads like the raider frame.)
+    row:SetWidth(200) row:SetHeight(M.ROW_HEIGHT)
     row:SetPoint("TOPLEFT", M.frame, "TOPLEFT", 10, y)
-    -- Selection tint in the item's quality color (RollFor modern skin).
-    if row.SetBackdrop and it.status == "open" then
-      row:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" })
-      if row.SetBackdropColor then row:SetBackdropColor(0, 0, 0, 0.1) end
-    end
-    if it.status ~= "open" and row.SetAlpha then
-      row:SetAlpha(0.6) -- rolling/done rows dim, like RollFor disabled rows
-    end
-    -- 1) row number.
-    local idx = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-    idx:SetPoint("LEFT", row, "LEFT", 2, 0)
-    idx:SetWidth(16) idx:SetJustifyH("CENTER")
-    idx:SetText(tostring(it.index))
-    -- 2) item icon.
+    -- 1) item icon.
     local icon
     if row.CreateTexture then
       icon = row:CreateTexture(nil, "ARTWORK")
       icon:SetWidth(M.ICON_SIZE) icon:SetHeight(M.ICON_SIZE)
-      icon:SetPoint("LEFT", idx, "RIGHT", 2, 0)
+      icon:SetPoint("LEFT", row, "LEFT", 2, 0)
       if icon.SetTexture then
         icon:SetTexture(it.texture or "Interface\\Icons\\INV_Misc_QuestionMark")
       end
     end
-    -- 3) item name (readable name, quality-colored — never the raw link).
+    -- 2) item name (readable name, quality-colored — never the raw link).
     local name = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     if icon then name:SetPoint("LEFT", icon, "RIGHT", 6, 0)
-    else name:SetPoint("LEFT", idx, "RIGHT", 4, 0) end
-    name:SetWidth(196) name:SetJustifyH("LEFT")
+    else name:SetPoint("LEFT", row, "LEFT", 4, 0) end
+    name:SetWidth(150) name:SetJustifyH("LEFT")
     local label = M.DisplayName(it)
     if it.quantity and it.quantity > 1 then label = label .. " x" .. it.quantity end
     if it.status == "rolling" then label = label .. " [rolling]"
@@ -695,7 +709,7 @@ function M.Refresh()
       name:SetText(M.QualityHex(it.quality) .. label .. "|r")
     end
     it._tipLink = M.TooltipLink(it) -- stash for the hover closures below
-    -- 4) SR/HR badge on the right.
+    -- 3) SR/HR badge on the right.
     if it.badge and it.badge ~= "" then
       local badge = row:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
       badge:SetPoint("RIGHT", row, "RIGHT", -6, 0)
@@ -706,7 +720,7 @@ function M.Refresh()
       end
       -- Make room for the badge: shrink the name field (SetPoint RIGHT
       -- needs anchor plumbing the mock stubs lack; width is enough).
-      if name.SetWidth then name:SetWidth(150) end
+      if name.SetWidth then name:SetWidth(108) end
     end
     -- Row click: coin/free rows loot their slot at once (no detail, no
     -- rolling); roll rows open the detail (RollFor: row click selects).
@@ -1291,7 +1305,7 @@ function M.doAction(itemID, actionID, extra)
   if actionID == "more" then
     return M.MoreLines(d)
   end
-  if actionID == "roll" then
+  if actionID == "roll" or actionID == "raidroll" then
     -- Initiate the roll from the detail. The detail STAYS OPEN and becomes
     -- the roll window (RollFor: preview flips to the rolling view); the
     -- session hooks below flip it to the award view on finish, and the
@@ -1323,7 +1337,14 @@ function M.doAction(itemID, actionID, extra)
       end
     end
     local ok = false
-    if d.source == "sim" then
+    if actionID == "raidroll" then
+      -- Raid-roll: ML numbers the raid 1-N and rolls the number (RollFor
+      -- + Pysanka parity). No sim/rehearsal routing — always live.
+      if Z.MasterLootUI and Z.MasterLootUI.StartRaidRoll then
+        Z.MasterLootUI.StartRaidRoll(d.itemID)
+        ok = true
+      end
+    elseif d.source == "sim" then
       if Z.Sim and Z.Sim.RequestRoll then
         Z.Sim.RequestRoll(d.itemID)
         ok = true
@@ -1486,31 +1507,54 @@ function M.BuildDetailFrame()
       or type(f.CreateFontString) ~= "function" then
     return nil
   end
-  f:SetWidth(M.DETAIL_WIDTH) f:SetHeight(120)
+  -- Raider-window style: 220px dark frame, 40px item icon + name header.
+  f:SetWidth(220) f:SetHeight(250)
   f:SetPoint("CENTER", parent, "CENTER", 350, 40)
   f:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 16,
     insets = { left = 4, right = 4, top = 4, bottom = 4 } })
-  f:SetBackdropColor(0, 0, 0, 0.95)
+  f:SetBackdropColor(0, 0, 0, 0.85)
+  f:SetBackdropBorderColor(0.2, 0.2, 0.2)
   f:SetMovable(true) f:EnableMouse(true)
   f:RegisterForDrag("LeftButton")
   f:SetScript("OnDragStart", function() f:StartMoving() end)
   f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
   f:SetClampedToScreen(true)
+  -- Icon top-center (mirrors the raider frame header).
+  local dicon = f:CreateTexture(nil, "ARTWORK")
+  dicon:SetWidth(40) dicon:SetHeight(40)
+  dicon:SetPoint("TOP", f, "TOP", 0, -10)
+  f.dicon = dicon
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-  title:SetPoint("TOP", f, "TOP", 0, -10)
-  title:SetWidth(240) title:SetJustifyH("CENTER")
+  title:SetPoint("TOP", dicon, "BOTTOM", 0, -6)
+  title:SetWidth(200) title:SetJustifyH("CENTER")
   f.title = title
   local sub = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   sub:SetPoint("TOP", title, "BOTTOM", 0, -4)
-  sub:SetWidth(240) sub:SetJustifyH("CENTER")
+  sub:SetWidth(200) sub:SetJustifyH("CENTER")
   f.sub = sub
-  -- Live roll list (RollFor rolling view): one line per valid roll with
-  -- its kind. Hidden in pick phase, shown while rolling / awarding.
+  -- Live roll list: two columns like the raider frame (names left,
+  -- "roll (min-max)" right, grouped SR > MS > OS > TMOG). Hidden in
+  -- pick phase, shown while rolling / awarding.
+  local rollsL = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  rollsL:SetPoint("TOPLEFT", f, "TOPLEFT", 10, -120)
+  rollsL:SetJustifyH("LEFT")
+  rollsL:SetWidth(110)
+  rollsL:SetHeight(70)
+  f.rollsL = rollsL
+  local rollsR = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+  rollsR:SetPoint("TOPRIGHT", f, "TOPRIGHT", -10, -120)
+  rollsR:SetJustifyH("RIGHT")
+  rollsR:SetWidth(100)
+  rollsR:SetHeight(70)
+  f.rollsR = rollsR
+  -- Legacy single-text widget (kept so old paint/tests referencing
+  -- f.rolls keep working; hidden, mirrors rollsL content).
   local rolls = f:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
   rolls:SetPoint("TOP", sub, "BOTTOM", 0, -6)
-  rolls:SetWidth(290) rolls:SetJustifyH("LEFT")
+  rolls:SetWidth(200) rolls:SetJustifyH("LEFT")
+  if rolls.Hide then rolls:Hide() end
   f.rolls = rolls
   -- Button bar pinned to the BOTTOM (never overlapping the roll list):
   -- primary left, ... + Close right. The primary is context per phase
@@ -1570,10 +1614,9 @@ function M.BuildDetailFrame()
     if M.detail then M.ToggleMoreDropdown(moreB) end
   end)
   f.moreB = moreB
-  -- Close: dismiss, keep the overview.
-  local closeB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
-  closeB:SetWidth(M.BTN_CLOSE_W) closeB:SetHeight(M.BTN_HEIGHT)
-  closeB:SetText("Close")
+  -- X in the top-right corner: dismiss, keep the overview.
+  local closeB = CreateFrame("Button", nil, f, "UIPanelCloseButton")
+  closeB:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
   f.closeB = closeB
   -- Close button shares the Close ACTION path (doAction "close"), not a
   -- bare CloseDetail: closing a rolling window finishes it into parked
@@ -1628,36 +1671,45 @@ function M.PaintDetailFrame()
       f.sub:SetText("No reserves — open roll")
     end
   end
-  -- Live roll list widget (RollFor rolling view).
-  if f.rolls then
-    if phase == "pick" then
-      if f.rolls.SetText then f.rolls:SetText("") end
-      if f.rolls.Hide then f.rolls:Hide() end
-    else
-      if f.rolls.Show then f.rolls:Show() end
-      if f.rolls.SetText then
-        local rows = M.SortedDetailRolls(d)
-        local t = {}
-        for i = 1, Z.Util.ArrayCount(rows) do
-          local r = rows[i]
-          local eff = ""
-          if r.effective and r.effective ~= r.roll then
-            eff = " (=" .. tostring(r.effective) .. ")"
-          end
-          table.insert(t, tostring(r.rollType) .. ": " .. PName(r.name)
-            .. " " .. tostring(r.roll) .. eff)
-        end
-        if Z.Util.ArrayCount(t) == 0 then
-          f.rolls:SetText("waiting for rolls...")
-        else
-          f.rolls:SetText(table.concat(t, "\n"))
-        end
+  -- Live roll list: two columns like the raider frame (names left,
+  -- "roll (min-max)" right). f.rolls mirrors the left column for
+  -- legacy readers/tests.
+  local function paintRollColumns(rows, waiting)
+    local left, right = {}, {}
+    for i = 1, Z.Util.ArrayCount(rows) do
+      local r = rows[i]
+      local nm = string.sub(tostring(r.name or "?"), 1, 12)
+      table.insert(left, PName(nm))
+      local eff = ""
+      if r.effective and r.effective ~= r.roll then
+        eff = " (=" .. tostring(r.effective) .. ")"
       end
+      table.insert(right, tostring(r.roll) .. eff)
+    end
+    if waiting then
+      if f.rollsL and f.rollsL.SetText then f.rollsL:SetText("waiting for rolls...") end
+      if f.rollsR and f.rollsR.SetText then f.rollsR:SetText("") end
+      if f.rolls and f.rolls.SetText then f.rolls:SetText("waiting for rolls...") end
+    else
+      if f.rollsL and f.rollsL.SetText then f.rollsL:SetText(table.concat(left, "\n")) end
+      if f.rollsR and f.rollsR.SetText then f.rollsR:SetText(table.concat(right, "\n")) end
+      if f.rolls and f.rolls.SetText then f.rolls:SetText(table.concat(left, "\n")) end
+    end
+  end
+  if f.rollsL or f.rollsR or f.rolls then
+    if phase == "pick" then
+      paintRollColumns({}, false)
+      if f.rolls and f.rolls.Hide then f.rolls:Hide() end
+    else
+      if f.rolls and f.rolls.Show then f.rolls:Show() end
+      local rows = M.SortedDetailRolls(d)
+      paintRollColumns(rows, Z.Util.ArrayCount(rows) == 0)
     end
   end
   -- Button bar: collect the visible buttons, then flow-layout them
   -- (justify each row, wrap when narrow). Bar order: primary, TMOG,
-  -- ..., Close. A lone row spreads edge to edge; overflow wraps above.
+  -- .... A lone row spreads edge to edge; overflow wraps above.
+  -- (Close lives top-right as X, not in the bar.)
   local barW = M.DETAIL_WIDTH - M.BTN_MARGIN * 2
   local slots = {}
   local function showBtn(btn, text)
@@ -1712,25 +1764,22 @@ function M.PaintDetailFrame()
     end
   end
   if f.moreB then showBtn(f.moreB, "...") end
-  if f.closeB then showBtn(f.closeB, "Close") end
+  -- Close lives in the top-right corner now (f.closeB), not the bar.
   local barRows = M.PlaceBarRows(f, M.LayoutBarRows(slots, barW), barW)
-  if barRows == 0 then barRows = 1 end -- .../Close always slot in
-  -- Grow the frame with the roll list (RollFor sizes to content), always
-  -- reserving the full button bar (barRows x button + gaps + margin).
+  if barRows == 0 then barRows = 1 end -- ... always slots in
+  -- Fixed raider-style height (220x250): header + two roll columns +
+  -- button bar. No content sizing (raider frame doesn't grow either).
   local barH = (barRows or 1) * M.BTN_HEIGHT
     + ((barRows or 1) - 1) * M.BTN_GAP + M.BTN_MARGIN + 4
-  if f.SetHeight and f.rolls then
-    local n = (phase == "pick") and 0 or Z.Util.ArrayCount(d.rolls or {})
-    if phase == "award" or phase == "preaward" then
-      n = math.max(n, Z.Util.ArrayCount((d.menu and d.menu.winners) or {}))
+  if f.SetHeight then f:SetHeight(250) end
+  -- Item icon follows the detail's item (mirrors the raider header).
+  if f.dicon and f.dicon.SetTexture and d then
+    local tex = nil
+    if Z.LootWindow and Z.LootWindow.ResolveItemInfo then
+      local _, _, _, rtex = Z.LootWindow.ResolveItemInfo(d.itemID, d.link, nil, nil, nil)
+      tex = rtex
     end
-    f:SetHeight(math.max(120 + barH, 150 + n * 13))
-  end
-  -- Rolls text must end above the bar: anchor its bottom, not just top.
-  if f.rolls and f.rolls.SetPoint and f.rolls.ClearAllPoints then
-    f.rolls:ClearAllPoints()
-    f.rolls:SetPoint("TOPLEFT", f, "TOPLEFT", 15, -64)
-    f.rolls:SetPoint("BOTTOMRIGHT", f, "BOTTOMRIGHT", -15, barH + 4)
+    f.dicon:SetTexture(tex or "Interface\\Icons\\INV_Misc_QuestionMark")
   end
 end
 
@@ -1748,6 +1797,7 @@ function M.MoreChoices(d)
   if not d then return out end
   if (d.phase or "pick") == "pick" and d.status == "open" then
     table.insert(out, { id = "roll", label = "Roll" })
+    table.insert(out, { id = "raidroll", label = "Raid-roll" })
   end
   local seen = {}
   local function addAward(nm)
@@ -1823,6 +1873,7 @@ function M.ToggleMoreDropdown(anchor)
         M.CloseMoreDropdown()
         if M.detail then
           if c.id == "roll" then M.doAction(M.detail.itemID, "roll")
+          elseif c.id == "raidroll" then M.doAction(M.detail.itemID, "raidroll")
           elseif c.id == "award-name" then M.doAction(M.detail.itemID, "award-name", c.name) end
         end
       end)

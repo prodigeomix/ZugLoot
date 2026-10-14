@@ -48,14 +48,16 @@ ok(not Sec.CanBroadcast(), "solo cannot broadcast")
 eq(Comm.Channel(), nil, "solo has no channel")
 eq(Sec.RoleLabel(), "Solo (preview)", "solo role label")
 
--- 2. In raid as plain raider: cannot import or broadcast.
+-- 2. In raid as plain raider: anyone may import (local view), but only
+-- ML/leader may broadcast; sync trust stays ML/leader-only.
 raidMembers = 40
 raidRoster = {}
 for i = 1, 40 do raidRoster[i] = { "Player" .. i, 0 } end
 ok(not Sec.IsSolo(), "raider not solo")
-ok(not Sec.CanImport(), "raider cannot import")
+ok(Sec.CanImport(), "anyone can import locally")
 ok(not Sec.CanBroadcast(), "raider cannot broadcast")
 eq(Comm.Channel(), "RAID", "raid channel")
+ok(not Sec.CanAcceptFrom("Player3"), "plain raider sheet untrusted")
 
 -- 3. Raid assistant (rank 1) may import + broadcast.
 raidRoster[1] = { "SoloPlayer", 1 }
@@ -72,9 +74,10 @@ ok(Sec.CanImport(), "party leader can import")
 ok(Sec.CanBroadcast(), "party leader can broadcast")
 eq(Comm.Channel(), "PARTY", "party channel")
 
--- 5. Party non-leader cannot.
+-- 5. Party non-leader: may import locally, never broadcast.
 meIsPartyLeader = false
-ok(not Sec.CanImport(), "party non-leader cannot import")
+ok(Sec.CanImport(), "party non-leader can import locally")
+ok(not Sec.CanBroadcast(), "party non-leader cannot broadcast")
 
 -- 5b. Party leader recognition, SELF and REMOTE. Regression: the old
 -- code ran IsPartyLeader() (self-only) for every sender, so a real

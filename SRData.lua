@@ -210,6 +210,21 @@ function M.ParseRaidResExport(encodedOrJson)
   raw = Util.Trim(raw)
   if raw == "" then return nil, "empty import data" end
   local decoded = Util.Base64Decode(raw)
+  -- Truncated write? Base64 length not a multiple of 4, or decoded JSON
+  -- cut mid-string/object: fail CLEANLY (never let JsonDecode run on a
+  -- partial payload — on huge inputs that is the hang).
+  if decoded then
+    local stripped = string.gsub(raw, "%s", "")
+    local blen = string.len(stripped)
+    if blen - math.floor(blen / 4) * 4 ~= 0 then
+      return nil, "truncated import data (bad base64 length) — re-copy the export"
+    end
+    local tail = string.gsub(decoded, "%s+$", "")
+    local last = string.sub(tail, -1)
+    if last ~= "}" and last ~= "]" then
+      return nil, "truncated import data (JSON cut off) — re-copy the export"
+    end
+  end
   local jsonText = decoded or raw
   -- If base64 decoded to zlib garbage, fail cleanly.
   if decoded and string.sub(decoded, 1, 1) ~= "{" then
