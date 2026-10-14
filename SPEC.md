@@ -468,6 +468,16 @@ actual roll flow, not a separate code path:
   `Resolver.ToHistoryEntry`), won marks (skipped on ties), and drop-log
   entries (source `sim`). Visible in the Sheet tab right away. `/zl reset`
   clears sim history + won marks.
+- `/zl rehearse [on|off]` (Setup tab `Rehearse` button flips it) — solo
+  master-loot practice, no sheet needed. While on, every solo corpse's
+  non-coin rows queue with 3–5 invented rollers (Aldric, Bryn, Cora, ...) 
+  and auto-play through the same pipeline (roll window, feed/finish
+  timers, award menu; the ML's own dice work too). Awarding is a REAL
+  live award — the item leaves the solo corpse via the normal
+  `LootSlot(slot, 1)` take — which is the point: the full distribute flow
+  rehearsed end to end. Runs against a scratch sheet (real sheet parked
+  and restored after; invented marks never touch it). `/zl simstop` and
+  flag-off both end the run, keeping already-looted items.
 - `RunSimSession()` remains as the synchronous core (instant resolve, no
   timers/windows/chat) for tests. `Timer.lua` is the vanilla-safe scheduler
   (hidden-frame `OnUpdate` driver; hand-pumped in tests).
@@ -549,6 +559,9 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl lootdebug       verbose click-to-loot logging (slot, corpse size, link)
 /zl lootframe       toggle corpse-loot window: ZugLoot vs Blizzard's (persisted;
                     auto-stands-down if ZugLoot clicks stop reaching the server)
+/zl rehearse [on|off] solo master-loot practice: corpse items roll with invented
+                    raiders (3-5 rolls), awards loot the corpse for real.
+                    No sheet needed; real sheet parked on scratch, restored after.
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)
 /zl help

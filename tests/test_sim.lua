@@ -576,4 +576,91 @@ ok(drain(), "drain fallback award")
 ok(Sim.lives == nil or Sim.lives[1001] == nil, "fallback item cleared on award")
 ok(ZugLoot.LootWindow.Find(1001) == nil, "fallback award left the list")
 
+-- 19. Solo rehearsal (/zl rehearse): corpse items queue with invented
+-- rollers (3-5, no sheet needed), auto-play through the live pipeline,
+-- and awards REALLY loot the corpse (solo LootSlot path). Real sheet
+-- (when loaded) is parked on scratch and restored at the end.
+resetHarness()
+grouping = "solo"
+ZugLoot.DB.rehearse = true
+ZugLoot.DB.sheet = nil -- no sheet: rehearsal must not require one
+local lootSlots = {
+  { link = nil, amount = "5 Copper" },
+  { link = "item:1001:0:0:0", quality = 4 },
+  { link = "item:9:0:0:0", quality = 1 },
+}
+GetNumLootItems = function() return #lootSlots end
+GetLootSlotLink = function(s) return lootSlots[s] and lootSlots[s].link end
+LootSlotIsCoin = function(s)
+  return (lootSlots[s] and lootSlots[s].link == nil) and 1 or 0
+end
+GetLootSlotInfo = function(s)
+  if lootSlots[s] and lootSlots[s].link == nil then
+    return "Interface\\Icons\\INV_Misc_Coin_01", lootSlots[s].amount
+  end
+end
+GetItemInfo = function(link)
+  for i = 1, #lootSlots do
+    if lootSlots[i].link == link then return "Item" .. i, link, lootSlots[i].quality end
+  end
+end
+local lootedSlots = {}
+LootSlot = function(slot, force) table.insert(lootedSlots, { slot, force }) end
+UnitName = function() return "SoloPlayer" end
+GetLootMethod = nil
+CreateFrame = nil -- headless: data layer only
+math.random = rigged({ 4, 90, 80, 70, 60 }) -- 4 rollers, then rolls
+local LW = ZugLoot.LootWindow
+local realSheet = makeSheet()
+ZugLoot.DB.sheet = realSheet -- loaded sheet must be parked, never marked
+ML.OnLootOpened()
+math.random = realRandom
+eq(#LW.items, 3, "corpse rows listed (coin + 2 items)")
+local liveEntry = nil
+for _, e in pairs(Sim.lives or {}) do liveEntry = e break end
+ok(liveEntry ~= nil and liveEntry.rehearse, "head entry auto-playing")
+eq(#(liveEntry and liveEntry.rolls or {}), 4, "4 invented rolls (3-5 range)")
+local invented = true
+for i = 1, #(liveEntry and liveEntry.rolls or {}) do
+  local nm = liveEntry.rolls[i].name
+  local known = nm == "Aaa" or nm == "Bbb" or nm == "Ccc"
+  if known then invented = false end
+end
+ok(invented, "rollers invented, none from the real sheet")
+ok(not SRData.HasWon(realSheet, 1001, "Aldric"), "real sheet untouched")
+ok(Sim.rehearseRun, "rehearsal run started")
+eq(#Sim.pending, 1, "one item left queued (head auto-playing)")
+ok(ZugLoot.DB.sheet ~= nil, "scratch sheet swapped in")
+-- Head plays: drain feeds + finish timer, menu pends for the ML.
+ok(drain(), "drain rehearsal head")
+ok(ML.pendingAwardMenu ~= nil, "award menu pending for ML pick")
+local menuItem = ML.pendingAwardMenu.sess.itemID
+-- Award it: corpse take fires for real (solo LootSlot + force flag).
+local beforeLoot = #lootedSlots
+ML.AwardChosen({ name = "Aldric", via = "winner" })
+ok(drain(), "drain rehearsal award + advance")
+eq(#lootedSlots, beforeLoot + 1, "award really looted the corpse")
+eq(lootedSlots[#lootedSlots][2], 1, "corpse take passes force flag")
+-- Queue advanced to the second item and played it; award that too.
+ok(drain(), "drain rehearsal second item")
+if ML.pendingAwardMenu ~= nil then
+  local beforeLoot2 = #lootedSlots
+  ML.AwardChosen({ name = "Bryn", via = "winner" })
+  ok(drain(), "drain rehearsal second award")
+  eq(#lootedSlots, beforeLoot2 + 1, "second award looted the corpse")
+end
+ok(drain(), "drain rehearsal teardown")
+ok(not Sim.rehearseRun, "run ended")
+eq(ZugLoot.DB.sheet, realSheet, "real sheet restored after run")
+ok(not SRData.HasWon(realSheet, 1001, "Aldric")
+  and not SRData.HasWon(realSheet, 9, "Bryn"),
+  "rehearsal marks never touched the real sheet")
+-- Flag off: corpse scan queues nothing.
+ZugLoot.DB.rehearse = false
+ML.OnLootOpened()
+ok(not Sim.rehearseRun, "flag off: no rehearsal run")
+-- Cleanup live-only globals this section introduced.
+GetNumLootItems, GetLootSlotLink, LootSlotIsCoin, GetLootSlotInfo = nil, nil, nil, nil
+GetItemInfo, LootSlot, UnitName = nil, nil, nil
+
 return T

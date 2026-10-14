@@ -110,6 +110,8 @@ end
 -- nothing from this sim can fire or linger into the next run. The sheet
 -- (history/won marks already written) is untouched.
 function M.Stop()
+  -- A rehearsal run stops here too (sheet restored, queue dropped).
+  if M.rehearseRun then M.StopRehearsal() end
   local wasRunning = M.running
       or (M.lives and next(M.lives) ~= nil)
       or (Z.MasterLootUI and (Z.MasterLootUI.session ~= nil
@@ -341,7 +343,9 @@ end
 local function finishSim(entry, round)
   round = round or 1
   local ML = Z.MasterLootUI
-  if not ML or not ML.session then M.RequestNextRoll() return end
+  -- Rehearsal entries advance the rehearsal queue, never the sim queue.
+  local nextFn = (entry and entry.rehearse) and M.afterRehearsal or M.RequestNextRoll
+  if not ML or not ML.session then nextFn() return end
   local sheet = Z.DB and Z.DB.sheet
   local names = {}
   local tieKind = nil
@@ -363,7 +367,7 @@ local function finishSim(entry, round)
     if Z.Util.ArrayCount(names) == 0 or round > M.TIE_ROUNDS then
       Z.Print("SIM tie left unresolved — re-roll manually or /zl cr.")
       ML.Cancel()
-      Z.Timer.After(1.0, function() M.RequestNextRoll() end)
+      Z.Timer.After(1.0, function() nextFn() end)
       return
     end
     Z.Print("SIM tie between " .. table.concat(names, ", ") .. " — re-rolling (round " .. round .. ").")
@@ -511,8 +515,195 @@ function M.RequestRoll(itemID)
   Z.Print("SIM: item " .. tostring(itemID) .. " is not in the loot queue.")
 end
 
+-- Flag flip for /zl rehearse [on|off] and the Setup toggle (nil = flip).
+-- Turning off mid-run stops the run but keeps already-looted items.
+function M.SetRehearse(arg)
+  local want = nil
+  if arg ~= nil then
+    local s = string.lower(Z.Util.Trim(tostring(arg or "")))
+    if s == "on" or s == "1" or s == "true" then want = true
+    elseif s == "off" or s == "0" or s == "false" then want = false end
+  end
+  if want == nil then want = not (Z.DB and Z.DB.rehearse) end
+  if Z.DB then Z.DB.rehearse = want end
+  if not want and M.rehearseRun then M.StopRehearsal() end
+  Z.Print("Solo rehearsal " .. (want and "ON" or "OFF")
+    .. " (corpse items roll with invented raiders, awards loot for real).")
+end
+
 -- Backwards-compatible alias (tests + loot rows call RequestRoll).
 function M.RollNow(itemID) M.RequestRoll(itemID) end
+
+-- Solo master-loot rehearsal (see /zl rehearse): each corpse item (never
+-- coin) gets a roll window with 3-5 fake rolls from invented raiders,
+-- then the ML awards it and the item is REALLY looted (solo corpse take
+-- via the normal LootCorpseSlot path — no party, no master candidate).
+-- Runs on the same live pipeline as sim (silent sessions, feed/finish
+-- timers, award menu), but against a THROWAWAY scratch sheet swapped in
+-- for the run: invented rollers never touch the real sheet's won marks
+-- or history. No sheet required. Solo only; one corpse run at a time.
+M.rehearseRun = false -- a rehearsal run is in progress
+M.rehearseSavedSheet = nil -- real sheet parked here during the run
+M.RehearseNames = { "Aldric", "Bryn", "Cora", "Dain", "Elswyth", "Fenna" }
+
+function M.Rehearsing()
+  return M.rehearseRun == true
+end
+
+-- Scratch sheet carrying the invented roster: FakeOpenRolls reads names
+-- off items[].rollers, so one stub item holds the whole fake raid.
+local function rehearsalSheet()
+  local rollers = {}
+  for i = 1, Z.Util.ArrayCount(M.RehearseNames) do
+    table.insert(rollers, { name = M.RehearseNames[i] })
+  end
+  return { items = { [1] = { rollers = rollers } } }
+end
+
+function M.BuildRehearsalEntry(itemID, link)
+  local n = math.random(3, 5)
+  return { itemID = itemID, link = link, mode = "SIM-OPEN",
+    rolls = M.FakeOpenRolls(rehearsalSheet(), 0, nil, { count = n }),
+    rehearse = true }
+end
+
+-- Queue every non-coin corpse row for rehearsal and auto-play the head.
+-- No-ops unless the Z.DB.rehearse flag is on, solo, idle, and the corpse
+-- actually holds rollable rows. Returns the queued count.
+function M.StartRehearsal()
+  if not (Z.DB and Z.DB.rehearse) then return 0 end
+  if not (Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo()) then return 0 end
+  if M.rehearseRun or M.Busy() then return 0 end
+  if not (Z.SRData and Z.SRData.NewSheet) then return 0 end
+  local W = Z.LootWindow
+  if not W then return 0 end
+  local n = 0
+  for i = 1, Z.Util.ArrayCount(W.items) do
+    local it = W.items[i]
+    -- Live corpse rows only: never coin, never another flow's sim rows.
+    if it and not it.coin and it.itemID and it.source ~= "sim" then
+      table.insert(M.pending, M.BuildRehearsalEntry(it.itemID,
+        it.link or ("item:" .. tostring(it.itemID))))
+      n = n + 1
+    end
+  end
+  if n == 0 then return 0 end
+  M.rehearseSavedSheet = Z.DB.sheet -- park the real sheet (may be nil)
+  Z.DB.sheet = Z.SRData.NewSheet() -- scratch: rehearsal marks stay here
+  M.rehearseRun = true
+  M.running = true
+  Z.Print("Rehearsal: " .. n .. " item" .. (n == 1 and "" or "s")
+    .. " queued — roll window + invented rolls, then award to loot.")
+  M.RehearseRoll(M.pending[1].itemID)
+  return n
+end
+
+-- Auto-play one queued rehearsal entry: same shape as RequestRoll, but
+-- the detail flips to its rolling view (like the loot-window Roll
+-- button does) so the ML watches the fake rolls land live. Entries
+-- whose row already left the corpse are dropped (pre-roll award etc.).
+function M.RehearseRoll(itemID)
+  local MLUI = Z.MasterLootUI
+  if MLUI and MLUI.session then return end -- sequential holds
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    local entry = M.pending[i]
+    if entry and entry.itemID == itemID and entry.rehearse then
+      local W = Z.LootWindow
+      local row = W and W.Find(itemID)
+      if not row then
+        table.remove(M.pending, i) -- row gone: drop, advance
+        M.afterRehearsal()
+        return
+      end
+      table.remove(M.pending, i)
+      M.lives = M.lives or {}
+      M.lives[itemID] = entry
+      M.live = entry
+      M.running = true
+      local d = W.OpenDetail(itemID)
+      if d then
+        d.phase = "rolling"
+        d.rolls = {}
+        d.menu = nil
+        d.status = "rolling"
+        W.RefreshDetail()
+      end
+      M.playOne(entry)
+      -- playOne BeginSession'd synchronously: stamp the session so the
+      -- award path routes to the rehearsal continuation, and link the
+      -- detail to it so fed rolls land on the open window.
+      local sess = MLUI and MLUI.sessions and MLUI.sessions[itemID]
+      if sess then sess.rehearse = true end
+      if d then
+        d.sessionID = sess and sess.id or nil
+        W.RefreshDetail()
+      end
+      if W.MarkRolling then W.MarkRolling(itemID) end
+      Z.Print("Rehearsal: rolling " .. dispName(itemID, entry.link) .. ".")
+      return
+    end
+  end
+end
+
+-- Drop a queued rehearsal entry (pre-roll award / cancel paths).
+-- Returns true when anything was dropped (lets Cancel tell rehearsal
+-- apart from sim requeue duty).
+function M.DropRehearsal(itemID)
+  local dropped = false
+  for i = Z.Util.ArrayCount(M.pending), 1, -1 do
+    local e = M.pending[i]
+    if e and e.itemID == itemID and e.rehearse then
+      table.remove(M.pending, i)
+      dropped = true
+    end
+  end
+  if M.lives and M.lives[itemID] then M.lives[itemID] = nil dropped = true end
+  if M.live and M.live.itemID == itemID then M.live = nil dropped = true end
+  return dropped
+end
+
+-- Continuation after a rehearsal award: next queued item, else end the
+-- run (restore the real sheet) and report. Timer-deferred like sim.
+function M.afterRehearsal()
+  Z.Timer.After(1.0, function()
+    for i = 1, Z.Util.ArrayCount(M.pending) do
+      local e = M.pending[i]
+      if e and e.rehearse then M.RehearseRoll(e.itemID) return end
+    end
+    M.EndRehearsalRun("Rehearsal done — items looted, scratch sheet dropped.")
+  end)
+end
+
+-- End the run anywhere (queue empty, /zl simstop, flag off): timers dead,
+-- scratch sheet dropped, real sheet restored, windows left alone (awarded
+-- rows already left the list; leftovers stay listed).
+function M.EndRehearsalRun(msg)
+  for i = Z.Util.ArrayCount(M.pending), 1, -1 do
+    if M.pending[i] and M.pending[i].rehearse then
+      table.remove(M.pending, i)
+    end
+  end
+  if M.lives then
+    for k, e in pairs(M.lives) do
+      if e and e.rehearse then M.lives[k] = nil end
+    end
+  end
+  if M.live and M.live.rehearse then M.live = nil end
+  M.rehearseRun = false
+  if M.rehearseSavedSheet ~= nil or Z.DB then
+    Z.DB.sheet = M.rehearseSavedSheet -- nil when none was loaded: clean
+  end
+  M.rehearseSavedSheet = nil
+  if not M.Busy() then M.running = false end
+  if msg then Z.Print(msg) end
+end
+
+function M.StopRehearsal()
+  if not M.rehearseRun then return false end
+  if Z.Timer and Z.Timer.CancelAll then Z.Timer.CancelAll() end
+  M.EndRehearsalRun("Rehearsal stopped — real sheet restored.")
+  return true
+end
 
 -- Push the queue (+live session marker) into the shared loot window.
 -- Awarded items LEAVE the list: a handed-out item is done, not a trophy.

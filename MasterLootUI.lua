@@ -269,7 +269,12 @@ function M.Cancel(itemID)
   end
   if Z.RaiderLootUI then Z.RaiderLootUI.Hide() end
   -- A cancelled sim item returns to the queue head for a re-roll.
-  if wasSilent and Z.Sim and Z.Sim.Requeue then Z.Sim.Requeue(itemID) end
+  -- Rehearsal rolls just drop their queue entry (row back to open; the
+  -- ML re-rolls by hand or re-loots the corpse).
+  if wasSilent and Z.Sim and Z.Sim.Requeue then
+    local isReh = Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID)
+    if not isReh then Z.Sim.Requeue(itemID) end
+  end
 end
 
 -- Park a finished-but-unawarded roll: the session leaves the live table
@@ -1000,7 +1005,14 @@ function M.AwardDirect(itemID, winnerName, source)
   -- corpse running dry). Stays gone until the next LOOT_OPENED / simboss.
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
   -- A directly-awarded sim row leaves the roll queue as well: it must not
-  -- be rollable after being handed out.
+  -- be rollable after being handed out. Same for a pre-roll rehearsal
+  -- award (entry dropped, continuation advances the run).
+  if Z.Sim and Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
+    if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
+        and Z.Sim.afterRehearsal then
+      Z.Sim.afterRehearsal()
+    end
+  end
   if source == "sim" and Z.Sim then
     if Z.Sim.pending then
       for i = Z.Util.ArrayCount(Z.Sim.pending), 1, -1 do
@@ -1103,7 +1115,11 @@ function M.AwardChosen(choice, itemID)
     end
   end
   local link = sess.itemLink
-  local source = sess.silent and "sim" or "raid"
+  -- Rehearsal awards are REAL live awards (corpse take, "raid" source)
+  -- even though the session runs silent: the item must actually leave
+  -- the solo corpse. Only the continuation differs (rehearsal queue).
+  local source = (sess.rehearse and "raid")
+    or (sess.silent and "sim" or "raid")
   showAwardPopup(link, name, function()
     -- Live distribution of a corpse row needs the corpse OPEN; a refused
     -- call aborts and keeps row + menu. Non-row awards always apply.
@@ -1122,12 +1138,21 @@ function M.AwardChosen(choice, itemID)
     if M.pendingAwardMenus then M.pendingAwardMenus[sess.itemID] = nil end
     M.pendingAwardMenu = nil
     M.DropSession(sess)
-    if sess.silent then
+    if sess.rehearse then
+      -- Rehearsal award: normal live award above, then next queued item.
+      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
+      if Z.Sim and Z.Sim.afterRehearsal then Z.Sim.afterRehearsal() end
+    elseif sess.silent then
       -- Awarded = done: only now does the row leave the rolling state.
       if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
       if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
     elseif Z.RaiderLootUI and Z.RaiderLootUI.Hide then
       Z.RaiderLootUI.Hide()
+      -- Manual roll+award during an active rehearsal run: keep the queue
+      -- moving instead of stalling on entries whose rows just left.
+      if Z.Sim and Z.Sim.Rehearsing and Z.Sim.Rehearsing() then
+        if Z.Sim.afterRehearsal then Z.Sim.afterRehearsal() end
+      end
     end
   end)
   -- Headless (tests): no popup API — the award above already applied via
@@ -1149,7 +1174,10 @@ function M.AwardChosen(choice, itemID)
     if M.pendingAwardMenus then M.pendingAwardMenus[sess.itemID] = nil end
     M.pendingAwardMenu = nil
     M.DropSession(sess)
-    if sess.silent then
+    if sess.rehearse then
+      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
+      if Z.Sim and Z.Sim.afterRehearsal then Z.Sim.afterRehearsal() end
+    elseif sess.silent then
       -- Awarded = done: only now does the row leave the rolling state.
       if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
       if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
@@ -1621,6 +1649,12 @@ function M.OnLootOpened()
     Z.LootWindow.Show("Boss loot")
   end
   Z.Print("Loot window open — click a row, then Award / ... / Close.")
+  -- Solo rehearsal takeover: queue every non-coin row for the invented-
+  -- roller pipeline and auto-play the head. No-ops unless the flag is on
+  -- (StartRehearsal guards solo/idle/rows/sheet-module itself).
+  if Z.Sim and Z.Sim.StartRehearsal then
+    pcall(Z.Sim.StartRehearsal)
+  end
 end
 
 function M.OnEvent(event, a1, a2)

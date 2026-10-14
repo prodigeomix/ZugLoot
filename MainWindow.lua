@@ -658,13 +658,30 @@ function M.RenderSetup()
   end)
   Tip(b6, "Loot frame", "Which window handles corpse loot: ZugLoot or Blizzard's.",
     "Auto-switches to Blizzard if ZugLoot clicks stop reaching the server.")
+  -- Solo rehearsal toggle (same as /zl rehearse): every corpse item gets
+  -- a roll window with invented rollers, then a real loot-through award.
+  local b7 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b7:SetWidth(150) b7:SetHeight(24)
+  b7:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -148)
+  local function rehLabel()
+    if Z.DB and Z.DB.rehearse then return "Rehearse: ON" end
+    return "Rehearse: OFF"
+  end
+  b7:SetText(rehLabel())
+  b7:SetScript("OnClick", function()
+    if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(nil) end
+    b7:SetText(rehLabel())
+    M.Refresh()
+  end)
+  Tip(b7, "Rehearse", "Solo master-loot practice: corpse items roll with invented raiders.",
+    "Solo only. Awards really loot the corpse.")
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (see Rolls tab)\n" ..
     "Simulate (needs sheet, writes back): /zl sim <link> — /zl simboss <boss>")
-  info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -148)
+  info:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -180)
   info:SetWidth(BODY_WIDTH - 16) info:SetJustifyH("LEFT")
-  TrackRow(key, row, 232)
+  TrackRow(key, row, 264)
 end
 
 -------------------------------------------------------------------------------

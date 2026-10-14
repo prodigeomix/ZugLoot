@@ -20,6 +20,10 @@ function Z.InitDB()
   ZugLootDB.raidArchive = ZugLootDB.raidArchive or {}
   ZugLootDB.drops = ZugLootDB.drops or {}
   ZugLootDB.rollTime = ZugLootDB.rollTime or Z.Limits.ROLL_TIMEOUT_DEFAULT
+  -- Solo master-loot rehearsal (see /zl rehearse): every corpse item gets
+  -- a roll window with invented rollers, then a real loot-through award.
+  -- Persisted like other options; effect is solo-only. Absent = off.
+  if ZugLootDB.rehearse == nil then ZugLootDB.rehearse = false end
   -- Loot-takeover kill-switch state (see LootWindow.NoteSilentLoot):
   -- once our LootSlot path proves dead, the takeover stays OFF across
   -- corpses and sessions until the user opts back in. Survives reloads
@@ -119,7 +123,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   if cmd == "" or cmd == "help" then
-    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|lootdebug|lootframe|help")
+    Z.Print("/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simtmog|simroll|simstop|log|logclear|reset|lootdebug|lootframe|rehearse|help")
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
   elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
   elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid((Z.Util and Z.Util.Trim(rest) ~= "" and Z.Util.Trim(rest)) or nil)
@@ -155,6 +159,8 @@ function Z.Slash(msg)
   elseif cmd == "lootdebug" then
     Z.LootWindow.lootDebug = not Z.LootWindow.lootDebug
     Z.Print("lootdebug " .. (Z.LootWindow.lootDebug and "ON" or "OFF"))
+  elseif cmd == "rehearse" then
+    if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end
   elseif cmd == "lootframe" then
     if Z.LootWindow and Z.LootWindow.TakeoverWanted() then
       Z.LootWindow.SetTakeoverWanted(false)

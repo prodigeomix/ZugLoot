@@ -914,6 +914,13 @@ function M.OnRowClick(itemID, clickSlot)
     and Z.SRSecurity.IsSolo()
   if M.blizzardTakeover == false then return "passthrough" end
   local slot = clickSlot or (it and it.slot)
+  -- Rehearsal: solo non-coin rows open the roll detail instead of
+  -- insta-looting (every corpse item gets its roll window + award flow).
+  local rehearsing = solo and Z.DB and Z.DB.rehearse
+    and not (it and it.coin)
+  if rehearsing then
+    return M.OpenDetail(itemID) and "detail" or nil
+  end
   if it and slot and (it.coin or it.free or solo) then
     local issued = nil
     if Z.MasterLootUI and Z.MasterLootUI.LootCorpseSlot then
