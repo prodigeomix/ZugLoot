@@ -1,19 +1,23 @@
 -- ZugLoot/Sim.lua
--- In-game simulation: /zl sim <itemlink|itemID> [fillers], /zl simboss <boss>,
--- /zl simtmog <itemlink>, /zl simroll <item>, /zl simstop. Requires the loaded sheet (Z.DB.sheet): every roller is a
+-- In-game simulation: /zl sim <itemlink|itemID> [fillers], /zl simboss <boss> [raid],
+-- /zl simraid <raid>, /zl simtmog <itemlink>, /zl simroll <item>, /zl simstop.
+-- Requires the loaded sheet (Z.DB.sheet): every roller is a
 -- player from the sheet, and every simulated session is written back into the
 -- sheet (sheet.rolls history + won marks + drop log), exactly like a live roll.
 --
--- The async path (/zl sim, /zl simboss) replays the REAL live pipeline:
--- MasterLootUI session + group-routed chat + both windows, one item at a
--- time. Fake rolls are precomputed, then ECHOED as chat lines ("Name
--- rolls 42 (1-100)", ML-local only — the group never sees fakes) and
--- registered through the shared chat intake (IntakeChatRoll, the same
+-- Simboss/simraid roll boss/raid drops from the LIVE Atlas-CFM loot
+-- tables (AtlasLoot.lua: boss + trash dropRate chances read from the
+-- game, never copied) — no pfQuest, no bundled drop lists.
+-- The async path (/zl sim, /zl simboss, /zl simraid) replays the REAL live
+-- pipeline: MasterLootUI session + group-routed chat + both windows, one
+-- item at a time. Fake rolls are precomputed, then ECHOED as chat lines
+-- ("Name rolls 42 (1-100)", ML-local only — the group never sees fakes)
+-- and registered through the shared chat intake (IntakeChatRoll, the same
 -- parser + router live /rolls travel), spread across the SHARED roll
 -- window — the ML rolls alongside the fakes, and the shared clock
 -- auto-finishes (ties auto-schedule fresh fakes via OnTie); afterwards
 -- the ML picks the award from the menu and the queue advances (/zl sim
--- one-shots auto-play; simboss waits for the ML's Roll per item).
+-- one-shots auto-play; simboss/simraid wait for the ML's Roll per item).
 -- Uses the same Resolver pure module as real sessions and as tests/.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
@@ -807,92 +811,129 @@ function M.SimItem(argText)
   M.RequestRoll(entry.itemID)
 end
 
--- Random re-rolled subset of a static boss table (BossData fallback).
--- Self-contained in Sim.lua so the fallback NEVER depends on pfLoot
--- having loaded: shuffled distinct items, random count, one possible
--- double. Re-rolled every call, so consecutive runs vary.
-local function RollStaticDrops(list, count)
-  count = count or 4
-  local n = Z.Util.ArrayCount(list or {})
-  if n == 0 then return {} end
-  local idx = {}
-  for i = 1, n do idx[i] = i end
-  for i = n, 2, -1 do
-    local j = math.random(1, i)
-    idx[i], idx[j] = idx[j], idx[i]
+-- Shared queue starter for boss/raid sims: fresh loot session, one
+-- BuildEntry per drop (SIM on-sheet / SIM-OPEN off-sheet), then the
+-- ML-driven list (auto=false — the ML rolls each, in any order).
+local function StartRun(sheet, drops, title)
+  M.ResetFresh() -- fresh loot session: no done rows / queue / detail from a previous run
+  for i = 1, Z.Util.ArrayCount(drops) do
+    local itemID = drops[i]
+    table.insert(M.pending, M.BuildEntry(sheet, itemID, tostring(itemID), 0))
   end
-  local maxk = math.min(count, n)
-  local mink = math.min(2, maxk)
-  local k = math.random(mink, maxk)
-  if k < mink then k = mink elseif k > maxk then k = maxk end
-  local out = {}
-  for i = 1, k do table.insert(out, list[idx[i]]) end
-  if k < count and math.random(1, 2) == 1 then
-    table.insert(out, out[math.random(1, k)])
+  M.auto = false -- boss/raid runs are ML-driven: Roll per item, like live loot
+  for i = 1, Z.Util.ArrayCount(M.pending) do
+    table.insert(M.lastEntries, { itemID = M.pending[i].itemID, link = M.pending[i].link })
   end
-  return out
+  M.running = true
+  M.SyncLootWindow()
+  if Z.LootWindow then Z.LootWindow.Show(title) end
+  Z.Print("Loot window open — click Roll on an item (or /zl simroll <item>).")
 end
 
-function M.SimBoss(name)
+function M.SimBoss(argText)
   local sheet = M.RequireSheet()
   if not sheet then return end
   if M.Busy() then
     Z.Print("A roll or sim is already running — wait or /zl simstop.")
     return
   end
-  name = Z.Util.Trim(name or "")
-  -- Drop source, in order: live pfQuest loot table (random weighted picks
-  -- from the boss's own drops, Rarescanner pattern) -> static BossData
-  -- (random re-rolled subset, so every run varies even without pfQuest).
-  local table_ = nil
-  local source = "BossData"
-  if Z.pfLoot then
-    local picks = Z.pfLoot.BossDrops(name)
-    if Z.Util.ArrayCount(picks) > 0 then
-      table_ = picks
-      source = "pfQuest (" .. Z.Util.ArrayCount(picks) .. " rolled drops)"
-    end
-  end
-  if not table_ then
-    local static = Z.BossData[name]
-    if static then
-      -- Always re-rolled fresh: the BossData table is a candidate pool,
-      -- not a fixed drop list (no pfQuest needed for variance).
-      table_ = RollStaticDrops(static)
-      source = "BossData (" .. Z.Util.ArrayCount(table_) .. " rolled drops)"
-    end
-  end
-  if not table_ then
-    local avail = {}
-    for b in pairs(Z.BossData) do table.insert(avail, b) end
-    Z.Print("Unknown boss (not in pfQuest or BossData). Try: " .. table.concat(avail, ", "))
+  if not (Z.AtlasLoot and Z.AtlasLoot.Available()) then
+    Z.Print("Atlas-CFM is not loaded — boss drops come from its loot tables. Enable Atlas-CFM and try again.")
     return
   end
-  local disp = name
-  if Z.pfLoot and source ~= "BossData" then
-    -- Show the localized pfQuest name when it differs (typed "rag" etc.).
-    local entry = Z.pfLoot.EntryIdByName(name)
-    if entry then disp = Z.pfLoot.NameOf(entry) .. " [" .. name .. "]" end
+  local text = Z.Util.Trim(argText or "")
+  -- Boss first: the whole text may be a multi-word name ("Ragnaros",
+  -- "Test Boss"). Otherwise peel a trailing raid name ("Ragnaros Molten
+  -- Core"): every split is tried, longest boss name first.
+  local raidKey, boss = Z.AtlasLoot.FindBoss(text)
+  local hintRaid = nil
+  if not boss then
+    local words = {}
+    string.gsub(text, "(%S+)", function(w) table.insert(words, w) end)
+    for i = Z.Util.ArrayCount(words) - 1, 1, -1 do
+      local bp, rp = {}, {}
+      for w = 1, i do table.insert(bp, words[w]) end
+      for w = i + 1, Z.Util.ArrayCount(words) do table.insert(rp, words[w]) end
+      local rk = Z.AtlasLoot.FindRaid(table.concat(rp, " "))
+      if rk then
+        if hintRaid == nil then hintRaid = rk end
+        local b2 = Z.AtlasLoot.FindRaidBoss(rk, table.concat(bp, " "))
+        if b2 then raidKey, boss = rk, b2 break end
+      end
+    end
+  end
+  if not boss then
+    -- With a raid qualifier, list its bosses; otherwise point at usage
+    -- (hundreds of bosses exist — never dump them all into chat).
+    if hintRaid then
+      local data = Z.AtlasLoot.Data()
+      local rname = (data and data[hintRaid] and data[hintRaid].Name) or hintRaid
+      Z.Print("Unknown boss '" .. text .. "'. Bosses in " .. rname .. ": "
+        .. table.concat(Z.AtlasLoot.BossNames(hintRaid), ", "))
+    else
+      Z.Print("Unknown boss '" .. text .. "'. Usage: /zl simboss <boss> [raid] — or a whole raid: /zl simraid <raid>.")
+    end
+    return
+  end
+  local data = Z.AtlasLoot.Data()
+  local raidName = (data and data[raidKey] and data[raidKey].Name) or raidKey
+  -- Independent chance roll per listed drop (Atlas-CFM dropRate, read
+  -- live — never copied): consecutive runs vary by design.
+  local table_ = Z.AtlasLoot.BossDrops(raidKey, boss.name or boss.id)
+  if Z.Util.ArrayCount(table_) == 0 then
+    Z.Print("SIM boss " .. tostring(boss.name) .. " [" .. tostring(raidName) .. "] rolled no drops this run (chance rolls all missed) — try again.")
+    return
   end
   -- Show the actual rolled drops so the source and variance are visible.
   local ids = {}
   for i = 1, Z.Util.ArrayCount(table_) do table.insert(ids, tostring(table_[i])) end
-  local idTxt = table.concat(ids, ", ")
-  if idTxt == "" then idTxt = "(none rolled)" end
-  Z.Print("SIM boss " .. disp .. " drops (" .. source .. "): " .. idTxt)
-  M.ResetFresh() -- fresh loot session: no done rows / queue / detail from a previous run
-  for i = 1, Z.Util.ArrayCount(table_) do
-    local itemID = table_[i]
-    table.insert(M.pending, M.BuildEntry(sheet, itemID, tostring(itemID), 0))
+  Z.Print("SIM boss " .. tostring(boss.name) .. " [" .. tostring(raidName) .. "] drops (Atlas-CFM): " .. table.concat(ids, ", "))
+  StartRun(sheet, table_, "Simulated loot: " .. tostring(boss.name))
+end
+
+-- Usage: /zl simraid <raid>. Rolls every boss's drops in table order
+-- with a FRESH trash batch between consecutive bosses (the mobs cleared
+-- walking boss to boss), all into ONE shared loot window — the ML rolls
+-- each item from the list, rapidly covering a whole raid's loot.
+function M.SimRaid(argText)
+  local sheet = M.RequireSheet()
+  if not sheet then return end
+  if M.Busy() then
+    Z.Print("A roll or sim is already running — wait or /zl simstop.")
+    return
   end
-  M.auto = false -- boss runs are ML-driven: Roll per item, like live loot
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    table.insert(M.lastEntries, { itemID = M.pending[i].itemID, link = M.pending[i].link })
+  if not (Z.AtlasLoot and Z.AtlasLoot.Available()) then
+    Z.Print("Atlas-CFM is not loaded — raid drops come from its loot tables. Enable Atlas-CFM and try again.")
+    return
   end
-  M.running = true
-  M.SyncLootWindow()
-  if Z.LootWindow then Z.LootWindow.Show("Simulated loot: " .. tostring(name)) end
-  Z.Print("Loot window open — click Roll on an item (or /zl simroll <item>).")
+  local text = Z.Util.Trim(argText or "")
+  local raidKey, inst = Z.AtlasLoot.FindRaid(text)
+  if not raidKey then
+    local names = {}
+    local raids = Z.AtlasLoot.ListRaids()
+    for i = 1, Z.Util.ArrayCount(raids) do table.insert(names, raids[i].name) end
+    Z.Print("Unknown raid '" .. text .. "'. Usage: /zl simraid <raid>. Raids: " .. table.concat(names, ", "))
+    return
+  end
+  local groups = Z.AtlasLoot.RaidDrops(raidKey)
+  if Z.Util.ArrayCount(groups) == 0 then
+    Z.Print("SIM raid " .. tostring(inst.Name) .. " rolled no drops this run (chance rolls all missed) — try again.")
+    return
+  end
+  local flat, nboss = {}, 0
+  for i = 1, Z.Util.ArrayCount(groups) do
+    local g = groups[i]
+    if not g.trash then nboss = nboss + 1 end
+    local ids = {}
+    for j = 1, Z.Util.ArrayCount(g.drops) do
+      table.insert(flat, g.drops[j])
+      table.insert(ids, tostring(g.drops[j]))
+    end
+    Z.Print("SIM " .. tostring(g.boss) .. " drops: " .. table.concat(ids, ", "))
+  end
+  Z.Print("SIM raid " .. tostring(inst.Name) .. ": " .. Z.Util.ArrayCount(flat)
+    .. " items from " .. nboss .. " bosses (+ trash) — Roll each from the list.")
+  StartRun(sheet, flat, "Simulated raid: " .. tostring(inst.Name))
 end
 
 -- Transmog demo: like /zl sim, but the first sheet roller rolls TMOG

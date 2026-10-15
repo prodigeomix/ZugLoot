@@ -497,23 +497,21 @@ alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
   clock auto-finish, ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
   rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
   item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
-- `/zl simboss <boss>` — rolls the boss's OWN drops: with pfQuest loaded,
-  the name resolves to its pfDB unit entry and the queue is filled from its
-  real loot TABLES (one refloot table per gear slot, plus the direct-drop
-  remainder). Each table contributes ~1 drop per kill — the weapon table,
-  the armor tables, the TIER table (Ragnaros T2 pants: 30484+30547 carry
-  them together, capped per pair) — so whole tables can't starve no
-  matter how the per-item chances read. The index keeps EVERY drop
-  (chance-0 refloot members included, weighted at a floor); the final pool
-  is epic+ (`GetItemInfo` quality ≥ 4, unknown/uncached quality kept, so
-  Turtle customs survive); the junk shared table (ref 30171, 76 world
-  greens) contributes at most one hit per kill. Nothing is guaranteed per
-  run, so consecutive runs vary. Re-rolled fresh every run. Without
-  pfQuest it falls
-  back to the static `BossData[boss]` table — but ALSO re-rolled fresh per
-  run (shuffled random-count subset of the table, sometimes a double), so
-  no two manual-test runs show the same list.
-  Either way the drops land
+- `/zl simboss <boss> [raid]` — rolls the boss's OWN drops from the LIVE
+  Atlas-CFM loot tables (`AtlasLoot.lua` reads `AtlasCFM.InstanceData` —
+  the same tables + `dropRate` percents the Atlas browser shows — straight
+  from the game; nothing is copied into this project, and Atlas-CFM is an
+  OPTIONAL dependency: without it loaded the command refuses with a
+  pointer). Each listed drop gets an INDEPENDENT chance roll per run
+  (entry `dropRate` → boss `defaults` → 0.5% floor, clamped 0–100; a 13%
+  tier piece drops ~1 run in 8, a 100% quest item always) — so consecutive
+  runs vary by design. Server-filtered entries (Turtle vs Vanilla+ item
+  variants) are skipped via `AtlasCFM.Server.IsVisible`; the pool is epic+
+  (`GetItemInfo` quality ≥ 4, unknown/uncached quality kept, so Turtle
+  customs survive a cold cache). Multi-word names work (`/zl simboss
+  Ragnaros`); a trailing raid name disambiguates (`/zl simboss Ragnaros
+  Molten Core`). An all-miss run rolls nothing and says so — try again.
+  The drops land in the
   **same loot window** (title `Simulated loot: <boss>`, source `sim`) and
   stops: the ML — you — initiates every roll from the list (Roll button or
   `/zl simroll <item>`), in any order. After each finish the award menu
@@ -525,6 +523,12 @@ alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
   loot window (+ detail) and raider window — a fresh `/zl sim` can start
   immediately. `/zl cr` mid-sim returns the item to the queue head for
   a re-roll.
+- `/zl simraid <raid>` — a whole raid in one window: every boss's drops in
+  table order with a FRESH trash batch between consecutive bosses (the
+  mobs cleared walking boss to boss, from the raid's `*Trash` table) —
+  the ML rolls each item from the shared list, rapidly covering a whole
+  raid's loot. Same Atlas-CFM sourcing + chance rolls as simboss; unknown
+  raids get the raid list, all-miss runs say so.
 - Nothing auto-awards, ever: the sim replays the live menu too. After the ML
   picks, the confirm popup fires and the queue continues (in-client: as you
   accept; headless: the harness's `AwardChosen`).
@@ -589,8 +593,7 @@ ZugLoot/
   RaiderLootUI.lua   LootBlare-like frame incl. group-loot display
   AutoRoll.lua       auto-roll + auto-resolve eligibility
   VersionGrid.lua    members grid + version request handling
-  BossData.lua       static fallback boss→items tables for simboss
-  pfLoot.lua         pfQuest loot lookup (name->entry->weighted drops)
+  AtlasLoot.lua      live Atlas-CFM loot source (boss/raid/trash chance rolls)
   RaidArchive.lua    raid history snapshots: view / continue past raids
   Sim.lua            /zl sim, /zl simboss, /zl simtmog, /zl simroll (uses Resolver)
   DropLog.lua        drop log store + window
@@ -628,6 +631,7 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl ver | /zl verlist version grid | text list
 /zl sim <link> [N]   simulate one item (auto-plays: the ML chose it)
 /zl simboss <boss>   queue boss drops in the loot window (ML rolls each)
+/zl simraid <raid>   queue a whole raid's drops (+ trash) in one window
 /zl simtmog <link>   transmog demo (TMOG kind winner awardable)
 /zl simroll <item>   roll one queued sim item (ML)
 /zl simstop          full stop: session, timers, queue, menus, windows reset

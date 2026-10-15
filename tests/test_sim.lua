@@ -29,7 +29,19 @@ ZugLoot.Caps = ZugLoot.Caps or { SR = 100, MS = 100, OS = 99, TMOG = 98 }
 ZugLoot.Util = ZugLoot.Util or dofile("Util.lua")
 local printed = {}
 ZugLoot.Print = function(m) table.insert(printed, tostring(m)) end
-ZugLoot.BossData = { TestBoss = { 1001, 1002 } }
+-- Atlas-CFM fixture: sim drops are read live from THE GAME's loot tables
+-- (fake AtlasCFM here). TestBoss: 1001 @20%, 1002 @8%, 1003 @0% (never
+-- drops); a rigged drop draw of 2 hits both (2<=2000, 2<=800), so every
+-- SimBoss("TestBoss") below queues exactly 1001+1002. TestRaid also owns
+-- a 100%-drop trash table for the simraid test.
+AtlasCFM = { InstanceData = { TestRaid = { Name = "Test Raid", Acronym = "TR", MaxPlayers = 40,
+  Bosses = { { id = "TestBoss", name = "Test Boss", items = {
+      { id = 1001, dropRate = 20 }, { id = 1002, dropRate = 8 },
+      { id = 1003, dropRate = 0 } } },
+    { id = "SecondBoss", name = "Second Boss", items = { { id = 1005, dropRate = 100 } } },
+    { id = "TRTrash", name = "Trash Mobs-Test Raid", defaults = { dropRate = 0.3 },
+      items = { { id = 1004, dropRate = 100 } } } } } } }
+dofile("AtlasLoot.lua")
 local dropAdds = {}
 ZugLoot.DropLog = { Add = function(itemID, link, src, outcome, winner)
   table.insert(dropAdds, { itemID = itemID, src = src, winner = winner }) end }
@@ -546,11 +558,75 @@ eq(#an, 3, "three unique players")
 eq(an[1], "Aaa", "sorted")
 eq(an[3], "Ccc", "sorted")
 
--- 14. Unknown boss lists available.
+-- 14. Unknown boss: usage pointer (never a boss dump); a raid qualifier
+-- lists that raid's bosses instead.
 ZugLoot.DB = { sheet = makeSheet() }
 printed = {}
 Sim.SimBoss("Nope")
-ok(string.find(printed[#printed], "TestBoss"), "unknown boss hint")
+ok(string.find(printed[#printed], "Unknown boss 'Nope'", 1, true), "unknown boss named")
+ok(string.find(printed[#printed], "simraid", 1, true), "unknown boss points at simraid")
+printed = {}
+Sim.SimBoss("Nope Test Raid")
+ok(string.find(printed[#printed], "Test Boss", 1, true), "raid qualifier lists its bosses")
+
+-- 14b. No Atlas-CFM: sim drops come from its tables, so both commands
+-- refuse with a pointer (never errors, nothing queued).
+AtlasCFM = nil
+printed = {}
+Sim.SimBoss("TestBoss")
+ok(string.find(printed[#printed], "Atlas-CFM is not loaded", 1, true), "simboss without Atlas refuses")
+eq(#Sim.pending, 0, "simboss without Atlas queues nothing")
+Sim.SimRaid("Test Raid")
+ok(string.find(printed[#printed], "Atlas-CFM is not loaded", 1, true), "simraid without Atlas refuses")
+-- Restore the fixture (later sections need it).
+AtlasCFM = { InstanceData = { TestRaid = { Name = "Test Raid", Acronym = "TR", MaxPlayers = 40,
+  Bosses = { { id = "TestBoss", name = "Test Boss", items = {
+      { id = 1001, dropRate = 20 }, { id = 1002, dropRate = 8 },
+      { id = 1003, dropRate = 0 } } },
+    { id = "SecondBoss", name = "Second Boss", items = { { id = 1005, dropRate = 100 } } },
+    { id = "TRTrash", name = "Trash Mobs-Test Raid", defaults = { dropRate = 0.3 },
+      items = { { id = 1004, dropRate = 100 } } } } } } }
+
+-- 14c. SimRaid: every boss's drops in table order with a FRESH trash
+-- batch between consecutive bosses, all in ONE shared window; the ML
+-- rolls each (off-sheet 1004/1005 -> SIM-OPEN).
+resetHarness()
+-- Drop draws: 1001 @20% hit, 1002 @8% hit, 1004 @100% hit, 1005 @100%.
+-- Entries: 1001 [Aaa 90, Bbb 80], 1002 [Aaa 99, Ccc 50],
+-- 1004 open [Aaa OS 43, Bbb TMOG 1], 1005 open [Aaa OS 44, Bbb TMOG 1].
+math.random = rigged({ 2, 2, 1, 1, 90, 80, 99, 50, 2, 43, 3, 1, 2, 44, 3, 1 })
+printed = {}
+Sim.SimRaid("Test Raid")
+math.random = realRandom
+eq(#Sim.pending, 4, "raid queues bosses + trash")
+eq(Sim.pending[1].itemID, 1001, "first boss drops first")
+eq(Sim.pending[2].itemID, 1002, "first boss drops second")
+eq(Sim.pending[3].itemID, 1004, "trash batch between bosses")
+eq(Sim.pending[3].mode, "SIM-OPEN", "off-sheet trash open-rolls")
+eq(Sim.pending[4].itemID, 1005, "second boss after trash")
+local sawTrash, sawRaid = false, false
+for i = 1, #printed do
+  if string.find(printed[i], "Trash Mobs-Test Raid drops: 1004", 1, true) then sawTrash = true end
+  if string.find(printed[i], "SIM raid Test Raid: 4 items from 2 bosses", 1, true) then sawRaid = true end
+end
+ok(sawTrash, "trash batch printed per group")
+ok(sawRaid, "raid summary printed")
+Sim.RequestRoll(1001)
+ok(drain(), "drain raid item 1")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain raid award 1")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "raid award marks won")
+eq(#Sim.pending, 3, "raid queue advances")
+Sim.Stop()
+
+-- 14d. Unknown raid: usage + the raid list, nothing queued.
+resetHarness()
+printed = {}
+Sim.SimRaid("Nope")
+ok(string.find(printed[#printed], "Unknown raid 'Nope'", 1, true), "unknown raid named")
+ok(string.find(printed[#printed], "Test Raid", 1, true), "unknown raid lists raids")
+eq(#Sim.pending, 0, "unknown raid queues nothing")
+Sim.Stop()
 
 -- 15. In-client menu + confirm: with popup API present, ShowAwardMenu
 -- routes to the AwardMenuUI frame instead of printing, and AwardChosen
