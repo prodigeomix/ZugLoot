@@ -862,6 +862,11 @@ function M.DebugPysankaDrop()
   return M.pysDrop
 end
 
+-- Test hook: recorded row-top Y positions for the layout invariant.
+function M.DebugPysankaRowYs()
+  return M.zlPysRowYs
+end
+
 -- Test hook: pysanka widget inventory ({ {desc, kind}... }).
 function M.DebugPysankaWidgets()
   local out = {}
@@ -1038,6 +1043,7 @@ function M.RenderPysanka()
   local row = CreateFrame("Frame", nil, b.child)
   row:SetWidth(BODY_WIDTH)
   local y = -6
+  M.zlPysRowYs = {} -- row tops for the layout invariant
   -- Invitation bar: green label + editable whisper word (default invite).
   local invT = PYHead(row, "INVITATION whisper", 200)
   invT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
@@ -1058,7 +1064,10 @@ function M.RenderPysanka()
     local h = PYHead(row, Z.Pysanka.BUFF_COLS[c], cellW)
     h:SetPoint("TOPLEFT", row, "TOPLEFT", headX + (c - 1) * cellW, y)
   end
-  y = y - 16
+  -- Header text clears the 20px fields below: step a full field.
+  y = y - (PY_FIELD_H + 2)
+  M.zlPysRowYs.buffHead = y + (PY_FIELD_H + 2)
+  M.zlPysRowYs.buffRow1 = y
   for r = 1, Z.Util.ArrayCount(Z.Pysanka.BUFF_ROWS) do
     local rl = PYLabel(row, Z.Pysanka.BUFF_ROWS[r], 56, "LEFT")
     rl:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
@@ -1104,7 +1113,9 @@ function M.RenderPysanka()
     local h = PYHead(row, heads[i], 110)
     h:SetPoint("TOPLEFT", row, "TOPLEFT", headXX[i], subY)
   end
-  subY = subY - 16
+  subY = subY - (PY_FIELD_H + 2)
+  M.zlPysRowYs.tankHead = subY + (PY_FIELD_H + 2)
+  M.zlPysRowYs.tankRow1 = subY
   for i = 1, Z.Pysanka.N_TANKS do
     local ml = PYLabel(row, Z.Pysanka.MARKS[i], markW, "LEFT")
     ml:SetPoint("TOPLEFT", row, "TOPLEFT", 4, subY)
@@ -1130,14 +1141,16 @@ function M.RenderPysanka()
   -- Debuffs (below tanks, full width): two rows 7 + 4.
   local dbT = PYHead(row, "Debuffs", 200)
   dbT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, endTankY - 8)
-  local dbY = endTankY - 26
+  local dbY = endTankY - 30
+  M.zlPysRowYs.dbHead1 = dbY
   local dCellW = math.floor((BODY_WIDTH - 16) / 7)
   for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW1) do
     local nm = Z.Pysanka.DEBUFF_ROW1[c]
     local h = PYHead(row, nm, dCellW)
     h:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * dCellW, dbY)
   end
-  dbY = dbY - 16
+  dbY = dbY - (PY_FIELD_H + 2)
+  M.zlPysRowYs.dbRow1 = dbY
   for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW1) do
     local nm = Z.Pysanka.DEBUFF_ROW1[c]
     local cell = PYPlayer(row, dCellW - 4, getD(nm), setD(nm), "debuff:" .. nm)
@@ -1150,7 +1163,9 @@ function M.RenderPysanka()
     local h = PYHead(row, nm, d2CellW)
     h:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * d2CellW, dbY)
   end
-  dbY = dbY - 16
+  dbY = dbY - (PY_FIELD_H + 2)
+  M.zlPysRowYs.dbHead2 = dbY + (PY_FIELD_H + 2)
+  M.zlPysRowYs.dbRow2 = dbY
   for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW2) do
     local nm = Z.Pysanka.DEBUFF_ROW2[c]
     local cell = PYPlayer(row, d2CellW - 4, getD(nm), setD(nm), "debuff:" .. nm)
@@ -1160,7 +1175,10 @@ function M.RenderPysanka()
   -- Default Kill Order footer: real raid-target icons with ">" between.
   local koT = PYHead(row, "Default Kill Order", 260)
   koT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, dbY)
-  dbY = dbY - 20
+  -- Header text (~14px) clears the icons: step past both.
+  dbY = dbY - (14 + 4)
+  M.zlPysRowYs.koHead = dbY + (14 + 4)
+  M.zlPysRowYs.koIcons = dbY
   M.zlPysKillOrder = {} -- placement record for the icon assert
   local koX, koSize = 8, 20
   local nMarks = Z.Util.ArrayCount(Z.Pysanka.MARKS)
@@ -1173,21 +1191,27 @@ function M.RenderPysanka()
     if cellB.CreateTexture then
       local tex = cellB:CreateTexture(nil, "ARTWORK")
       if tex then
-        -- Blizzard's own raid-icon setter first (guaranteed texture);
-        -- explicit file path second; question mark last.
-        local done = false
+        -- Raid icons ship as ONE sprite sheet (UI-RaidTargetingIcons,
+        -- plural): SetTexCoord crops the mark. The working pattern on
+        -- this client (Bagshui/Luna): SetTexture(sheet) + SetTexCoord.
+        -- Single-icon files do NOT exist — that was the blank-quads bug.
         local markIdx = Z.Pysanka.MARK_ICONS and Z.Pysanka.MARK_ICONS[mark]
+        local done = false
         if markIdx and SetRaidTargetIconTexture then
           local okA = pcall(SetRaidTargetIconTexture, tex, markIdx)
-          if okA then done = true end
+          if okA and tex.GetTexture and tex:GetTexture() then done = true end
         end
         if not done and tex.SetTexture then
           tex:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+          if markIdx and Z.Pysanka.MarkCoords and tex.SetTexCoord then
+            local l, r, t, bo = Z.Pysanka.MarkCoords(mark)
+            if l then pcall(tex.SetTexCoord, tex, l, r, t, bo) end
+          end
         end
         if tex.SetWidth then tex:SetWidth(koSize) tex:SetHeight(koSize) end
         if tex.SetAllPoints then tex:SetAllPoints(cellB) end
         if tex.Show then tex:Show() end
-        cellB.zlIconVia = done and "api" or "path"
+        cellB.zlIconVia = done and "api" or "sheet"
       end
     end
     cellB.zlMark, cellB.zlIcon = mark, iconPath

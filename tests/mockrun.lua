@@ -19,7 +19,7 @@ local function newObj(kind)
   function o:SetAlpha(a) self.alpha=a end
   function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
-  function o:CreateTexture(...) local t={scripts={}, w=0, h=0}; function t:SetTexture(p) self.tex=p end; function t:GetTexture() return self.tex end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight(h) self.h=h end; function t:SetWidth(w) self.w=w end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
+  function o:CreateTexture(...) local t={scripts={}, w=0, h=0}; function t:SetTexture(p) self.tex=p end; function t:GetTexture() return self.tex end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight(h) self.h=h end; function t:SetWidth(w) self.w=w end; function t:SetVertexColor() end; function t:SetTexCoord(l,r,tm,b) self.coord={l,r,tm,b} end; function t:GetTexCoord() return self.coord end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
   function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
   function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
   function o:SetStatusBarTexture() end
@@ -382,8 +382,8 @@ local ko = Z.MainWindow.DebugPysankaKillOrder();
 assert(ko and Z.Util.ArrayCount(ko) == 8, "kill order holds 8 icons, got " .. tostring(ko and Z.Util.ArrayCount(ko)));
 assert(ko[1].mark == "Skull" and ko[1].icon == Z.Pysanka.MarkIcon("Skull"), "kill order starts at skull");
 for i = 1, 8 do
-  assert(ko[i].icon and string.find(ko[i].icon, "UI-RaidTargetingIcon_", 1, true),
-    "kill icon " .. i .. " is a raid icon, got: " .. tostring(ko[i].icon));
+  assert(ko[i].icon == "Interface\\TargetingFrame\\UI-RaidTargetingIcons",
+    "kill icon " .. i .. " uses the raid sheet, got: " .. tostring(ko[i].icon));
   assert(ko[i].mark == Z.Pysanka.MARKS[i], "kill icon " .. i .. " order");
 end
 -- Without the client API the path is used; with it (stock 1.12
@@ -397,6 +397,25 @@ local koApi = Z.MainWindow.DebugPysankaKillOrder();
 assert(koApi and koApi[1].via == "api", "client raid-icon API used when present");
 SetRaidTargetIconTexture = nil;
 print("pysanka tab OK");
+-- Pysanka layout invariant: no widget row may start inside the one
+-- above — every header->field step must clear the widget heights
+-- (GameFontNormal ~14px, small ~12px, fields 20px). Catches the
+-- header/field overlap family (buff columns over row 1-2, tank heads
+-- over Skull, kill-order icons over their header).
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+local pyRows = Z.MainWindow.DebugPysankaRowYs and Z.MainWindow.DebugPysankaRowYs();
+if pyRows then
+  local function clear(aTop, aH, bTop, what)
+    assert(bTop <= aTop - (aH - 2), what .. ": gap violated (" .. tostring(aTop) .. "->" .. tostring(bTop) .. ")");
+  end
+  clear(pyRows.buffHead, 14, pyRows.buffRow1, "buff header clears row 1-2");
+  clear(pyRows.tankHead, 14, pyRows.tankRow1, "tank header clears skull");
+  clear(pyRows.dbHead1, 14, pyRows.dbRow1, "debuff header clears row 1");
+  clear(pyRows.dbHead2, 14, pyRows.dbRow2, "debuff header clears row 2");
+  clear(pyRows.koHead, 14, pyRows.koIcons, "kill-order header clears icons");
+  print("pysanka layout invariant OK");
+end
 for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);

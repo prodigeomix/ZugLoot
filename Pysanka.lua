@@ -38,10 +38,26 @@ M.MARK_ICONS = {
 }
 
 -- Texture path for a mark's raid icon (nil for unknown marks). Pure.
+-- All stock clients ship ONE sheet (plural "Icons", confirmed against
+-- Bagshui/Cursive/Luna on this client); single-icon files do NOT exist,
+-- so this returns the sheet and MarkCoords crops the mark.
 function M.MarkIcon(mark)
+  if not M.MARK_ICONS[mark] then return nil end
+  return "Interface\\TargetingFrame\\UI-RaidTargetingIcons"
+end
+
+-- TexCoords cropping the mark out of the sheet. The sheet is a 4x4 grid
+-- in raid-index order (Blizzard numbering: 1 Star, 2 Circle, 3 Diamond,
+-- 4 Triangle, 5 Moon, 6 Square, 7 Cross, 8 Skull). Returns
+-- left, right, top, bottom (nil for unknown marks). Pure.
+function M.MarkCoords(mark)
   local n = M.MARK_ICONS[mark]
   if not n then return nil end
-  return "Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. n
+  -- 5.0-safe mod (client has math.mod; stock lua has %).
+  local m = n - 1
+  local col = m - math.floor(m / 4) * 4
+  local row = math.floor(m / 4)
+  return col * 0.25, (col + 1) * 0.25, row * 0.25, (row + 1) * 0.25
 end
 M.TANK_FIELDS = { "tank", "healer", "healer2" }
 M.N_TANKS = 8
