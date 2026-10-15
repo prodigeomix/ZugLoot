@@ -8,6 +8,10 @@
 -- Simboss/simraid roll boss/raid drops from the LIVE Atlas-CFM loot
 -- tables (AtlasLoot.lua: boss + trash dropRate chances read from the
 -- game, never copied) — no pfQuest, no bundled drop lists.
+-- Simraid is a CONDENSED full raid for reliability testing: one boss at a
+-- time (0-3 trash drops first, almost always 1), each stage through the
+-- SAME simboss path — when a boss's queue drains, the next stage rolls
+-- and queues automatically.
 -- The async path (/zl sim, /zl simboss, /zl simraid) replays the REAL live
 -- pipeline: MasterLootUI session + group-routed chat + both windows, one
 -- item at a time. Fake rolls are precomputed, then ECHOED as chat lines
@@ -31,6 +35,8 @@ M.lives = {}      -- [rollKey] = entry currently rolling (one per corpse+item).
                   -- Entries leave the queue at Roll time and stay listed
                   -- as rolling until the ML awards them (never dropped).
 M.running = false -- a sim run is in progress (queue non-empty or item live)
+M.raid = nil       -- active simraid staging: { key, instName, stages, at }
+                   -- (boss names in table order). Cleared on stop/finish.
 
 -- Max tie re-roll rounds per item before giving up with a note.
 M.TIE_ROUNDS = 3
@@ -93,6 +99,7 @@ function M.ResetFresh()
   M.lastEntries = {}
   M.auto = false
   M.running = false
+  M.raid = nil
   if Z.MasterLootUI then
     -- Disarm every live roll clock before wiping the tables (a
     -- scheduled auto-finish must never fire into the next run).
@@ -196,6 +203,41 @@ end
 -- nothing is in flight and the next item can start at once).
 function M.afterAwards()
   M.RequestNextRoll()
+end
+
+-- Simraid stage advancement: called from RequestNextRoll whenever a
+-- queue drains to empty AND nothing is live/deciding (i.e. the current
+-- boss is fully done). Queues the next stage (trash pack, then the next
+-- boss) through the same simboss starter. Returns true when a next
+-- stage was queued (the run continues), false when the raid is over.
+function M.NextRaidStage()
+  local raid = M.raid
+  if not raid then return false end
+  raid.at = (raid.at or 0) + 1
+  local names = raid.stages or {}
+  if raid.at > Z.Util.ArrayCount(names) then
+    M.raid = nil
+    return false
+  end
+  local sheet = Z.DB and Z.DB.sheet
+  if not sheet then M.raid = nil return false end
+  local bossName = names[raid.at]
+  -- Trash pack BEFORE the boss (the mobs cleared walking up to it):
+  -- 0-3 drops, almost always exactly 1.
+  local trash = Z.AtlasLoot.TrashPack(raid.key)
+  if Z.Util.ArrayCount(trash) > 0 then
+    local entry = Z.AtlasLoot.TrashEntry(raid.key)
+    M.QueueBossRun(sheet, raid.key,
+      { name = (entry and entry.name) or "Trash", trashStage = true },
+      trash, true)
+  end
+  M.QueueBossRun(sheet, raid.key,
+    Z.AtlasLoot.FindRaidBoss(raid.key, bossName) or { name = bossName },
+    Z.AtlasLoot.BossDrops(raid.key, bossName), true)
+  Z.Print("SIM raid " .. tostring(raid.instName) .. ": boss "
+    .. raid.at .. "/" .. Z.Util.ArrayCount(names)
+    .. " — " .. tostring(bossName) .. ".")
+  return true
 end
 
 -- Roll range per type (mirrors live caps): SR/MS 1-100, OS 1-99, TMOG 1-98.
@@ -426,6 +468,10 @@ function M.RequestNextRoll()
   end
   M.SyncLootWindow()
   if Z.Util.ArrayCount(M.pending) == 0 and M.live == nil then
+    -- Simraid staging: a drained queue means the current boss is done —
+    -- the next stage (trash pack + next boss) queues here, through the
+    -- same simboss starter. Last stage (or no raid): the run ends.
+    if M.raid and M.NextRaidStage() then return end
     M.MaybeFinish()
   else
     Z.Print("SIM: waiting for the ML — click Roll in the loot window.")
@@ -811,23 +857,49 @@ function M.SimItem(argText)
   M.RequestRoll(entry.itemID)
 end
 
--- Shared queue starter for boss/raid sims: fresh loot session, one
--- BuildEntry per drop (SIM on-sheet / SIM-OPEN off-sheet), then the
--- ML-driven list (auto=false — the ML rolls each, in any order).
-local function StartRun(sheet, drops, title)
-  M.ResetFresh() -- fresh loot session: no done rows / queue / detail from a previous run
+-- Queue one boss's drops WITHOUT resetting (the simraid stage starter —
+-- the simboss starter is the same call wrapped in a ResetFresh). One
+-- BuildEntry per drop (SIM on-sheet / SIM-OPEN off-sheet), ML-driven
+-- (auto=false — the ML rolls each, in any order). Empty drop rolls
+-- print a miss line and queue nothing. Returns the queued count.
+function M.QueueBossRun(sheet, raidKey, boss, drops, keep)
+  if not keep then
+    M.ResetFresh() -- fresh loot session: no done rows / queue / detail from a previous run
+  end
+  local data = Z.AtlasLoot and Z.AtlasLoot.Data()
+  local raidName = (data and data[raidKey] and data[raidKey].Name) or raidKey
+  if Z.Util.ArrayCount(drops) == 0 then
+    if not keep then
+      Z.Print("SIM boss " .. tostring(boss.name) .. " [" .. tostring(raidName) .. "] rolled no drops this run (chance rolls all missed) — try again.")
+    else
+      Z.Print("SIM " .. tostring(boss.name) .. ": no drops (chance rolls missed) — skipping.")
+    end
+    return 0
+  end
+  -- Show the actual rolled drops so the source and variance are visible.
+  local ids = {}
+  for i = 1, Z.Util.ArrayCount(drops) do table.insert(ids, tostring(drops[i])) end
+  Z.Print("SIM boss " .. tostring(boss.name) .. " [" .. tostring(raidName) .. "] drops (Atlas-CFM): " .. table.concat(ids, ", "))
   for i = 1, Z.Util.ArrayCount(drops) do
     local itemID = drops[i]
     table.insert(M.pending, M.BuildEntry(sheet, itemID, tostring(itemID), 0))
   end
-  M.auto = false -- boss/raid runs are ML-driven: Roll per item, like live loot
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    table.insert(M.lastEntries, { itemID = M.pending[i].itemID, link = M.pending[i].link })
+  M.auto = false -- boss/raid stages are ML-driven: Roll per item, like live loot
+  for i = 1, Z.Util.ArrayCount(drops) do
+    local e = M.pending[Z.Util.ArrayCount(M.pending) - Z.Util.ArrayCount(drops) + i]
+    if e then table.insert(M.lastEntries, { itemID = e.itemID, link = e.link }) end
   end
   M.running = true
   M.SyncLootWindow()
-  if Z.LootWindow then Z.LootWindow.Show(title) end
+  if Z.LootWindow then Z.LootWindow.Show("Simulated loot: " .. tostring(boss.name)) end
   Z.Print("Loot window open — click Roll on an item (or /zl simroll <item>).")
+  return Z.Util.ArrayCount(drops)
+end
+
+-- Shared starter for boss sims: fresh loot session, then the per-stage
+-- queue above (ONE stage, so identical to a simraid stage).
+local function StartRun(sheet, raidKey, boss, drops)
+  M.QueueBossRun(sheet, raidKey, boss, drops, false)
 end
 
 function M.SimBoss(argText)
@@ -875,26 +947,20 @@ function M.SimBoss(argText)
     end
     return
   end
-  local data = Z.AtlasLoot.Data()
-  local raidName = (data and data[raidKey] and data[raidKey].Name) or raidKey
   -- Independent chance roll per listed drop (Atlas-CFM dropRate, read
-  -- live — never copied): consecutive runs vary by design.
-  local table_ = Z.AtlasLoot.BossDrops(raidKey, boss.name or boss.id)
-  if Z.Util.ArrayCount(table_) == 0 then
-    Z.Print("SIM boss " .. tostring(boss.name) .. " [" .. tostring(raidName) .. "] rolled no drops this run (chance rolls all missed) — try again.")
-    return
-  end
-  -- Show the actual rolled drops so the source and variance are visible.
-  local ids = {}
-  for i = 1, Z.Util.ArrayCount(table_) do table.insert(ids, tostring(table_[i])) end
-  Z.Print("SIM boss " .. tostring(boss.name) .. " [" .. tostring(raidName) .. "] drops (Atlas-CFM): " .. table.concat(ids, ", "))
-  StartRun(sheet, table_, "Simulated loot: " .. tostring(boss.name))
+  -- live — never copied): consecutive runs vary by design. QueueBossRun
+  -- prints the rolled drops (or the all-miss line) and queues them.
+  StartRun(sheet, raidKey, boss, Z.AtlasLoot.BossDrops(raidKey, boss.name or boss.id))
 end
 
--- Usage: /zl simraid <raid>. Rolls every boss's drops in table order
--- with a FRESH trash batch between consecutive bosses (the mobs cleared
--- walking boss to boss), all into ONE shared loot window — the ML rolls
--- each item from the list, rapidly covering a whole raid's loot.
+-- Usage: /zl simraid <raid>. A CONDENSED full raid for reliability
+-- testing: one boss at a time, each through the SAME simboss starter
+-- (QueueBossRun — no parallel implementation). A 0-3 trash pack (almost
+-- always exactly 1) rolls BEFORE each boss — the mobs cleared walking
+-- up to it — then the boss. When a boss's queue drains (every drop
+-- awarded), NextRaidStage fires from the normal queue-drain path and the
+-- next stage queues automatically; after the last boss the run ends like
+-- any sim. /zl simstop stops the whole raid anywhere.
 function M.SimRaid(argText)
   local sheet = M.RequireSheet()
   if not sheet then return end
@@ -915,25 +981,16 @@ function M.SimRaid(argText)
     Z.Print("Unknown raid '" .. text .. "'. Usage: /zl simraid <raid>. Raids: " .. table.concat(names, ", "))
     return
   end
-  local groups = Z.AtlasLoot.RaidDrops(raidKey)
-  if Z.Util.ArrayCount(groups) == 0 then
-    Z.Print("SIM raid " .. tostring(inst.Name) .. " rolled no drops this run (chance rolls all missed) — try again.")
+  local names = Z.AtlasLoot.BossNames(raidKey)
+  if Z.Util.ArrayCount(names) == 0 then
+    Z.Print("SIM raid " .. tostring(inst.Name) .. " has no bosses with loot tables.")
     return
   end
-  local flat, nboss = {}, 0
-  for i = 1, Z.Util.ArrayCount(groups) do
-    local g = groups[i]
-    if not g.trash then nboss = nboss + 1 end
-    local ids = {}
-    for j = 1, Z.Util.ArrayCount(g.drops) do
-      table.insert(flat, g.drops[j])
-      table.insert(ids, tostring(g.drops[j]))
-    end
-    Z.Print("SIM " .. tostring(g.boss) .. " drops: " .. table.concat(ids, ", "))
-  end
-  Z.Print("SIM raid " .. tostring(inst.Name) .. ": " .. Z.Util.ArrayCount(flat)
-    .. " items from " .. nboss .. " bosses (+ trash) — Roll each from the list.")
-  StartRun(sheet, flat, "Simulated raid: " .. tostring(inst.Name))
+  M.ResetFresh() -- fresh loot session before staging the raid
+  M.raid = { key = raidKey, instName = inst.Name, stages = names, at = 0 }
+  Z.Print("SIM raid " .. tostring(inst.Name) .. ": " .. Z.Util.ArrayCount(names)
+    .. " bosses, one at a time (+ trash packs) — Roll each from the list.")
+  M.NextRaidStage() -- stage 1 queues now; later stages chain off the drain
 end
 
 -- Transmog demo: like /zl sim, but the first sheet roller rolls TMOG

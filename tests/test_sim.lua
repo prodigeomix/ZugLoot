@@ -118,6 +118,7 @@ local function resetHarness(rollTime)
   Sim.auto = false
   Sim.lastEntries = {}
   Sim.lives = {}
+  Sim.raid = nil -- simraid staging (cleared live by ResetFresh/Stop)
   Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
   ML.sessions = {}
@@ -587,37 +588,71 @@ AtlasCFM = { InstanceData = { TestRaid = { Name = "Test Raid", Acronym = "TR", M
     { id = "TRTrash", name = "Trash Mobs-Test Raid", defaults = { dropRate = 0.3 },
       items = { { id = 1004, dropRate = 100 } } } } } } }
 
--- 14c. SimRaid: every boss's drops in table order with a FRESH trash
--- batch between consecutive bosses, all in ONE shared window; the ML
--- rolls each (off-sheet 1004/1005 -> SIM-OPEN).
+-- 14c. SimRaid: a CONDENSED raid — one boss at a time through the SAME
+-- simboss starter. A 0-3 trash pack (almost always 1) rolls BEFORE each
+-- boss; when a boss's queue drains, the next stage queues automatically.
+-- (rng stays rigged through the drains: stage 2 rolls during the stage-1
+-- award drain, so it must be deterministic too.)
 resetHarness()
--- Drop draws: 1001 @20% hit, 1002 @8% hit, 1004 @100% hit, 1005 @100%.
--- Entries: 1001 [Aaa 90, Bbb 80], 1002 [Aaa 99, Ccc 50],
--- 1004 open [Aaa OS 43, Bbb TMOG 1], 1005 open [Aaa OS 44, Bbb TMOG 1].
-math.random = rigged({ 2, 2, 1, 1, 90, 80, 99, 50, 2, 43, 3, 1, 2, 44, 3, 1 })
+-- Stage 1 draws: pack count 5->1, trash 1004 hit, 1001 hit, 1002 hit.
+-- Entries: 1004 open [Aaa OS 43, Bbb TMOG 1], 1001 [Aaa 90, Bbb 80],
+-- 1002 [Aaa 99, Ccc 50].
+-- Stage 2 (rig cycles): pack 1, trash hit, 1005 @100% hit, 1004 open
+-- [Aaa OS 2, Bbb TMOG 3], 1005 open [Aaa MS 90, Bbb TMOG 98].
+math.random = rigged({ 5, 1, 2, 2, 2, 43, 3, 1, 90, 80, 99, 50 })
 printed = {}
 Sim.SimRaid("Test Raid")
-math.random = realRandom
-eq(#Sim.pending, 4, "raid queues bosses + trash")
-eq(Sim.pending[1].itemID, 1001, "first boss drops first")
-eq(Sim.pending[2].itemID, 1002, "first boss drops second")
-eq(Sim.pending[3].itemID, 1004, "trash batch between bosses")
-eq(Sim.pending[3].mode, "SIM-OPEN", "off-sheet trash open-rolls")
-eq(Sim.pending[4].itemID, 1005, "second boss after trash")
-local sawTrash, sawRaid = false, false
+eq(#Sim.pending, 3, "stage 1: trash pack + first boss only")
+eq(Sim.pending[1].itemID, 1004, "trash pack before the boss")
+eq(Sim.pending[1].mode, "SIM-OPEN", "off-sheet trash open-rolls")
+eq(Sim.pending[2].itemID, 1001, "first boss drop")
+eq(Sim.pending[3].itemID, 1002, "first boss drop")
+ok(Sim.raid ~= nil and Sim.raid.at == 1, "raid staged at boss 1")
+local sawTrash, sawStage = false, false
 for i = 1, #printed do
-  if string.find(printed[i], "Trash Mobs-Test Raid drops: 1004", 1, true) then sawTrash = true end
-  if string.find(printed[i], "SIM raid Test Raid: 4 items from 2 bosses", 1, true) then sawRaid = true end
+  if string.find(printed[i], "SIM boss Trash Mobs-Test Raid [Test Raid] drops (Atlas-CFM): 1004", 1, true) then sawTrash = true end
+  if string.find(printed[i], "SIM raid Test Raid: boss 1/2", 1, true) then sawStage = true end
 end
-ok(sawTrash, "trash batch printed per group")
-ok(sawRaid, "raid summary printed")
+ok(sawTrash, "trash pack printed via the simboss path")
+ok(sawStage, "stage progress printed")
+-- Play stage 1 out: trash, then both boss drops.
+Sim.RequestRoll(1004)
+ok(drain(), "drain raid trash")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain raid trash award")
 Sim.RequestRoll(1001)
 ok(drain(), "drain raid item 1")
 ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(drain(), "drain raid award 1")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "raid award marks won")
-eq(#Sim.pending, 3, "raid queue advances")
-Sim.Stop()
+Sim.RequestRoll(1002)
+ok(drain(), "drain raid item 2")
+ML.AwardChosen({ name = "Ccc", via = "winner" })
+ok(drain(), "drain raid award 2 (stages next boss)")
+-- Boss 1 drained -> stage 2 queued automatically (trash + Second Boss).
+eq(#Sim.pending, 2, "stage 2 queued on drain")
+eq(Sim.pending[1].itemID, 1004, "fresh trash pack before boss 2")
+eq(Sim.pending[2].itemID, 1005, "second boss after trash")
+ok(Sim.raid ~= nil and Sim.raid.at == 2, "raid staged at boss 2")
+local sawStage2 = false
+for i = 1, #printed do
+  if string.find(printed[i], "SIM raid Test Raid: boss 2/2", 1, true) then sawStage2 = true end
+end
+ok(sawStage2, "stage 2 progress printed")
+-- Play stage 2 out: last award ends the raid like any sim.
+Sim.RequestRoll(1004)
+ok(drain(), "drain stage-2 trash")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain stage-2 trash award")
+Sim.RequestRoll(1005)
+ok(drain(), "drain stage-2 boss")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain stage-2 award (raid over)")
+math.random = realRandom
+eq(#Sim.pending, 0, "raid queue empty at the end")
+ok(Sim.raid == nil, "staging cleared after last boss")
+ok(Sim.running == false, "raid run ended")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1005), 1, "last boss in history")
 
 -- 14d. Unknown raid: usage + the raid list, nothing queued.
 resetHarness()

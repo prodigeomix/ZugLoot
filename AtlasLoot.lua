@@ -281,27 +281,34 @@ function M.TrashDrops(raidKey, opts)
     opts.count or M.MAX_TRASH_DROPS, opts.rng, opts.qualityFn)
 end
 
--- Whole-raid drop groups in boss order: each boss's rolled drops, with a
--- FRESH trash batch between consecutive bosses (the mobs cleared walking
--- boss to boss). Empty groups are skipped. Returns
--- { { boss = displayName, drops = { itemIDs } }, ... }.
-function M.RaidDrops(raidKey, opts)
-  opts = opts or {}
-  local names = M.BossNames(raidKey)
-  local out = {}
-  for i = 1, Z.Util.ArrayCount(names) do
-    local drops = M.BossDrops(raidKey, names[i], opts)
-    if Z.Util.ArrayCount(drops) > 0 then
-      table.insert(out, { boss = names[i], drops = drops })
-    end
-    if i < Z.Util.ArrayCount(names) then
-      local trash = M.TrashDrops(raidKey, opts)
-      if Z.Util.ArrayCount(trash) > 0 then
-        local entry = M.TrashEntry(raidKey)
-        table.insert(out, { boss = (entry and entry.name) or "Trash",
-          drops = trash, trash = true })
-      end
-    end
+-- Trash-pack weights P(0..3 trash drops before a boss): almost always
+-- exactly 1 (one mob's loot), sometimes 0/2/3.
+M.TRASH_PACK_WEIGHTS = { 1, 7, 1, 1 }
+
+-- How many trash drops precede a boss: weighted 0..3 (rng injectable).
+function M.TrashPackCount(rng)
+  rng = rng or function(lo, hi) return math.random(lo, hi) end
+  local total = 0
+  for k = 0, 3 do total = total + (M.TRASH_PACK_WEIGHTS[k + 1] or 0) end
+  if total <= 0 then return 1 end
+  local r, acc = rng(1, total), 0
+  for k = 0, 3 do
+    acc = acc + (M.TRASH_PACK_WEIGHTS[k + 1] or 0)
+    if r <= acc then return k end
   end
+  return 1
+end
+
+-- One trash pack: roll the trash table, keep up to the pack count (0-3,
+-- almost always 1). Fewer rolled drops than the count simply yields
+-- fewer — a pack is what the mobs dropped, not a quota.
+function M.TrashPack(raidKey, opts)
+  opts = opts or {}
+  local k = M.TrashPackCount(opts.rng)
+  if k <= 0 then return {} end
+  local drops = M.TrashDrops(raidKey, opts)
+  local out = {}
+  local n = math.min(k, Z.Util.ArrayCount(drops))
+  for i = 1, n do out[i] = drops[i] end
   return out
 end

@@ -117,6 +117,7 @@ local function resetHarness(rollTime)
   Sim.auto = false
   Sim.lastEntries = {}
   Sim.lives = {}
+  Sim.raid = nil -- simraid staging (cleared live by ResetFresh/Stop)
   Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
   ML.sessions = {}

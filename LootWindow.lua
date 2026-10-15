@@ -1905,8 +1905,10 @@ function M.PaintDetailFrame()
     end
   end
   -- Live roll list: two columns like the raider frame (names left,
-  -- "roll/max" right, e.g. 56/98 for a TMOG roll). f.rolls mirrors
-  -- the left column for legacy readers/tests.
+  -- "roll/max" right, e.g. 56/98 for a TMOG roll). The legacy f.rolls
+  -- mirror stays hidden always: showing it paints a second bare-name
+  -- block stacked above the two columns (every roller twice).
+  if f.rolls and f.rolls.Hide then f.rolls:Hide() end
   local function paintRollColumns(rows, waiting)
     local left, right = {}, {}
     for i = 1, Z.Util.ArrayCount(rows) do
@@ -1918,19 +1920,15 @@ function M.PaintDetailFrame()
     if waiting then
       if f.rollsL and f.rollsL.SetText then f.rollsL:SetText("waiting for rolls...") end
       if f.rollsR and f.rollsR.SetText then f.rollsR:SetText("") end
-      if f.rolls and f.rolls.SetText then f.rolls:SetText("waiting for rolls...") end
     else
       if f.rollsL and f.rollsL.SetText then f.rollsL:SetText(table.concat(left, "\n")) end
       if f.rollsR and f.rollsR.SetText then f.rollsR:SetText(table.concat(right, "\n")) end
-      if f.rolls and f.rolls.SetText then f.rolls:SetText(table.concat(left, "\n")) end
     end
   end
-  if f.rollsL or f.rollsR or f.rolls then
+  if f.rollsL or f.rollsR then
     if phase == "pick" then
       paintRollColumns({}, false)
-      if f.rolls and f.rolls.Hide then f.rolls:Hide() end
     else
-      if f.rolls and f.rolls.Show then f.rolls:Show() end
       local rows = M.SortedDetailRolls(d)
       paintRollColumns(rows, Z.Util.ArrayCount(rows) == 0)
     end

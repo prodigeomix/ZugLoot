@@ -143,21 +143,26 @@ eq(td[1], 5008, "trash 100% item")
 eq(#A.TrashDrops("Deadmines", { rng = rigged({ 1 }), qualityFn = epicQ }), 0, "no trash table empty")
 eq(#A.BossDrops("MoltenCore", "Nobody", {}), 0, "unknown boss empty")
 
--- 7. RaidDrops: boss order, trash between bosses, empties skipped.
--- Ragnaros hits 5001+5003, trash hits 5008, Lucifron all-miss.
-local groups = A.RaidDrops("MoltenCore", { rng = rigged({ 1, 10001, 1, 10001, 1, 10001, 10001 }), qualityFn = epicQ })
-eq(#groups, 2, "hitting groups only")
-eq(groups[1].boss, "Ragnaros", "boss order")
-eq(#groups[1].drops, 2, "ragnaros drops")
-ok(groups[2].trash, "trash flagged")
-eq(groups[2].drops[1], 5008, "trash drop")
--- Near-miss raid: everything but the guaranteed (100%) drops misses —
--- the 100% entries still land (a value above the range would clamp to a
--- hit, so rig 9999: misses every real chance, hits only 100% entries).
-local none = A.RaidDrops("MoltenCore", { rng = rigged({ 9999 }), qualityFn = epicQ })
-eq(#none, 2, "near-miss keeps guaranteed groups")
-eq(none[1].drops[1], 5003, "boss 100% item survives")
-eq(none[2].drops[1], 5008, "trash 100% item survives")
+-- 7. Trash packs: weighted 0-3, almost always exactly 1.
+-- Weights { 1, 7, 1, 1 } over 1..10: r=1 -> 0, r=2..8 -> 1, r=9 -> 2, r=10 -> 3.
+eq(A.TrashPackCount(rigged({ 1 })), 0, "pack of 0")
+eq(A.TrashPackCount(rigged({ 5 })), 1, "pack of 1")
+eq(A.TrashPackCount(rigged({ 9 })), 2, "pack of 2")
+eq(A.TrashPackCount(rigged({ 10 })), 3, "pack of 3")
+-- TrashPack rolls the trash table and keeps up to the count: MoltenCore
+-- trash is { 5007 @0.3%, 5008 @100% } — both hit, pack of 1 keeps 5007.
+local pack1 = A.TrashPack("MoltenCore", { rng = rigged({ 5, 1, 1 }), qualityFn = epicQ })
+eq(#pack1, 1, "pack of 1 keeps one")
+eq(pack1[1], 5007, "lowest id first")
+-- Pack of 0 rolls nothing (no table rng consumed).
+local pack0 = A.TrashPack("MoltenCore", { rng = rigged({ 1 }), qualityFn = epicQ })
+eq(#pack0, 0, "pack of 0 empty")
+-- Fewer rolled drops than the count yields fewer (no quota fill):
+-- 5007 @0.3% misses, only the 100% 5008 lands, pack of 3 keeps just it.
+local packShort = A.TrashPack("MoltenCore", { rng = rigged({ 10, 10001, 1 }), qualityFn = epicQ })
+eq(#packShort, 1, "short pack yields what dropped")
+eq(packShort[1], 5008, "guaranteed trash survives")
+eq(#A.TrashPack("Deadmines", { rng = rigged({ 5 }), qualityFn = epicQ }), 0, "no trash table empty")
 
 -- 8. No Atlas-CFM: everything degrades to empty, never errors.
 AtlasCFM = nil
@@ -169,6 +174,6 @@ eq(#A.BossNames("MoltenCore"), 0, "no boss names")
 eq(A.FindBoss("Ragnaros"), nil, "no boss")
 eq(#A.BossDrops("MoltenCore", "Ragnaros", {}), 0, "no boss drops")
 eq(#A.TrashDrops("MoltenCore", {}), 0, "no trash")
-eq(#A.RaidDrops("MoltenCore", {}), 0, "no raid drops")
+eq(#A.TrashPack("MoltenCore", {}), 0, "no trash pack")
 
 return T
