@@ -32,7 +32,7 @@ ok(string.find(lines[1], "9.9.9-test", 1, true) ~= nil, "header carries version"
 
 -- Slim set: exactly these commands, nothing else.
 local kept = { "sheet", "import", "loadfile", "sheetreq", "sync",
-  "simboss", "simraid", "simstop", "rehearse", "help" }
+  "simboss", "simraid", "simstop", "rehearse", "rolldebug", "help" }
 local dropped = { "raids", "raid", "rf", "arf", "rr", "2x", "fr", "cr",
   "show", "hide", "time", "autoclose", "auto", "ver", "verlist",
   "sim", "simtmog", "simroll", "lootdebug", "rollauto", "lootframe",

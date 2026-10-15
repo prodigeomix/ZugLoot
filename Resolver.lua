@@ -83,7 +83,7 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
       -- Over-cap: above the TYPE range (e.g. 99 on a 1-98 TMOG roll).
       local over = base > typeCap
       -- Miss: an SR tag from someone WITHOUT the reserve is a fake SR
-      -- claim (the live feed re-types those as MS in OnSystemRoll).
+      -- claim (the live intake re-types those as MS).
       -- MS/OS/TMOG rolls are valid kind contests from anyone (the
       -- sheet only holds SR rollers).
       local miss = false

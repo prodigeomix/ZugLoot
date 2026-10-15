@@ -27,20 +27,8 @@ local active = false
 
 M.rolls = {}
 
--- Class table + colors live in ClassColors (shared with every name
--- display). Kept as a local alias so this file loads standalone in tests.
-local RAID_CLASS_COLORS = (Z.ClassColors and Z.ClassColors.COLORS) or {
-  ["Warrior"] = "FFC79C6E",
-  ["Mage"]    = "FF69CCF0",
-  ["Rogue"]   = "FFFFF569",
-  ["Druid"]   = "FFFF7D0A",
-  ["Hunter"]  = "FFABD473",
-  ["Shaman"]  = "FF0070DE",
-  ["Priest"]  = "FFFFFFFF",
-  ["Warlock"] = "FF9482C9",
-  ["Paladin"] = "FFF58CBA",
-}
-
+-- Class/kind colors live in the shared RollList view (same view the
+-- master-looter detail paints through).
 local ROLL_BUTTONS = {
   { label = "SR", type = "SR", capKey = "SR", color = "ffe5302d",
     rgb = { 0.898, 0.188, 0.176 }, tip = "Roll for Soft Reserve" },
@@ -51,8 +39,6 @@ local ROLL_BUTTONS = {
   { label = "TM", type = "TMOG", capKey = "TMOG", color = "FF00FFFF",
     rgb = { 0.0, 1.0, 1.0 }, tip = "Roll for Transmog" },
 }
-
-local ROLL_GROUP_ORDER = { "SR", "MS", "OS", "TMOG" }
 
 local function caps()
   if Z.Caps then return Z.Caps end
@@ -87,55 +73,13 @@ function M.PlayerClass(name)
   return nil
 end
 
-local function classColorHex(class)
-  if Z.ClassColors and Z.ClassColors.ClassColorHex then
-    return Z.ClassColors.ClassColorHex(class)
-  end
-  return RAID_CLASS_COLORS[class] or "FFFFFFFF"
-end
-
-local function typeColorHex(rtype)
-  for i = 1, 4 do
-    if ROLL_BUTTONS[i].type == rtype then return ROLL_BUTTONS[i].color end
-  end
-  return "FFFFFFFF"
-end
-
--- Re-render the two-column list: grouped SR > MS > OS > TMOG, best roll
--- first within a group, capped at 8 visible rows (LootBlare parity).
+-- Re-render the two-column list through the shared RollList view
+-- (same grouping/colors/ranges as the master-looter detail, capped at
+-- 8 visible rows per LootBlare parity).
 local function RenderRolls()
-  if not leftText or not rightText then return end
-  local groups = { SR = {}, MS = {}, OS = {}, TMOG = {} }
-  for i = 1, Z.Util.ArrayCount(M.rolls) do
-    local r = M.rolls[i]
-    local g = groups[r.rtype] or groups.MS
-    table.insert(g, r)
+  if Z.RollList and Z.RollList.Paint then
+    Z.RollList.Paint(leftText, rightText, M.rolls, { maxRows = 8 })
   end
-  for _, key in ipairs(ROLL_GROUP_ORDER) do
-    table.sort(groups[key], function(a, b) return (a.roll or 0) > (b.roll or 0) end)
-  end
-  local left, right, count = {}, {}, 0
-  for _, key in ipairs(ROLL_GROUP_ORDER) do
-    local g = groups[key]
-    for i = 1, Z.Util.ArrayCount(g) do
-      if count >= 8 then break end
-      local r = g[i]
-      local hex = classColorHex(r.class)
-      local name = string.sub(tostring(r.player or "?"), 1, 15)
-      if r.excluded then
-        table.insert(left, "|cff888888" .. name .. "|r")
-        table.insert(right, "|cff888888" .. tostring(r.roll) .. " (" .. r.minR .. "-" .. r.maxR .. ") won|r")
-      else
-        table.insert(left, "|c" .. hex .. name .. "|r")
-        table.insert(right, "|c" .. typeColorHex(r.rtype)
-          .. string.format("%2d (%d-%d)", r.roll, r.minR, r.maxR) .. "|r")
-      end
-      count = count + 1
-    end
-    if count >= 8 then break end
-  end
-  leftText:SetText(table.concat(left, "\n"))
-  rightText:SetText(table.concat(right, "\n"))
 end
 
 local function ClearRolls()
@@ -429,13 +373,10 @@ function M.DoRoll(rtype, cap)
     return
   end
   RandomRoll(1, cap)
-  if Z.MasterLootUI.session then
-    Z.Comm.SendRollAns(Z.MasterLootUI.session.id, rtype)
-  end
 end
 
 function M.OnRollReq(msg, sender)
-  -- ROLL_REQ:<session>:<link>:<mode>; verify sender is ML (LootBlare rule).
+  -- ROLL_REQ:<itemID>:<link>:<mode>; verify sender is ML (LootBlare rule).
   local link = string.match(msg, "ROLL_REQ:%d+:(.+):%w+$")
   local mode = string.match(msg, ":(%w+)$")
   if Z.SRSecurity.IsML(sender) or sender == nil then

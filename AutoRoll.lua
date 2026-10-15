@@ -34,9 +34,6 @@ function M.MaybeAutoRoll(itemLink)
   if M.PlayerSRd(itemID) then
     Z.Print("Auto-rolling SR (" .. itemLink .. ")")
     RandomRoll(1, Z.Caps.SR)
-    if Z.MasterLootUI.session then
-      Z.Comm.SendRollAns(Z.MasterLootUI.session.id, "SR")
-    end
   end
 end
 

@@ -23,6 +23,7 @@ Comm.lua
 SRImport.lua
 SRView.lua
 MasterLootUI.lua
+RollList.lua
 LootWindow.lua
 RaiderLootUI.lua
 AutoRoll.lua

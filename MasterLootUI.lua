@@ -1,56 +1,21 @@
 -- ZugLoot/MasterLootUI.lua
--- RollFor-like master-looter console: loot list + session control + award confirm.
+-- Master-loot console: ONE open roll window, rolls land, ML awards.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
 Z.MasterLootUI = M
 
--- Roll sessions, one per (corpse, item): the ML works several items at
--- once (roll A, close, roll B, award B, reopen A off its saved rolls) --
--- and the SAME item can roll on two corpses at once. Every roll table
--- below is keyed by ROLL KEY (corpse + item), never bare itemID: a bare
--- key lets corpse B's finish/award overwrite corpse A's parked session
--- and menu, drops A's rolls, and routes every later feed to the dead
--- item. Exactly one session is ACTIVE (its item's rolls feed the
--- session; chat/system rolls land there). M.session stays as the
--- active-session alias so every existing reader keeps working;
--- M.sessions holds the per-key rest.
-M.session = nil -- active { key, corpse, id, itemID, itemLink, mode, rolls={}, t=0, itemCount=1 }
-M.sessions = {} -- [rollKey] = session (active one included)
-
-local sessionSeq = 0
-
--- Corpse identity for ROLL state (sessions, menus, parked details, sim
--- lives): the PINNED corpse key (M.lootKey, guid: preferred, fp:
--- fallback), else nil (sim rows, /rf rolls, headless -- bare itemID keys,
--- as before). lootKey is pinned per open corpse and survives partial
--- loots; identity must not shift under a live roll, so sessions stamp it
--- once at BeginSession and lookups re-pin the same value while the corpse
--- is open. After the corpse closes/pins elsewhere (walk-back gap), keyed
--- lookups fall back: lone-copy resolution in ParkedDetail, keyless legacy
--- sessions in SessionFor.
-function M.CorpseID()
-  return M.lootKey
-end
-
--- Roll key: corpse-scoped when a corpse is pinned, bare itemID otherwise
--- (numeric itemIDs stay numeric -- headless/sim/tests keep working).
-function M.RollKey(itemID, corpse)
-  if corpse == nil then corpse = M.CorpseID() end
-  if corpse and corpse ~= "" then
-    return tostring(corpse) .. "|" .. tostring(itemID)
-  end
-  return itemID
-end
-
--- Key carried on a session table (stamped once at BeginSession, never
--- recomputed -- identity must not shift under a live roll). Keyless
--- sessions (legacy/test stubs) resolve against the given corpse.
-local function sessKey(sess, corpse)
-  if sess and sess.key ~= nil then return sess.key end
-  if sess and sess.itemID ~= nil then return M.RollKey(sess.itemID, corpse) end
-  return nil
-end
+-- THE roll. Exactly one exists at a time, and only while the ML roll
+-- window for it is OPEN: { itemID, itemLink, mode, rolls={} }.
+-- mode: "SR" (live master loot) | "RAIDROLL" | "SIM" (test rolls: sim +
+-- rehearsal share the live path, flagged silent so other clients never
+-- see them).
+-- Any roll -- fake or real -- lands here while it is set. Closing the
+-- roll window ends the roll: every path that closes/awards/finishes the
+-- window (close, award, timeout) clears M.roll first, so a dead
+-- roll can never collect rolls or auto-finish late. There are no parked
+-- sessions, no pending menus, no background rolls. Ever.
+M.roll = nil -- THE roll (or nil): { itemID, itemLink, mode, rolls, silent }
 
 -- Loot console is universal: anyone who can SEE the loot runs the window
 -- (solo, party/raid of any loot method, master looter or not). Rolling and
@@ -59,122 +24,42 @@ function M.RequireML()
   return true
 end
 
--- Shared session start for live rolls and sim. silent=true skips the
--- addon-message broadcast (sim must not pop other clients' roller windows
--- or trigger their auto-rolls); the local raider window still shows.
--- One live roll at a time (sequential holds): starting a new roll while
--- another runs is refused by StartItemRoll/Sim.StartQueuedRoll — a roll must
--- be finished, cancelled or stopped before the next starts. A finished
--- roll parks its session for award/continue; the parked session (never
--- the live table) is what survives across items.
-function M.BeginSession(itemID, itemLink, mode, silent)
-  sessionSeq = sessionSeq + 1
-  local itemCount = 1
-  if mode == "TWO" then itemCount = 2 end
-  local sess = { key = M.RollKey(itemID), corpse = M.CorpseID(), id = sessionSeq, itemID = itemID, itemLink = itemLink, mode = mode, rolls = {}, t = 0, itemCount = itemCount, silent = silent }
-  M.sessions = M.sessions or {}
-  M.sessions[sess.key] = sess
-  M.session = sess -- this roll is the active one
-  -- Chat-visible name, resolved once (never a bare item:id in chat).
-  sess.dispName = M.DisplayItemLink(itemID, itemLink)
-  local label = sess.dispName
-  if mode == "OPEN" then label = label .. " (open roll)"
-  elseif mode == "RAID" then label = label .. " (raid roll)"
-  elseif mode == "RAIDROLL" then label = "Raid rolling " .. sess.dispName .. "..."
-  elseif mode == "TWO" then label = label .. " (2 top win)" end
-  -- Pysanka-style call (raid-roll parity): "<mob> dropped N item(s):"
-  -- is announced by the loot scan; the roll call itself is just the item
-  -- (raid-roll announces "Raid rolling <item>..." + the numbered raid).
+-- Start the one roll. Refuses when a roll is already open (finish,
+-- award, or close it first). silent=true skips the addon-message
+-- broadcast (sim/rehearse must not pop other clients' roller windows).
+function M.BeginRoll(itemID, itemLink, mode, silent)
+  if M.roll then return nil end
+  local roll = { itemID = itemID, itemLink = itemLink, mode = mode,
+    rolls = {}, silent = silent and true or false }
+  M.roll = roll
+  local dispName = M.DisplayItemLink(itemID, itemLink)
+  local label = dispName
+  if mode == "RAIDROLL" then label = "Raid rolling " .. dispName .. "..." end
   if Z.Comm and Z.Comm.WarnGroup then
     Z.Comm.WarnGroup(label)
   end
-  if not silent and Z.Comm then
-    Z.Comm.SendRollReq(sessionSeq, itemLink, mode)
+  if not roll.silent and Z.Comm then
+    Z.Comm.SendRollReq(itemID, itemLink, mode)
   end
   if Z.RaiderLootUI then
     Z.RaiderLootUI.ShowItem(itemLink, Z.DB.rollTime)
   end
-  Z.Print("Roll started (" .. mode .. ") session #" .. sessionSeq)
-  if not silent and Z.AutoRoll and Z.AutoRoll.AllGreenAndAuto() then
-    Z.Print("All SR rollers on auto — will auto-resolve on ROLL_ANS.")
-  end
-  -- Every roll runs on the shared master-loot timer (live, sim,
-  -- rehearsal alike): the ML — and in sims, the ML's own /roll — gets
-  -- the full window before auto-finish.
-  M.BeginRollTimer(sess)
-  return sess
+  Z.Print("Roll started (" .. tostring(mode) .. ") " .. tostring(dispName))
+  M.BeginRollTimer(roll)
+  return roll
 end
 
--- Look up a roll session: this (corpse, item)'s own session when it has
--- one (multi-roll: each item owns its rolls; same item on two corpses
--- owns two), else the active session.
-function M.SessionFor(itemID, corpse)
-  if itemID and M.sessions then
-    local k = M.RollKey(itemID, corpse)
-    if M.sessions[k] then return M.sessions[k] end
-    -- Fallback: a live keyless session for this item (legacy /rf / sim
-    -- rows carry no corpse) is still this item's roll.
-    for _, s2 in pairs(M.sessions) do
-      if s2 and s2.key == nil and s2.itemID == itemID then return s2 end
-    end
-  end
-  return M.session
+-- End the roll if it is THIS item's. Every window-close, award, and
+-- timeout path funnels through here: disarm the clock, clear the
+-- table. A dead roll collects nothing and finishes nothing.
+function M.EndRoll(itemID)
+  local r = M.roll
+  if not r then return end
+  if itemID and r.itemID ~= itemID then return end
+  M.CancelRollTimer(r)
+  M.roll = nil
 end
 
--- Drop a session once its item is handed out. Active alias follows the
--- remaining sessions (or nil when none are left). Disarms the roll
--- clock: every award/cancel path funnels through here, so a dead roll
--- can never auto-finish late. (Parked finish sessions keep no timer —
--- Finish disarms before parking; ties re-arm explicitly.)
-function M.DropSession(sess)
-  if not sess then return end
-  M.CancelRollTimer(sess)
-  local k = sessKey(sess)
-  if M.parkedSessions and k
-      and M.parkedSessions[k] == sess then
-    M.parkedSessions[k] = nil
-  end
-  if M.sessions and k and M.sessions[k] == sess then
-    M.sessions[k] = nil
-  end
-  if M.session == sess then
-    M.session = nil
-    if M.sessions then
-      for _, other in pairs(M.sessions) do
-        if other then M.session = other break end
-      end
-    end
-  end
-end
-
--- Discard a FINISHED roll's parked state so a fresh roll starts clean:
--- the parked session (a later Continue must re-attach the NEW roll,
--- never resurrect the old one) and its pending award menu (awarding
--- off stale winners must be impossible). Live sessions are untouched —
--- callers refuse those before starting anything fresh.
-function M.DiscardParkedRoll(itemID)
-  if not itemID then return end
-  local psess = M.ParkedSession and M.ParkedSession(itemID) or nil
-  if psess then M.DropSession(psess) end
-  local ck = M.RollKey(itemID)
-  local deadAlias = false
-  if M.pendingAwardMenus and M.pendingAwardMenus[ck] then
-    if M.pendingAwardMenu == M.pendingAwardMenus[ck] then
-      deadAlias = true
-    end
-    M.pendingAwardMenus[ck] = nil
-  end
-  if deadAlias then
-    -- The alias died with this item's menu: re-point it at any
-    -- surviving menu (AwardChosen's legacy fallback), else clear it.
-    M.pendingAwardMenu = nil
-    if M.pendingAwardMenus then
-      for _, other in pairs(M.pendingAwardMenus) do
-        if other then M.pendingAwardMenu = other break end
-      end
-    end
-  end
-end
 
 -- Raid roster for raid-roll numbering: ordered raid member names
 -- (RollFor parity: [1]:Name, [2]:Name, ...). Solo falls back to self.
@@ -199,27 +84,28 @@ end
 -- in range 1-N counts (everyone else's chat rolls are ignored); the
 -- number indexes the frozen roster. Finish/award reuse the normal path
 -- (winner menu with the single raid-roll winner).
-function M.StartRaidRoll(linkText)
+function M.StartRaidRoll(itemID)
   if not M.RequireML() then return end
-  local itemID = Z.Util.ItemID(linkText)
+  itemID = Z.Util.ItemID(itemID)
   if not itemID then Z.Print("Usage: /zl rr <itemlink>") return end
-  if M.SessionFor(itemID) and M.SessionFor(itemID).itemID == itemID then
-    Z.Print("A roll is already running for this item — finish or /zl cr first.")
+  if M.roll then
+    Z.Print("A roll is already running — finish, award, or close it first.")
     return
   end
-  if M.session then
-    Z.Print("A roll is already running (" .. tostring(M.session.itemID)
-      .. ") — finish, /zl cr, or close it first.")
-    return
+  local link = "item:" .. tostring(itemID)
+  if Z.LootWindow then
+    local it = Z.LootWindow.Find(itemID)
+    if it and it.link then link = it.link end
   end
   local roster = M.RaidRoster()
   if Z.Util.ArrayCount(roster) == 0 then
     Z.Print("Nobody in the raid to roll for.")
     return
   end
-  local sess = M.BeginSession(itemID, linkText, "RAIDROLL", false)
-  sess.roster = roster -- frozen: leavers/joiners mid-roll change nothing
-  sess.n = Z.Util.ArrayCount(roster)
+  local roll = M.BeginRoll(itemID, link, "RAIDROLL", false)
+  if not roll then return end
+  roll.roster = roster -- frozen: leavers/joiners mid-roll change nothing
+  roll.n = Z.Util.ArrayCount(roster)
   -- Numbered raid, chunked so no chat line exceeds limits.
   local buf = ""
   for i = 1, Z.Util.ArrayCount(roster) do
@@ -237,8 +123,8 @@ function M.StartRaidRoll(linkText)
   end
   -- The ML rolls 1-N: RandomRoll pops the standard roll frame AND the
   -- system message our intake reads (same as any /roll).
-  if RandomRoll then RandomRoll(1, sess.n) end
-  return sess
+  if RandomRoll then RandomRoll(1, roll.n) end
+  return roll
 end
 
 -- ML initiates a roll for one loot-window item (loot list Roll button or
@@ -248,18 +134,15 @@ end
 -- Sequential holds: exactly one roll runs at a time. A finished roll is
 -- parked (not live), so rolling ANOTHER item is fine — but re-rolling the
 -- same item needs finish/cancel first.
-function M.StartItemRoll(itemIDorLink, kind)
+-- ML initiates a roll for one loot-window item (loot list Roll button).
+-- Live corpse rows only; sim rows go via Sim. Exactly one roll runs at
+-- a time: an open roll refuses (finish, award, or close it first).
+function M.StartItemRoll(itemIDorLink)
   if not M.RequireML() then return end
   local itemID = Z.Util.ItemID(itemIDorLink)
   if not itemID then Z.Print("Usage: /zl roll <itemlink|itemID>") return end
-  if M.SessionFor(itemID) and M.SessionFor(itemID).itemID == itemID then
-    Z.Print("A roll is already running for this item — finish or /zl cr first.")
-    return
-  end
-  if M.session then
-    local liveID = M.session.itemID
-    Z.Print("A roll is already running (" .. tostring(liveID)
-      .. ") — finish, /zl cr, or close it first.")
+  if M.roll then
+    Z.Print("A roll is already running — finish, award, or close it first.")
     return
   end
   local link = itemIDorLink
@@ -275,460 +158,189 @@ function M.StartItemRoll(itemIDorLink, kind)
   if type(link) ~= "string" or not string.find(link, "item:") then
     link = "item:" .. tostring(itemID)
   end
-  M.BeginSession(itemID, link, "SR", false)
+  return M.BeginRoll(itemID, link, "SR", false)
 end
 
-function M.OnRollAns(msg, sender)
-  -- ROLL_ANS:<session>:<name>:<rollType> — auto-roll path confirmation.
-  local sid = tonumber(string.match(msg, "ROLL_ANS:(%d+):") or "")
-  if not sid then return end
-  if M.sessions then
-    for _, sess in pairs(M.sessions) do
-      if sess and sess.id == sid then
-        -- Auto answer counts as intent; real /roll still decides the number.
-        return
-      end
-    end
-  end
-  if M.session and sid == M.session.id then return end
-end
-
--- Parse one system roll line, live or echoed: "Name rolls 42 (1-100)"
--- -> player, roll, minR, maxR (nil when the line is not a roll).
--- Pure helper (headless-testable): the single parser behind the live
--- CHAT_MSG_SYSTEM intake and the sim chat echoes — one format, one
--- reader, so fakes register exactly like real /rolls.
-function M.ParseSystemRoll(text)
-  local player, roll, minR, maxR =
-    string.match(tostring(text or ""), "(.+) rolls (%d+) %((%d+)%-(%d+)%)")
-  if not player then return nil end
-  return player, tonumber(roll), tonumber(minR), tonumber(maxR)
-end
-
--- One intake for every roll line: parse, then route (raid-roll number
--- vs normal roll). Live chat arrives via OnEvent; sim fakes arrive via
--- EchoSimRoll with identical text. No live session = no intake.
+-- Chat intake. Rolls land on THE roll while its window is open --
+-- fake or real, no difference. Window closed (M.roll nil) = no intake.
+-- "Name rolls 42 (1-100)" -> player, roll, minR, maxR.
 function M.IntakeChatRoll(line)
-  if not M.session then return end
-  local player, roll, minR, maxR = M.ParseSystemRoll(line)
-  if player then M.OnSystemRoll(player, roll, minR, maxR) end
-end
-
--- Simulated roll echo: "<name> rolls <r> (<min>-<max>)" through the
--- SHARED chat fan-out, marked echo (ML-local ZugLoot log even in a
--- group — the group never sees fakes), then registered through the
--- normal chat intake, exactly like a real /roll. sess pins the expected
--- session: a dead/parked session's echo is dropped (never printed,
--- never routed).
-function M.EchoSimRoll(sess, player, roll, minR, maxR)
-  if not sess then return end
-  if M.session ~= sess then return end
-  local line = tostring(player) .. " rolls " .. tostring(roll)
-    .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")"
-  if Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false, true)
-  else Z.Print(line) end
-  M.IntakeChatRoll(line)
-end
-
--- Rolls land on the ACTIVE corpse's session. Parked corpses keep their
--- own sessions but collect no chat while parked (their window is closed);
--- re-looting resumes them via the cache. M.session always belongs to the
--- active corpse, so no routing table is needed.
-function M.OnSystemRoll(player, roll, minR, maxR)
-  if not M.session then return end
-  -- Raid-roll intake: ONLY the ML's own roll in range 1-N counts, and it
-  -- indexes the frozen roster (RollFor parity). Everyone else's chat
-  -- rolls are ignored — raiders don't roll for themselves here.
-  if M.session.mode == "RAIDROLL" then
-    M.OnRaidRollNumber(player, roll, minR, maxR)
+  local roll = M.roll
+  if not roll then return end
+  local player, rv, minR, maxR =
+    string.match(tostring(line or ""), "(.+) rolls (%d+) %((%d+)%-(%d+)%)")
+  if not player then return end
+  rv, minR, maxR = tonumber(rv), tonumber(minR), tonumber(maxR)
+  -- Raid-roll: ONLY the ML's own number in range 1-N counts; it picks
+  -- the frozen roster winner and the roll ends at once.
+  if roll.mode == "RAIDROLL" then
+    local n = roll.n or Z.Util.ArrayCount(roll.roster or {})
+    if roll.done or minR ~= 1 or maxR ~= n then return end
+    local me = UnitName and UnitName("player") or nil
+    local mlName = Z.SRSecurity and Z.SRSecurity.MasterLooterName
+      and Z.SRSecurity.MasterLooterName() or nil
+    if player ~= me and player ~= mlName then return end
+    if not roll.roster or not roll.roster[rv] then return end
+    roll.done = true
+    M.AddRoll(roll.roster[rv], rv, 1, Z.Caps.SR)
+    M.FinishRoll()
     return
   end
-  M.ApplySystemRoll(M.session, player, roll, minR, maxR)
+  M.AddRoll(player, rv, minR, maxR)
 end
 
--- Resolve one ML raid-roll number into the frozen roster winner.
--- Guards: sender must be the ML (or self in a solo test), range exactly
--- 1-N, number in bounds, first number only.
-function M.OnRaidRollNumber(player, roll, minR, maxR)
-  local sess = M.session
-  if not sess or sess.mode ~= "RAIDROLL" then return end
-  if sess.raidRolled then return end -- first number only
-  local n = sess.n or Z.Util.ArrayCount(sess.roster or {})
-  if minR ~= 1 or maxR ~= n then return end
-  local me = UnitName and UnitName("player") or nil
-  local mlName = M.MasterLooterName and M.MasterLooterName() or nil
-  if player ~= me and player ~= mlName then return end
-  if not sess.roster or not sess.roster[roll] then return end
-  sess.raidRolled = true
-  local winner = sess.roster[roll]
-  -- Detect the winner number through the CHAT intake (never a hidden
-  -- list insert): echo the ML's number line on the local frame, then
-  -- register it like any roll — the number lands on sess.rolls via
-  -- ApplySystemRoll + DetailOnRoll, and finish/award reuse the standard
-  -- path (menu with the single raid-roll winner).
-  -- The raid-roll range is 1-N, not a roll KIND range: echo as 1-100 so
-  -- the intake reads it as a plain MS roll (never SR/OS/TMOG).
-  local line = tostring(winner) .. " rolls " .. tostring(roll) .. " (1-100)"
-  if Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false, true)
-  else Z.Print(line) end
-  M.ApplySystemRoll(sess, winner, roll, 1, Z.Caps.SR)
-  M.Finish(true, sess.itemID)
-end
-
--- Invented-name fence: rehearsal rollers must never read as sheet state.
--- A session carrying sess.invented skips every sheet touch for those
--- names (SR typing, won flags, bonuses) — the real sheet stays pristine
--- while it stays loaded.
-function M.IsInvented(sess, name)
-  if not (sess and sess.invented and name) then return false end
-  for i = 1, Z.Util.ArrayCount(sess.invented) do
-    if sess.invented[i] == name then return true end
+-- SR+ bonus for a reserve holder's SR roll, else 0. Single lookup so
+-- the stored roll, both windows, and the award all see one number.
+function M.SRBonus(itemID, player, rtype)
+  if rtype ~= "SR" then return 0 end
+  if Z.DB.sheet and Z.SRData.GetRollers then
+    local rollers = Z.SRData.GetRollers(Z.DB.sheet, itemID)
+    for i = 1, Z.Util.ArrayCount(rollers) do
+      if rollers[i].name == player then return rollers[i].sr_plus or 0 end
+    end
   end
-  return false
+  return 0
 end
 
--- Core roll intake for ONE session (pure session target, no routing).
-function M.ApplySystemRoll(sess, player, roll, minR, maxR)
-  -- First-roll-only.
-  for i = 1, Z.Util.ArrayCount(sess.rolls) do
-    if sess.rolls[i].name == player then return end
+-- One roll lands on the open roll (first-roll-only). The RANGE the
+-- player chose decides the kind; 1-100 is SR only for reserve holders,
+-- otherwise MS. Sheet lookups here so window, award, and resolver all
+-- see the same kind.
+function M.AddRoll(player, rv, minR, maxR)
+  local roll = M.roll
+  if not roll or (roll.itemID == nil) then return end
+  for i = 1, Z.Util.ArrayCount(roll.rolls) do
+    if roll.rolls[i].name == player then return end
   end
-  -- Roll kind: the RANGE the player chose decides SR/MS vs OS vs TMOG,
-  -- but 1-100 is SR only when they hold the reserve on this item —
-  -- otherwise it is an MS roll. (Sheet lookup here so the roll window,
-  -- award menu and resolver all see the same kind.) Invented rehearsal
-  -- names skip the sheet: a fake 1-100 is MS, never SR.
   local rtype = "MS"
   if minR == 1 and maxR == Z.Caps.OS then rtype = "OS"
   elseif minR == 1 and maxR == Z.Caps.TMOG then rtype = "TMOG"
   elseif minR == 1 and maxR == Z.Caps.SR then
     rtype = "MS"
-    if not M.IsInvented(sess, player)
-        and Z.DB.sheet and Z.SRData.GetRollers then
-      local rollers = Z.SRData.GetRollers(Z.DB.sheet, sess.itemID)
+    if Z.DB.sheet and Z.SRData.GetRollers then
+      local rollers = Z.SRData.GetRollers(Z.DB.sheet, roll.itemID)
       for i = 1, Z.Util.ArrayCount(rollers) do
         if rollers[i].name == player then rtype = "SR" break end
       end
     end
   end
-  -- Record the /roll range used (56/98 for a TMOG roll) + the SR-bonus
-  -- effective: the ML roll window shows each roll with its max.
-  local bonus = 0
-  if Z.DB.sheet and rtype == "SR" and not M.IsInvented(sess, player)
-      and Z.SRData.GetRollers then
-    local rollers = Z.SRData.GetRollers(Z.DB.sheet, sess.itemID)
-    for i = 1, Z.Util.ArrayCount(rollers) do
-      if rollers[i].name == player then bonus = rollers[i].sr_plus or 0 break end
-    end
-  end
-  table.insert(sess.rolls, { name = player, roll = roll, type = rtype,
-    min = minR, max = maxR, effective = roll + bonus })
-  -- Already-won flag is SR-only info (MS/OS/TMOG stay contestable); the
-  -- live list shows it, the resolver enforces it per kind. Invented
-  -- names never consult won marks.
-  local excluded = false
-  if rtype == "SR" and not M.IsInvented(sess, player)
-      and Z.DB.sheet and Z.SRData.HasWon then
-    excluded = Z.SRData.HasWon(Z.DB.sheet, sess.itemID, player)
-  end
+  local bonus = M.SRBonus(roll.itemID, player, rtype)
+  table.insert(roll.rolls, { name = player, roll = rv, type = rtype,
+    min = minR, max = maxR, effective = rv + bonus })
   if Z.RaiderLootUI then
-    Z.RaiderLootUI.OnRoll(player, roll, rtype, excluded)
+    local excluded = rtype == "SR" and Z.DB.sheet and Z.SRData.HasWon
+      and Z.SRData.HasWon(Z.DB.sheet, roll.itemID, player) or false
+    Z.RaiderLootUI.OnRoll(player, rv, rtype, excluded)
   end
-  -- The open row detail is the ML roll window: show the roll + its kind.
-  -- Effective mirrors the resolver (SR bonus when the sheet knows them).
-  if Z.LootWindow and Z.LootWindow.DetailOnRoll then
-    local eff = roll
-    if Z.DB.sheet and rtype == "SR" and not M.IsInvented(sess, player) then
-      local rollers = Z.SRData.GetRollers(Z.DB.sheet, sess.itemID)
-      for i = 1, Z.Util.ArrayCount(rollers) do
-        if rollers[i].name == player then
-          eff = roll + (rollers[i].sr_plus or 0)
-          break
-        end
-      end
-    end
-    Z.LootWindow.DetailOnRoll(sess.itemID, sess.id, player, roll, rtype, eff,
-      minR, maxR)
+  -- The ML window mirrors the same roll (missed updates resync it whole).
+  if Z.LootWindow and Z.LootWindow.SyncRoll then
+    Z.LootWindow.SyncRoll(roll, "feed:" .. tostring(player))
   end
 end
 
--- Finish/cancel target one item's roll without touching the others.
--- No arg = the active (open) item; /zl fr|cr keep working untouched.
--- After a finish the session parks (roll ended, award pending): Finish
--- flips the rolling view to winners on that item's detail, parked or open.
-function M.ActiveItemID()
-  if Z.LootWindow and Z.LootWindow.detail then
-    return Z.LootWindow.detail.itemID
-  end
-  if M.session then return M.session.itemID end
-  return nil
-end
 
-function M.FinishEarly(itemID) M.Finish(true, itemID) end
+-- Cancel the open roll: intake dead, clock dead, row back to open. The
+-- window itself is LootWindow's job (it drops back to pick for a
+-- re-roll choice). Cancelling kills the clock: a dead roll must never
+-- auto-finish late.
 function M.Cancel(itemID)
-  -- Parked sessions count: an inline-finished roll parks before the menu
-  -- pends, so cancelling "the roll" must find it parked (SessionAny
-  -- covers live + parked; SessionFor covers live only).
-  local sess = M.SessionFor(itemID) or M.session
-  if not sess and itemID then sess = M.ParkedSession(itemID) end
-  if not sess then Z.Print("No active session.") return end
-  local wasSilent = sess.silent
-  local itemID = sess.itemID
-  local sessionID = sess.id
-  local ck = M.RollKey(itemID)
-  if M.pendingAwardMenus then M.pendingAwardMenus[ck] = nil end
-  if not M.pendingAwardMenus then M.pendingAwardMenu = nil end
-  -- Cancelling kills the clock (a dead roll must never auto-finish).
-  M.CancelRollTimer(sess)
-  M.DropSession(sess)
+  local roll = M.roll
+  if not roll then Z.Print("No active roll.") return end
+  if itemID and roll.itemID ~= itemID then Z.Print("No active roll.") return end
+  itemID = roll.itemID
+  M.CancelRollTimer(roll)
+  M.roll = nil
   Z.Print("Roll cancelled.")
-  if Z.LootWindow and itemID then Z.LootWindow.MarkOpen(itemID) end
-  -- A rolling detail whose session just died can never receive rolls
-  -- or a finish: close it outright (CloseDetail parks rolling state, so
-  -- call it directly — ParkDetail's live-session check would re-park a
-  -- parked session as rolling and resurrect the window).
-  -- A same-item detail that is NOT rolling (award menu etc.) is untouched.
-  if Z.LootWindow and Z.LootWindow.detail
-      and Z.LootWindow.detail.itemID == itemID then
-    if (Z.LootWindow.detail.phase or "pick") == "rolling" then
-      -- A dead roll paints no clock: clear it before CloseDetail parks
-      -- the snapshot (a bare /zl cr skips doAction's own cleanup).
-      Z.LootWindow.detail.countdown = nil
-      Z.LootWindow.detail.countdownDur = nil
-      if Z.LootWindow.DropParked then Z.LootWindow.DropParked(itemID) end
-      Z.LootWindow.CloseDetail()
-    elseif Z.LootWindow.detail.sessionID == sessionID then
-      Z.LootWindow.detail.phase = "pick"
-      Z.LootWindow.detail.sessionID = nil
-      Z.LootWindow.detail.rolls = {}
-      Z.LootWindow.detail.menu = nil
-      Z.LootWindow.detail.countdown = nil
-      Z.LootWindow.detail.countdownDur = nil
-      Z.LootWindow.detail.status = "open"
-      Z.LootWindow.RefreshDetail()
-    end
-  end
   if Z.RaiderLootUI then Z.RaiderLootUI.Hide() end
-  -- A cancelled sim item returns to the queue head for a re-roll.
-  -- Rehearsal rolls just drop their queue entry (row back to open; the
-  -- ML re-rolls by hand or re-loots the corpse).
-  if wasSilent and Z.Sim and Z.Sim.Requeue then
-    local isReh = Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID)
-    if not isReh then Z.Sim.Requeue(itemID) end
+  if Z.LootWindow and Z.LootWindow.MarkOpen then
+    Z.LootWindow.MarkOpen(itemID)
   end
 end
 
--- SHARED roll timer: every roll (live master loot, sim, rehearsal)
--- runs on the same clock. BeginSession arms it; when time runs out the
--- roll auto-finishes (ties re-arm for the re-roll round, Continue
--- re-arms for the continued roll). The ML can always Finish early, and
--- Cancel/Award/Drop disarm. Handles live on the session table (one per
--- item, so multi-roll items never cross-fire). Headless-safe: without
--- the Timer module there is no auto-finish (tests + the ML drive
--- Finish by hand).
+-- The roll clock. Arms at BeginRoll; timeout finishes the roll.
+-- Cancel/Award/End disarm. Guard: only the CURRENT open roll for THIS
+-- item may fire -- anything else is a dead handle from a closed window.
+-- Headless-safe: without the Timer module there is no auto-finish.
 function M.RollDuration()
   return (Z.DB and tonumber(Z.DB.rollTime)) or 15
 end
-function M.BeginRollTimer(sess)
-  if not sess then return end
-  M.CancelRollTimer(sess)
+function M.BeginRollTimer(roll)
+  if not roll then return end
+  M.CancelRollTimer(roll)
   if not (Z.Timer and Z.Timer.After) then return end
   local dur = M.RollDuration()
-  sess.rollDur = dur
-  sess.rollLeft = dur
+  roll.rollDur = dur
+  roll.rollLeft = dur
   local function autoFinish()
-    sess.rollTimer = nil
-    -- Strictly the live table: parked/awarded/cancelled/shelved
-    -- sessions never auto-finish late.
-    local live = M.sessions and sess.key ~= nil
-      and M.sessions[sess.key] == sess
-    if not live and M.session == sess then live = true end
-    if not live then return end
-    -- Scheduled echoes still in flight (same-tick tie with the last
-    -- feed under coarse OnUpdate steps): defer a beat, don't cut the
-    -- roll off before its last fake lands.
-    if (sess.feedsPending or 0) > 0 and Z.Timer and Z.Timer.After then
-      sess.rollTimer = Z.Timer.After(0.5, autoFinish)
-      return
-    end
-    M.Finish(true, sess.itemID)
+    roll.rollTimer = nil
+    if M.roll ~= roll then return end -- window closed: dead handle
+    M.FinishRoll()
   end
-  sess.rollTimer = Z.Timer.After(dur, autoFinish)
-  -- Seed the paint at once (full window, never one tick late): each
-  -- roll flip sets d.countdown itself, but the live BeginSession path
-  -- and tie re-arms route only through here — the phase guard makes
-  -- the pre-flip call a harmless no-op.
+  roll.rollTimer = Z.Timer.After(dur, autoFinish)
   if Z.LootWindow then
     local LW = Z.LootWindow
     local d = LW.detail
-    if d and d.itemID == sess.itemID and (d.phase or "pick") == "rolling" then
+    if d and d.itemID == roll.itemID and (d.phase or "pick") == "rolling" then
       d.countdown = dur
       d.countdownDur = dur
       if LW.RefreshDetail then LW.RefreshDetail() end
     end
   end
-  -- 1s ticker: ML details showing this roll paint the live countdown
-  -- (open or parked-rolling: multi-roll timed state lands on the
-  -- closed item's saved copy too, exactly like timed rolls do).
   local function tick()
-    sess.clockTick = nil
-    local live = M.sessions and sess.key ~= nil
-      and M.sessions[sess.key] == sess
-    if not live and M.session == sess then live = true end
-    if not live then return end
-    sess.rollLeft = (sess.rollLeft or dur) - 1
-    if sess.rollLeft < 0 then sess.rollLeft = 0 end
+    roll.clockTick = nil
+    if M.roll ~= roll then return end -- window closed: dead handle
+    roll.rollLeft = (roll.rollLeft or dur) - 1
+    if roll.rollLeft < 0 then roll.rollLeft = 0 end
     if Z.LootWindow then
       local LW = Z.LootWindow
-      local function paintDetail(d)
-        if d and d.itemID == sess.itemID
-            and (d.phase or "pick") == "rolling" then
-          d.countdown = sess.rollLeft
-          d.countdownDur = dur
-        end
-      end
-      paintDetail(LW.detail)
-      if LW.parked then
-        local pk = M.RollKey(sess.itemID)
-        paintDetail(LW.parked[pk])
-        paintDetail(LW.parked[sess.itemID])
+      local d = LW.detail
+      if d and d.itemID == roll.itemID and (d.phase or "pick") == "rolling" then
+        d.countdown = roll.rollLeft
+        d.countdownDur = dur
       end
       if LW.RefreshDetail then LW.RefreshDetail() end
     end
-    if sess.rollLeft > 0 and Z.Timer and Z.Timer.After then
-      sess.clockTick = Z.Timer.After(1, tick)
+    if roll.rollLeft > 0 and Z.Timer and Z.Timer.After then
+      roll.clockTick = Z.Timer.After(1, tick)
     end
   end
-  sess.clockTick = Z.Timer.After(1, tick)
+  roll.clockTick = Z.Timer.After(1, tick)
 end
-function M.CancelRollTimer(sess)
-  if sess and sess.rollTimer then
-    if Z.Timer and Z.Timer.Cancel then Z.Timer.Cancel(sess.rollTimer) end
-    sess.rollTimer = nil
+function M.CancelRollTimer(roll)
+  if roll and roll.rollTimer then
+    if Z.Timer and Z.Timer.Cancel then Z.Timer.Cancel(roll.rollTimer) end
+    roll.rollTimer = nil
   end
-  if sess and sess.clockTick then
-    if Z.Timer and Z.Timer.Cancel then Z.Timer.Cancel(sess.clockTick) end
-    sess.clockTick = nil
-  end
-end
-
--- Park a finished-but-unawarded roll: the session leaves the live table
--- but keeps its rolls in M.parkedSessions; the award menu stays pending.
--- Continue re-attaches it so more rolls append to the SAME list.
-M.parkedSessions = nil
-function M.ParkSession(sess)
-  if not sess then return end
-  local k = sessKey(sess)
-  M.parkedSessions = M.parkedSessions or {}
-  M.parkedSessions[k] = sess
-  if M.sessions and k and M.sessions[k] == sess then
-    M.sessions[k] = nil
-  end
-  if M.session == sess then
-    M.session = nil
-    if M.sessions then
-      for _, other in pairs(M.sessions) do
-        if other then M.session = other break end
-      end
-    end
+  if roll and roll.clockTick then
+    if Z.Timer and Z.Timer.Cancel then Z.Timer.Cancel(roll.clockTick) end
+    roll.clockTick = nil
   end
 end
 
--- The live session table, parked or not: parked sessions stay
--- resolvable for award/continue decisions while collecting no rolls.
-function M.SessionAny(itemID)
-  if not itemID then return M.session end
-  local k = M.RollKey(itemID)
-  if M.sessions and M.sessions[k] then return M.sessions[k] end
-  if M.parkedSessions and M.parkedSessions[k] then
-    return M.parkedSessions[k]
-  end
-  return nil
-end
-
--- Re-attach a parked session so a continued roll appends to the same list.
-function M.UnparkSession(sess)
-  if not sess then return end
-  local k = sessKey(sess)
-  if M.parkedSessions and M.parkedSessions[k] == sess then
-    M.parkedSessions[k] = nil
-  end
-  M.sessions = M.sessions or {}
-  M.sessions[k] = sess
-  M.session = sess
-  -- Continued roll, continued clock: more rolls get a full window.
-  M.BeginRollTimer(sess)
-end
-
--- A parked session by item (nil once awarded/cancelled).
-function M.ParkedSession(itemID)
-  if itemID and M.parkedSessions then
-    local k = M.RollKey(itemID)
-    if M.parkedSessions[k] then return M.parkedSessions[k] end
-    -- Unscoped lookup (walk-back before the corpse re-pins): exactly one
-    -- parked session for this item returns it; two corpses = ambiguous,
-    -- nil (the pinned path above owns that case).
-    local found = nil
-    for _, s2 in pairs(M.parkedSessions) do
-      if s2 and s2.itemID == itemID then
-        if found then return nil end
-        found = s2
-      end
-    end
-    return found
-  end
-  return nil
-end
-
--- Returns "tie" (session left open for re-rolls), "awaiting" (sim awards
--- pending ML confirmation), or "closed". Live callers ignore the result.
--- Targets one item's session: no arg finishes the ACTIVE (open) item; pass
--- an itemID to finish a held roll. A clean finish PARKS the session (roll
--- ended, award pending): more rolls can't land on it, but Continue
--- re-attaches it explicitly.
-function M.Finish(manual, itemID)
-  local sess = M.SessionFor(itemID) or M.session
-  if not sess then Z.Print("No active session.") return "closed" end
-  M.session = sess
+-- Finish the open roll: resolve it and hand the award to the ML on
+-- the SAME window (rolling view flips to winners). Ties stay open for
+-- a re-roll round. The roll ends here either way for intake purposes:
+-- FinishRoll clears M.roll FIRST so no late roll can land mid-resolve;
+-- the window keeps the landed rolls for the award. Returns "tie" (still
+-- open for re-rolls) or "awarded"/"finished".
+function M.FinishRoll(itemID)
+  local roll = M.roll
+  if not roll then Z.Print("No active roll.") return "closed" end
+  if itemID and roll.itemID ~= itemID then return "closed" end
+  M.EndRoll()
   local sheet = Z.DB and Z.DB.sheet
-  -- Single resolution path: the sheet is input (SR holders + bonuses),
-  -- never a mode switch. Kind priority SR > MS > OS always.
-  local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} }, sess.itemID, sess.rolls,
-    { cap = Z.Caps.SR, itemCount = sess.itemCount })
-  M.AnnounceResult(sess, res)
+  local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} },
+    roll.itemID, roll.rolls, { cap = Z.Caps.SR })
+  M.AnnounceResult(roll, res)
+  local data = M.AwardMenu(roll.itemID, roll.itemLink, res)
+  if Z.LootWindow and Z.LootWindow.DetailOnFinish then
+    Z.LootWindow.DetailOnFinish(roll.itemID, data)
+  end
   if Z.Util.ArrayCount(res.tied) > 0 then
     Z.Print("Tie at top — tied players re-roll.")
-    -- Tie round: the clock restarts so the re-roll gets a full window.
-    -- Silent (sim/rehearsal) ties auto-schedule fresh fakes for the
-    -- tied subset; live ties wait for real re-rolls by hand.
-    M.BeginRollTimer(sess)
-    if sess.silent and Z.Sim and Z.Sim.OnTie then Z.Sim.OnTie(sess) end
-    return "tie" -- keep session open for tie re-rolls (extra rolls ignored for others)
+    return "tie"
   end
-  local data = M.BuildAwardMenu(sess, res)
-  -- Finished: disarm the clock, then park the session (award stays
-  -- pending, but the roll is closed for new rolls — Continue
-  -- re-attaches it explicitly).
-  M.CancelRollTimer(sess)
-  M.ParkSession(sess)
-  -- The open row detail becomes the award window (RollFor: rolling view
-  -- flips to winners). Falls back to the standalone menu when the roll
-  -- was started outside the window (/rf etc.).
-  if Z.LootWindow and Z.LootWindow.DetailOnFinish then
-    Z.LootWindow.DetailOnFinish(sess.itemID, data)
-  end
-  if sess.silent then
-    -- Sim: hand the menu to the ML (headless: the harness plays the ML
-    -- via AwardChosen); the award flow owns continuation. Inline finish
-    -- (no timers): the menu MUST be pending on return — PresentAwardMenu
-    -- never defers, it only stores (popup confirm happens at award).
-    M.PresentAwardMenu(sess, data, true)
-    return "awaiting"
-  end
-  M.PresentAwardMenu(sess, data, false)
-  -- Menu stays pending: the ML awards, continues, or cancels. Callers
-  -- must check M.session / the pending menus.
-  return "awaiting"
+  return "finished"
 end
 
 -- Class-colored display name. Chat-bound lines stay PLAIN (no color
@@ -749,79 +361,40 @@ local function ChatName(name)
   return s
 end
 
-function M.AnnounceResult(sess, res)
-  local parts = {}
-  for i = 1, Z.Util.ArrayCount(res.ranked) do
-    local e = res.ranked[i]
-    local nm = (e and e.name) or "?"
-    local s = ChatName(nm) .. " " .. tostring(e and e.base)
-    if e and e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. e.effective .. ")" end
-    table.insert(parts, s)
-  end
-  if Z.Util.ArrayCount(res.missrolls) > 0 then
-    local mm = {}
-    for i = 1, Z.Util.ArrayCount(res.missrolls) do table.insert(mm, ChatName(res.missrolls[i].name)) end
-    table.insert(parts, "missrolls: " .. table.concat(mm, ","))
-  end
-  -- Already-won rollers can't win again but stay visible.
-  local excl = res.excluded or {}
-  if Z.Util.ArrayCount(excl) == 0 and res.entries then
-    for i = 1, Z.Util.ArrayCount(res.entries) do
-      local e = res.entries[i]
-      if e.excludedWon and not e.missroll then table.insert(excl, e) end
-    end
-  end
-  if Z.Util.ArrayCount(excl) > 0 then
-    local xm = {}
-    for i = 1, Z.Util.ArrayCount(excl) do
-      local e = excl[i]
-      local s = ChatName(e.name) .. " " .. tostring(e.base)
-      if e.sr_plus and e.sr_plus > 0 then s = s .. "(+" .. e.sr_plus .. "=" .. (e.effective or e.base) .. ")" end
-      table.insert(xm, s .. " [already won]")
-    end
-    table.insert(parts, "excluded: " .. table.concat(xm, ", "))
-  end
-  -- Pysanka-style result rollup (raid-roll parity): one line per roller
-  -- "Name: roll (TYPE)", then the winner line. Plain names, plain text —
-  -- other clients' logs stay clean and ours stays greppable. Uses the
-  -- full entry list (ranked is best-per-player only — every roll shows).
-  local itemTxt = sess.dispName or sess.itemLink or ("item:" .. tostring(sess.itemID))
-  local rollList = res.entries or res.ranked or {}
-  -- Excluded (already-won) rollers stay visible with their tag — same
-  -- info the old rollup carried, appended to their roll line.
-  local function exclTag(e)
-    if e and e.excludedWon and not e.missroll then return " [already won]" end
-    if e and e.missroll then return " [miss — no SR]" end
-    return ""
-  end
-  if Z.Comm and Z.Comm.SayGroup then
-    for i = 1, Z.Util.ArrayCount(rollList) do
-      local e = rollList[i]
-      local nm = (e and e.name) or "?"
-      local kind = (e and e.rollType) or "MS"
-      Z.Comm.SayGroup(ChatName(nm) .. ": " .. tostring(e and (e.base or e.roll))
-        .. " (" .. tostring(kind) .. ")" .. exclTag(e))
-    end
-  else
-    Z.Print("ZugLoot result [" .. tostring(itemTxt) .. "]: " .. table.concat(parts, " | "))
-  end
-  if Z.Util.ArrayCount(res.winners) > 0 then
+-- One line per finished roll: who won (or tie / no winner). The window
+-- already shows every roll with its kind — chat gets the verdict only.
+function M.AnnounceResult(roll, res)
+  local itemTxt = M.DisplayItemLink(roll.itemID, roll.itemLink)
+  local winners = res.winners or {}
+  if Z.Util.ArrayCount(winners) > 0 then
     local w = {}
-    for i = 1, Z.Util.ArrayCount(res.winners) do table.insert(w, PName(res.winners[i].name) .. " (" .. res.winners[i].effective .. ")") end
-    -- LootBlare-style top-screen banner for the local player.
-    if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
-      Z.RaiderLootUI.ShowResult("The winner is " .. table.concat(w, ", ") .. " !")
+    for i = 1, Z.Util.ArrayCount(winners) do
+      table.insert(w, ChatName(winners[i].name) .. " (" .. tostring(winners[i].effective) .. ")")
     end
+    local line = tostring(itemTxt) .. " won by " .. table.concat(w, ", ")
+    if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
+    if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
+      local bw = {}
+      for i = 1, Z.Util.ArrayCount(winners) do table.insert(bw, PName(winners[i].name)) end
+      Z.RaiderLootUI.ShowResult("The winner is " .. table.concat(bw, ", ") .. " !")
+    end
+  elseif Z.Util.ArrayCount(res.tied) > 0 then
+    local t = {}
+    for i = 1, Z.Util.ArrayCount(res.tied) do table.insert(t, ChatName(res.tied[i].name)) end
+    local line = tostring(itemTxt) .. ": tie between " .. table.concat(t, ", ") .. " — re-roll."
+    if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
   else
+    local line = tostring(itemTxt) .. ": no eligible rolls."
+    if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
     if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
       Z.RaiderLootUI.ShowResult("No winner this time.")
     end
   end
-  -- Persist the session into per-item roll history (survives the session).
-  -- Same shape the sim writes (Resolver.ToHistoryEntry). Rehearsal
-  -- sessions skip this entirely: invented rolls must never enter the
-  -- real sheet's history (or plant unreserved stubs on it).
-  if sess.invented then
+  -- Persist the roll into per-item roll history. Same shape the sim
+  -- writes (Resolver.ToHistoryEntry). Rehearsal rolls skip this
+  -- entirely: invented rolls must never enter the real sheet's history
+  -- (or plant unreserved stubs on it).
+  if roll.invented then
     if Z.MainWindow then Z.MainWindow.Refresh() end
   elseif Z.DB and Z.DB.sheet and Z.SRData.RecordRolls then
     -- Item rolled but never SR'd: stub it onto the sheet so it shows at the
@@ -829,15 +402,15 @@ function M.AnnounceResult(sess, res)
     if Z.Util.ArrayCount(res.entries or {}) > 0 and Z.SRData.EnsureUnreserved then
       local q = nil
       if GetItemInfo then
-        local _, _, qq = GetItemInfo(tonumber(sess.itemID))
+        local _, _, qq = GetItemInfo(tonumber(roll.itemID))
         q = qq
       end
-      if Z.SRData.EnsureUnreserved(Z.DB.sheet, sess.itemID, q) then
-        Z.Print("Note: " .. tostring(sess.dispName or sess.itemLink or sess.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
+      if Z.SRData.EnsureUnreserved(Z.DB.sheet, roll.itemID, q) then
+        Z.Print("Note: " .. tostring(roll.itemLink or roll.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
       end
     end
-    Z.SRData.RecordRolls(Z.DB.sheet, sess.itemID,
-      Z.Resolver.ToHistoryEntry(res, sess.mode, (time and time()) or 0))
+    Z.SRData.RecordRolls(Z.DB.sheet, roll.itemID,
+      Z.Resolver.ToHistoryEntry(res, roll.mode, (time and time()) or 0))
     if Z.MainWindow then Z.MainWindow.Refresh() end
   end
 end
@@ -858,42 +431,6 @@ end
 -- Live name -> raw class map: raid roster, party units, self (shared with
 -- the roll window via ClassColors). Values are client-reported; callers
 -- normalize. Nil-safe: {} with no client APIs.
-function M.RosterClasses()
-  if Z.ClassColors and Z.ClassColors.RosterMap then
-    return Z.ClassColors.RosterMap()
-  end
-  local map = {}
-  if GetNumRaidMembers and GetNumRaidMembers() > 0 and GetRaidRosterInfo then
-    for i = 1, GetNumRaidMembers() do
-      local name, _, _, _, _, class = GetRaidRosterInfo(i)
-      if name and name ~= "" then map[name] = class end
-    end
-  elseif GetNumPartyMembers and UnitName then
-    local me = UnitName("player")
-    if me then
-      local _, cls = nil, nil
-      if UnitClass then _, cls = UnitClass("player") end
-      map[me] = cls
-    end
-    for i = 1, GetNumPartyMembers() do
-      local n = UnitName("party" .. i)
-      if n then
-        local _, cls = nil, nil
-        if UnitClass then _, cls = UnitClass("party" .. i) end
-        map[n] = cls
-      end
-    end
-  end
-  if UnitName then
-    local me = UnitName("player")
-    if me and not map[me] then
-      local _, cls = nil, nil
-      if UnitClass then _, cls = UnitClass("player") end
-      map[me] = cls
-    end
-  end
-  return map
-end
 
 function M.BuildCandidates(sheet, sessRolls)
   -- Class-sorted roster: sheet players + seen rollers + raid roster, unique.
@@ -922,7 +459,7 @@ function M.BuildCandidates(sheet, sessRolls)
       end
     end
   end
-  local classes = M.RosterClasses()
+  local classes = (Z.ClassColors and Z.ClassColors.RosterMap and Z.ClassColors.RosterMap()) or {}
   for n in pairs(classes) do add(n) end
   local out = {}
   for i = 1, Z.Util.ArrayCount(names) do
@@ -975,10 +512,13 @@ function M.RollRange(base, rtype, eff)
   return s
 end
 
-function M.BuildAwardMenu(sess, res)
+-- Award data for the open window: winners, kind groups, per-type
+-- contests, class-sorted candidates. Pure data (itemID in, table out) --
+-- no sessions, no pending menus. The window owns it via DetailOnFinish.
+function M.AwardMenu(itemID, itemLink, res)
   local data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
     perType = {}, candidates = {}, res = res, none = false,
-    itemID = sess.itemID, itemLink = sess.itemLink, sessionID = sess.id }
+    itemID = itemID, itemLink = itemLink, sessionID = nil }
   local entries = res.entries or {}
   for i = 1, Z.Util.ArrayCount(entries) do
     local e = entries[i]
@@ -1011,7 +551,7 @@ function M.BuildAwardMenu(sess, res)
   for i = 1, Z.Util.ArrayCount(entries) do
     if entries[i] and entries[i].name then rolled[entries[i].name] = true end
   end
-  local cands = M.BuildCandidates(Z.DB and Z.DB.sheet, sess.rolls)
+  local cands = M.BuildCandidates(Z.DB and Z.DB.sheet, res.entries)
   data.candidates = {}
   for i = 1, Z.Util.ArrayCount(cands) do
     if cands[i] and cands[i].name and not rolled[cands[i].name] then
@@ -1021,66 +561,7 @@ function M.BuildAwardMenu(sess, res)
   return data
 end
 
-function M.AwardMenuLines(data)
-  local lines = {}
-  local menuName = data.itemLink
-  if Z.MasterLootUI and Z.MasterLootUI.DisplayItemLink then
-    menuName = Z.MasterLootUI.DisplayItemLink(data.itemID, data.itemLink)
-  end
-  table.insert(lines, "Award " .. tostring(menuName) .. " to?")
-  -- Each kind judged by itself (ranges: SR 100, MS 100, OS 99, TMOG 98).
-  -- Names render in class color (plain in addon chat — the client chat
-  -- frame has no FontString coloring, so colored lines would show codes).
-  for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
-    local row = (data.perType or {})[gt]
-    if row and row.entry then
-      local e = row.entry
-      table.insert(lines, "  " .. gt .. " winner: " .. PName(e.name) .. " (" .. M.RollRange(e.base, e.rollType or gt, e.effective) .. ")")
-      for t = 1, Z.Util.ArrayCount(row.tied or {}) do
-        local te = row.tied[t]
-        table.insert(lines, "    tied: " .. PName(te.name) .. " (" .. M.RollRange(te.base, te.rollType or gt, te.effective) .. ")")
-      end
-    end
-  end
-  for i = 1, Z.Util.ArrayCount(data.winners or {}) do
-    local w = data.winners[i]
-    local wr = M.RollRange(w.base, w.rollType, w.effective)
-    table.insert(lines, "  overall: " .. PName(w.name) .. " (" .. tostring(w.rollType) .. " " .. wr .. ")")
-  end
-  for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
-    local g = (data.groups or {})[gt] or {}
-    for j = 1, Z.Util.ArrayCount(g) do
-      table.insert(lines, "  " .. gt .. ": " .. PName(g[j].name) .. " (" .. M.RollRange(g[j].base, g[j].rollType or gt, g[j].effective) .. ")")
-    end
-  end
-  if data.none then table.insert(lines, "  (no eligible rolls — pick anyone or cancel)") end
-  local cands = data.candidates or {}
-  local names = {}
-  for i = 1, Z.Util.ArrayCount(cands) do
-    local c = cands[i]
-    table.insert(names, PName(c.name))
-  end
-  if Z.Util.ArrayCount(names) > 0 then
-    table.insert(lines, "  candidates: " .. table.concat(names, ", "))
-  end
-  return lines
-end
 
--- Show the award menu (RollFor finish-popup equivalent). Client builds the
--- frame with winner buttons + roll-type rows + candidate grid; headless and
--- text clients (tests, /zl text UIs) get the same rows printed so the ML
--- can answer with /zl award <name>. Pending-menu bookkeeping is the
--- caller's job (PresentAwardMenu owns it); ShowAwardMenu only renders —
--- so PresentAwardMenu can call it without recursing.
-function M.ShowAwardMenu(sess, data)
-  if Z.AwardMenuUI and Z.AwardMenuUI.Show then
-    Z.AwardMenuUI.Show(sess, data)
-    return
-  end
-  local lines = M.AwardMenuLines(data)
-  for i = 1, Z.Util.ArrayCount(lines) do Z.Print(lines[i]) end
-  Z.Print("Pick with /zl award <name> (or /zl cr to cancel).")
-end
 
 -- Display link for award UI: the readable name, never a bare item:id.
 -- Prefers the LootWindow row name (resolved at scan), else the [Name] in a
@@ -1144,7 +625,7 @@ end
 -- optimistically here — so a failed LootSlot (locked, full bags, range)
 -- leaves the row up for retry.
 function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
-  -- Session gate FIRST: no open loot session (walked away, corpse closed)
+  -- Loot gate FIRST: no open corpse (walked away, corpse closed)
   -- means no call can possibly land. Report "nolooot" so the caller logs
   -- + keeps the list intact — never touch VerifySlot/rescan, which would
   -- read an empty corpse and wipe every row.
@@ -1368,21 +849,29 @@ function M.MasterLootIndex(slot, playerName)
   return nil
 end
 
--- Direct award from the loot-window row detail: no roll, straight to the
--- single SR/HR holder (RollFor: one SR = direct award, no rolling needed).
--- source mirrors DoAward ("raid" live, "sim" for sim rows).
-function M.AwardDirect(itemID, winnerName, source)
+-- Award the item: corpse take (live) or straight apply (sim/test),
+-- then won mark, broadcast, log, print. Handed out = gone: the row
+-- leaves the list and the window closes. Awarding ends any open roll
+-- for the item FIRST (EndRoll), so deciding off the ... menu can never
+-- leave a roll collecting behind the award.
+-- invented (rehearsal): fake roller names that must never hit the sheet.
+function M.Award(itemID, winnerName, source, invented)
   if not M.RequireML() then return end
+  if not itemID or not winnerName or winnerName == "" then
+    Z.Print("Pick a recipient first.")
+    return
+  end
+  M.EndRoll(itemID)
   local link = "item:" .. tostring(itemID)
   if Z.LootWindow then
     local it = Z.LootWindow.Find(itemID)
     if it and it.link then link = it.link end
   end
-  -- Live distribution of a CORPSE row needs the corpse OPEN (master-loot
-  -- handoff moves a corpse slot; walked-away corpse = nothing to hand).
-  -- Block early with a log, keep row + menu — the ML re-loots and awards
-  -- from the still-open window. Non-row awards (/rf rolls, sim, headless)
-  -- have no corpse slot: always apply.
+  -- Live distribution of a CORPSE row needs the corpse OPEN (the
+  -- master-loot handoff moves a corpse slot; walked-away corpse =
+  -- nothing to hand). Block early with a log and keep the row — the ML
+  -- re-loots and awards from the still-open window. Sim rows and
+  -- headless awards have no corpse slot: always apply.
   if source ~= "sim" and not M.lootOpen
       and Z.LootWindow and Z.LootWindow.Find(itemID) then
     Z.Print("Not awarding " .. tostring(winnerName)
@@ -1390,45 +879,11 @@ function M.AwardDirect(itemID, winnerName, source)
     return false
   end
   -- Loot the corpse slot FIRST (the only path that moves the item): a
-  -- refused loot call (non-candidate, unresolvable slot) aborts the award
-  -- and keeps the row. Sim rows have no slot: skip straight to DoAward.
+  -- refused loot call (non-candidate, unresolvable slot) aborts the
+  -- award and keeps the row. Sim rows have no slot: skip to the apply.
   if source ~= "sim" then
     if M.LootCorpseSlot(link, itemID, winnerName) == false then return false end
   end
-  M.DoAward(itemID, link, winnerName, source == "sim" and "sim" or "raid")
-  -- Handed out = gone: the row leaves the list (live loot too, like the
-  -- corpse running dry). Stays gone until the next LOOT_OPENED / simboss.
-  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
-  -- A directly-awarded sim row leaves the roll queue as well: it must not
-  -- be rollable after being handed out. Same for a pre-roll rehearsal
-  -- award (entry dropped, continuation advances the run).
-  if Z.Sim and Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
-    if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
-        and Z.Sim.afterRehearsal then
-      Z.Sim.afterRehearsal()
-    end
-  end
-  if source == "sim" and Z.Sim then
-    if Z.Sim.pending then
-      for i = Z.Util.ArrayCount(Z.Sim.pending), 1, -1 do
-        if Z.Sim.pending[i] and Z.Sim.pending[i].itemID == itemID then
-          table.remove(Z.Sim.pending, i)
-        end
-      end
-    end
-    if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
-    if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
-  end
-end
-
--- Award core: marks won, broadcasts, logs, prints. No UI.
--- Data stays raw everywhere (sheet, addon messages, history); the local
--- confirmation print colors the winner for the ML's own chat frame.
--- won marks skip INVENTED winners (rehearsal awards a real person —
--- usually yourself — but a fake name picked from the menu must never be
--- recorded on the real sheet). inventedSet rides on the award's session;
--- callers pass it via the sess argument (see AwardChosen).
-function M.DoAward(itemID, itemLink, winnerName, source, invented)
   if not Z.DB.sheet then Z.DB.sheet = Z.SRData.NewSheet() end
   source = source or "raid"
   local skipWon = false
@@ -1441,211 +896,68 @@ function M.DoAward(itemID, itemLink, winnerName, source, invented)
     Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName)
   end
   if Z.Comm then Z.Comm.BroadcastAward(itemID, winnerName) end
-  if Z.DropLog then Z.DropLog.Add(itemID, itemLink, source, "award", winnerName) end
-  -- Pysanka-style award line (raid-roll parity): plain name, never a link.
-  local disp = tostring(itemLink)
-  if M.DisplayItemLink then disp = M.DisplayItemLink(itemID, itemLink) end
-  -- Strip any link markup the display helper kept ([Name] survives).
-  local plain = string.match(disp, "%[(.-)%]") or disp
+  if Z.DropLog then Z.DropLog.Add(itemID, link, source, "award", winnerName) end
+  local disp = M.DisplayItemLink(itemID, link)
   if Z.Comm and Z.Comm.SayGroup and source ~= "sim" then
-    Z.Comm.SayGroup(ChatName(winnerName) .. " wins " .. tostring(plain) .. " (raid-roll).")
+    Z.Comm.SayGroup(ChatName(winnerName) .. " wins " .. tostring(disp) .. ".")
   else
     Z.Print("Awarded " .. disp .. " to " .. PName(winnerName))
   end
   if Z.SRView then Z.SRView.Refresh() end
+  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
+  if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
+  if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  -- Test queue bookkeeping: an awarded sim row must not stay rollable.
+  if Z.Sim then
+    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
+      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
+          and Z.Sim.afterRehearsal then
+        Z.Sim.afterRehearsal()
+      end
+    end
+    if source == "sim" then
+      if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
+      if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
+    end
+  end
+  return true
 end
 
--- Award-menu bookkeeping, shared by live and sim: one pending menu per
--- item (multi-roll: each finished item keeps its own decision point),
--- legacy alias on the active item's menu. A no-winner finish is NOT
--- auto-closed: the ML awards the item to anyone (or re-rolls); the row
--- stays until awarded.
-M.pendingAwardMenu = nil -- legacy alias: active item's { sess, data }
-M.pendingAwardMenus = nil -- per-item { [itemID] = { sess, data } } while the ML decides
-
--- Present the finished roll's award menu: store it pending (headless /
--- sim: the harness plays the ML via AwardChosen) and, when a menu frame
--- exists, show it. silent skips the frame in headless runs (the old
--- HandleSimAward path); in-client both show the real menu like a live
--- roll. The ML picks one row per winner slot via AwardChosen.
-function M.PresentAwardMenu(sess, data, silent)
-  M.pendingAwardMenus = M.pendingAwardMenus or {}
-  local sk = sess.key or M.RollKey(sess.itemID)
-  M.pendingAwardMenus[sk] = { sess = sess, data = data }
-  M.pendingAwardMenu = M.pendingAwardMenus[sk]
-  local winners = data.winners or {}
-  if Z.Util.ArrayCount(winners) == 0 then
-    -- Nobody eligible: the item stays open for the ML to award anyone
-    -- or re-roll (/zl cr). Session stays parked on the award menu.
-    -- A no-winner finish never auto-skips, in any mode.
-    if data.none then
-      Z.Print("SIM: no eligible winner — award anyone (/zl award <name>) or /zl cr to re-roll. The item stays in the loot window.")
-    end
+-- Old names, same single award path above. invented resolves off the
+-- open roll (rolled rehearsal) or the rehearsal queue (pre-roll award),
+-- so fake names never hit the sheet either way.
+function M.AwardInvented(itemID)
+  -- The window owns it: stamped at roll open, survives the finish.
+  local d = Z.LootWindow and Z.LootWindow.detail
+  if d and d.itemID == itemID and d.invented then return d.invented end
+  if M.roll and M.roll.itemID == itemID then return M.roll.invented end
+  if Z.Sim and Z.Sim.InventedFor then return Z.Sim.InventedFor(itemID) end
+  return nil
+end
+function M.AwardDirect(itemID, winnerName, source)
+  return M.Award(itemID, winnerName, source, M.AwardInvented(itemID))
+end
+function M.AwardChosen(choice, itemID, source)
+  local nm = choice and choice.name
+  itemID = itemID or M.AwardItemID()
+  if not itemID or not nm or nm == "" then
+    Z.Print("Pick a recipient first.")
     return
   end
-  if silent and not (StaticPopupDialogs and StaticPopup_Show) then
-    -- Headless sim (tests): the menu stays pending and the harness
-    -- plays the ML via AwardChosen — same decision point as the
-    -- client, minus the frame.
-    return
+  if not source then
+    local row = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
+    source = (row and row.source == "sim") and "sim" or "raid"
   end
-  -- Live rolls and in-client sim: show the real menu.
-  M.ShowAwardMenu(sess, data)
+  return M.Award(itemID, nm, source, M.AwardInvented(itemID))
 end
-
--- Backwards-compatible alias (tests + old callers stored HandleSimAward).
-function M.HandleSimAward(sess, data) M.PresentAwardMenu(sess, data, true) end
-
--- The ML chose a recipient for the finished roll (kind-winner row,
--- candidate grid, or ... selection). Confirms via popup, then awards.
--- Works for live and sim; sim continuation runs through Sim.afterAwards
--- (queued entries) / Sim.afterRehearsal (rehearsal entries).
--- choice = { name=recipient, via="winner"|"menu"|"candidate"|"tmog",
---            rollType=optional }
-function M.AwardChosen(choice, itemID)
-  -- Award target: explicit itemID first (slash + preaward rows), else the
-  -- OPEN item's menu (the ML decides on screen), else the legacy alias.
-  local pend = nil
-  local openID = Z.LootWindow and Z.LootWindow.detail
-    and Z.LootWindow.detail.itemID or nil
-  if M.pendingAwardMenus then
-    if itemID and M.pendingAwardMenus[M.RollKey(itemID)] then
-      pend = M.pendingAwardMenus[M.RollKey(itemID)]
-    elseif openID and M.pendingAwardMenus[M.RollKey(openID)] then
-      pend = M.pendingAwardMenus[M.RollKey(openID)]
-    end
+-- Award context reads off the OPEN window, not stored state. Item = the
+-- open detail's item (fallback: explicit id).
+function M.AwardItemID(itemID)
+  if itemID then return itemID end
+  if Z.LootWindow and Z.LootWindow.detail then
+    return Z.LootWindow.detail.itemID
   end
-  if not pend and itemID and M.session and M.session.itemID == itemID then
-    pend = { sess = M.session, data = M.BuildAwardMenu(M.session,
-      Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
-        M.session.itemID, M.session.rolls,
-        { cap = Z.Caps.SR, itemCount = M.session.itemCount })) }
-  end
-  if not pend then pend = M.pendingAwardMenu end
-  if not pend then
-    -- Live path: no pending menu object, award the current session's item.
-    local sess = M.session
-    if not sess then Z.Print("No active session.") return end
-    pend = { sess = sess, data = M.BuildAwardMenu(sess,
-      Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
-        sess.itemID, sess.rolls, { cap = Z.Caps.SR, itemCount = sess.itemCount })) }
-  end
-  local sess, data = pend.sess, pend.data
-  local name = choice and choice.name
-  if not name then Z.Print("Pick a recipient first.") return end
-  -- Award applied (popup accepted or headless): a finished detail closes,
-  -- the row shows done on the overview.
-  local function closeFinishedDetail()
-    if Z.LootWindow and Z.LootWindow.detail
-        and Z.LootWindow.detail.itemID == sess.itemID
-        and (Z.LootWindow.detail.phase or "pick") == "award" then
-      Z.LootWindow.CloseDetail()
-    end
-  end
-  local link = sess.itemLink
-  -- Rehearsal awards are REAL live awards (corpse take, "raid" source)
-  -- even though the session runs silent: the item must actually leave
-  -- the solo corpse. Only the continuation differs (rehearsal queue).
-  local source = (sess.rehearse and "raid")
-    or (sess.silent and "sim" or "raid")
-  showAwardPopup(link, name, function()
-    -- Live distribution of a corpse row needs the corpse OPEN; a refused
-    -- call aborts and keeps row + menu. Non-row awards always apply.
-    if source ~= "sim" and not M.lootOpen
-        and Z.LootWindow and Z.LootWindow.Find(sess.itemID) then
-      Z.Print("Not awarding " .. tostring(name)
-        .. ": no loot open. Loot the corpse again, then award.")
-      return
-    end
-    if source ~= "sim" and M.LootCorpseSlot(link, sess.itemID, name) == false then return end
-    M.DoAward(sess.itemID, link, name, source, sess.invented)
-    closeFinishedDetail()
-    if Z.LootWindow and Z.LootWindow.RemoveItem then
-      Z.LootWindow.RemoveItem(sess.itemID)
-    end
-    local ak = sess.key or M.RollKey(sess.itemID)
-    if M.pendingAwardMenus then M.pendingAwardMenus[ak] = nil end
-    M.pendingAwardMenu = nil
-    if M.pendingAwardMenus then
-      for _, other in pairs(M.pendingAwardMenus) do
-        if other then M.pendingAwardMenu = other break end
-      end
-    end
-    M.DropSession(sess)
-    if sess.rehearse then
-      -- Rehearsal award: normal live award above, then next queued item.
-      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
-      if Z.Sim and Z.Sim.afterRehearsal then Z.Sim.afterRehearsal() end
-    elseif sess.silent then
-      -- Awarded = done: only now does the row leave the rolling state.
-      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
-      if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
-    elseif Z.RaiderLootUI and Z.RaiderLootUI.Hide then
-      Z.RaiderLootUI.Hide()
-      -- Manual roll+award during an active rehearsal run: keep the queue
-      -- moving instead of stalling on entries whose rows just left.
-      if Z.Sim and Z.Sim.Rehearsing and Z.Sim.Rehearsing() then
-        if Z.Sim.afterRehearsal then Z.Sim.afterRehearsal() end
-      end
-    end
-  end)
-  -- Headless (tests): no popup API — the award above already applied via
-  -- DoAward inside... only when the popup fires. Without a client there is
-  -- no OnAccept, so apply directly.
-  if not (StaticPopupDialogs and StaticPopup_Show) then
-    if source ~= "sim" and not M.lootOpen
-        and Z.LootWindow and Z.LootWindow.Find(sess.itemID) then
-      Z.Print("Not awarding " .. tostring(name)
-        .. ": no loot open. Loot the corpse again, then award.")
-      return
-    end
-    if source ~= "sim" and M.LootCorpseSlot(link, sess.itemID, name) == false then return end
-    M.DoAward(sess.itemID, link, name, source, sess.invented)
-    closeFinishedDetail()
-    if Z.LootWindow and Z.LootWindow.RemoveItem then
-      Z.LootWindow.RemoveItem(sess.itemID)
-    end
-    local ak = sess.key or M.RollKey(sess.itemID)
-    if M.pendingAwardMenus then M.pendingAwardMenus[ak] = nil end
-    M.pendingAwardMenu = nil
-    if M.pendingAwardMenus then
-      for _, other in pairs(M.pendingAwardMenus) do
-        if other then M.pendingAwardMenu = other break end
-      end
-    end
-    M.DropSession(sess)
-    if sess.rehearse then
-      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
-      if Z.Sim and Z.Sim.afterRehearsal then Z.Sim.afterRehearsal() end
-    elseif sess.silent then
-      -- Awarded = done: only now does the row leave the rolling state.
-      if Z.Sim and Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(sess.itemID) end
-      if Z.Sim and Z.Sim.afterAwards then Z.Sim.afterAwards() end
-    end
-  end
-end
-
--- Legacy entry point (pre-menu auto-award). Kept for compatibility:
--- routes through the menu choice so the ML still confirms.
-function M.Award(itemID, itemLink, winnerEntry)
-  local sess = M.SessionFor(itemID) or M.session
-  if sess and sess.itemID == itemID then
-    local akey = sess.key or M.RollKey(itemID)
-    local menu = { sess = sess, data = M.BuildAwardMenu(sess,
-      Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
-        sess.itemID, sess.rolls, { cap = Z.Caps.SR, itemCount = sess.itemCount })) }
-    M.pendingAwardMenus = M.pendingAwardMenus or {}
-    M.pendingAwardMenus[akey] = menu
-    M.pendingAwardMenu = menu
-  else
-    local menu = { sess = { itemID = itemID, itemLink = itemLink, id = 0, silent = false, itemCount = 1 },
-      data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
-        candidates = {}, perType = {}, none = false, itemID = itemID, itemLink = itemLink } }
-    M.pendingAwardMenus = M.pendingAwardMenus or {}
-    M.pendingAwardMenus[M.RollKey(itemID)] = menu
-    M.pendingAwardMenu = M.pendingAwardMenus[M.RollKey(itemID)]
-  end
-  M.AwardChosen({ name = winnerEntry.name, via = "winner" }, itemID)
+  return nil
 end
 
 -- Universal loot scan: whoever opens a corpse runs the window — solo,
@@ -1729,9 +1041,9 @@ end
 -- rest, append genuinely new slots. M.items here is the LootWindow list
 -- (MasterLootUI owns no row list of its own). Returns the live row count.
 -- Nil-safe headless.
--- Open-session flag: true between LOOT_OPENED and LOOT_CLOSED. A rescan
--- with no open session must keep every row — GetNumLootItems reads empty
--- with no session, which otherwise looks exactly like "all looted" and
+-- Corpse-open flag: true between LOOT_OPENED and LOOT_CLOSED. A rescan
+-- with no open corpse must keep every row — GetNumLootItems reads empty
+-- with no corpse, which otherwise looks exactly like "all looted" and
 -- wipes the window (the reported walk-away wipe).
 M.lootOpen = false
 function M.RescanLeftovers()
@@ -1849,31 +1161,24 @@ function M.RescanLeftovers()
   return Z.Util.ArrayCount(rows)
 end
 
--- Session-only corpse cache, keyed by corpse key (guid: preferred,
+-- Row-only corpse cache, keyed by corpse key (guid: preferred,
 -- fp: fallback — see CorpseKey). NEVER persisted: plain module tables,
 -- empty at load, no SavedVariables touch. Each entry owns EVERYTHING for
 -- one not-fully-looted corpse so walk-away-and-back resumes exactly:
--- rows (with statuses), open detail, parked details, live sessions,
--- parked sessions, award menus, click arms. Corpse B looted mid-roll on
--- corpse A parks A intact; re-looting A restores it whole — a live roll
--- on A keeps collecting /roll chat while B is worked, and B's award
--- never touches A's state. Sim rows (source "sim", no corpse) live
--- outside the cache on the live tables as before.
--- Entry: { key, guid, target, rows, detail, parked,
---            sessions, sessionID, parkedSessions,
---            awardMenus, awardMenu, pendingLoot }
+-- rows (with statuses), open detail, click arms. Sim rows
+-- (source "sim", no corpse) live outside the cache on the live tables
+-- as before.
+-- Entry: { key, guid, target, rows, detail, pendingLoot }
 -- Bounded: abandoned corpses (parked, never re-looted) evict oldest-first
--- past M.CORPSE_CACHE_MAX. Session-only either way — never persisted.
+-- past M.CORPSE_CACHE_MAX. Rows only either way — never persisted.
 M.CORPSE_CACHE_MAX = 5
 M.corpseCache = {}
 M.corpseOrder = {}
 M.lootGUID = nil -- pinned corpse GUID (nil when client offers none)
 M.lootTarget = nil -- pinned loot target name (fallback path)
 M.lootKey = nil -- active corpse key (cache key while a corpse is open)
--- Stash the live tables into the active corpse's cache entry (deep
--- enough that later mutation can't alias: rows + detail + parked are
--- copied row-wise; sessions/menus are referenced — they are only ever
--- touched through their owning corpse while it is active).
+-- Stash the open corpse's rows into its cache entry (copied row-wise
+-- so later mutation can't alias).
 local function snapshotRows(rows)
   local out = {}
   for i = 1, Z.Util.ArrayCount(rows) do
@@ -1886,6 +1191,11 @@ local function snapshotRows(rows)
   end
   return out
 end
+-- Stash the open corpse's ROWS so walking away and back resumes the
+-- list. Rolls never park: if the roll window is open it stays live and
+-- keeps collecting (the window IS the roll); closing it ends the roll.
+-- Detail parks with the rows (a rolling detail keeps its countdown);
+-- awarded rows already left the list.
 function M.ParkCorpse()
   local key = M.lootKey
   if not key then return end
@@ -1900,37 +1210,21 @@ function M.ParkCorpse()
     local oldest = table.remove(M.corpseOrder, 1)
     if oldest then M.corpseCache[oldest] = nil end
   end
-  -- Shelve this corpse's unplayed rehearsal queue entries with it (the
-  -- shared pending queue is ResetFresh-wiped on every new-corpse scan).
-  -- LIVE entries (rolling now) stay put — they belong to the active flow.
-  local rehearsePending = {}
-  if Z.Sim and Z.Sim.pending then
-    for i = Z.Util.ArrayCount(Z.Sim.pending), 1, -1 do
-      local e = Z.Sim.pending[i]
-      if e and e.rehearse and (e.corpse == nil or e.corpse == key) then
-        table.insert(rehearsePending, table.remove(Z.Sim.pending, i))
-      end
-    end
-  end
   M.corpseCache[key] = {
     key = key, guid = M.lootGUID, target = M.lootTarget,
     rows = W and snapshotRows(W.items) or {},
     detail = W and W.detail or nil,
-    parked = W and W.parked or {},
-    sessions = M.sessions or {},
-    sessionID = M.session and M.session.id or nil,
-    parkedSessions = M.parkedSessions,
-    awardMenus = M.pendingAwardMenus,
-    awardMenu = M.pendingAwardMenu,
     pendingLoot = M.pendingLoot,
-    rehearsePending = rehearsePending,
   }
 end
--- Restore a cached corpse onto the live tables. Sessions re-link by id;
--- parked details/menus resume untouched. Caller reconciles + shows.
+-- Restore a cached corpse's rows onto the live list. Caller reconciles.
 -- TAKE semantics: the entry leaves the cache on restore (the live tables
 -- own the state from here; walking away re-parks fresh). Stale copies
 -- must never linger beside live state.
+-- Restore a cached corpse's rows onto the live list. TAKE semantics:
+-- the entry leaves the cache on restore. The roll (if any) was never
+-- parked and needs no restore: an open window kept collecting, a closed
+-- one ended its roll.
 function M.RestoreCorpse(key)
   local e = M.corpseCache and M.corpseCache[key]
   if not e then return false end
@@ -1940,55 +1234,14 @@ function M.RestoreCorpse(key)
       if M.corpseOrder[i] == key then table.remove(M.corpseOrder, i) end
     end
   end
-  -- Merge, not overwrite: live tables may have moved on after the park
-  -- (e.g. a session finished + menu opened while walked away). Live-newer
-  -- state wins per key; the park only fills gaps. Rows/detail take the
-  -- park when the live window is empty, else stay (rescan reconciles).
   local W = Z.LootWindow
   if W then
     if Z.Util.ArrayCount(W.items) == 0 then
       W.items = snapshotRows(e.rows)
     end
     if not W.detail then W.detail = e.detail end
-    W.parked = W.parked or {}
-    for k, v in pairs(e.parked or {}) do
-      if W.parked[k] == nil then W.parked[k] = v end
-    end
   end
-  M.sessions = M.sessions or {}
-  for k, v in pairs(e.sessions or {}) do
-    if M.sessions[k] == nil then M.sessions[k] = v end
-  end
-  if not M.session and e.sessionID then
-    for _, s in pairs(M.sessions) do
-      if s and s.id == e.sessionID then M.session = s break end
-    end
-  end
-  if not M.session then
-    for _, s in pairs(M.sessions) do
-      if s then M.session = s break end
-    end
-  end
-  M.parkedSessions = M.parkedSessions or {}
-  for k, v in pairs(e.parkedSessions or {}) do
-    if M.parkedSessions[k] == nil then M.parkedSessions[k] = v end
-  end
-  M.pendingAwardMenus = M.pendingAwardMenus or {}
-  for k, v in pairs(e.awardMenus or {}) do
-    if M.pendingAwardMenus[k] == nil then M.pendingAwardMenus[k] = v end
-  end
-  if not M.pendingAwardMenu then M.pendingAwardMenu = e.awardMenu end
   if not M.pendingLoot then M.pendingLoot = e.pendingLoot end
-  -- Unshelve this corpse's rehearsal queue: re-add entries not already
-  -- covered live (played on while parked, or re-queued by top-up).
-  if Z.Sim and e.rehearsePending then
-    for i = 1, Z.Util.ArrayCount(e.rehearsePending) do
-      local qe = e.rehearsePending[i]
-      if qe and not Z.Sim.RehearsalCovered(qe.itemID) then
-        table.insert(Z.Sim.pending, qe)
-      end
-    end
-  end
   M.lootGUID = e.guid
   M.lootTarget = e.target
   M.lootKey = e.key
@@ -2007,13 +1260,11 @@ function M.ForgetCorpse(key)
 end
 function M.OnLootOpened()
   if not GetNumLootItems then return end
-  M.lootOpen = true -- session is definitionally open inside this handler
+  M.lootOpen = true -- loot is definitionally open inside this handler
   local key = M.LiveCorpseKey()
-  -- Cached corpse (walked away mid-roll/award, now back): restore it
-  -- whole — rows, live roll, parked details, award menus — then
-  -- reconcile against the live corpse. A different corpse parks the
-  -- active one first (untouched), so multi-corpse interleaves keep
-  -- every roll collecting independently.
+  -- Cached corpse (walked away, now back): restore its rows, then
+  -- reconcile against the live corpse. Rolls never parked: an open
+  -- window kept collecting, a closed one ended its roll.
   if key and M.corpseCache and M.corpseCache[key] then
     if M.lootKey and M.lootKey ~= key then M.ParkCorpse() end
     M.RestoreCorpse(key)
@@ -2027,13 +1278,13 @@ function M.OnLootOpened()
         Z.LootWindow.Hide()
       else
         Z.LootWindow.Show()
-        Z.Print("Loot window resumed — rolls and award state kept.")
+        Z.Print("Loot window resumed.")
       end
     end
     return
   end
-  -- New corpse while another is mid-roll: park the active one intact
-  -- (its live roll keeps collecting chat), then build fresh below.
+  -- New corpse while another is open: park the active one's rows,
+  -- then build fresh below.
   if M.lootKey and M.lootKey ~= key then M.ParkCorpse() end
   local threshold = (Z.DB and Z.DB.minLootQuality) or 3
   local found, coin, free, grouped = {}, {}, {}, {}
@@ -2080,11 +1331,12 @@ function M.OnLootOpened()
     local f = found[i]
     if Z.DropLog then Z.DropLog.Add(Z.Util.ItemID(f.link), f.link, "loot", "seen", nil) end
   end
-  -- Fresh loot session: a new corpse must not inherit rows, done marks,
-  -- open detail, sim queue or raider rolls from a previous loot/sim.
-  -- Guarded: ResetFresh must never abort the scan (its pieces are
-  -- independently nil-safe, but a corpse with loot open takes priority).
-  if Z.Sim and Z.Sim.ResetFresh then pcall(Z.Sim.ResetFresh) end
+  -- Fresh corpse: the previous window (if any) closes first — an open
+  -- roll ends with it — then the new rows build below. Guarded: closing
+  -- must never abort the scan (a corpse with loot open takes priority).
+  if Z.LootWindow and Z.LootWindow.CloseDetail then
+    pcall(Z.LootWindow.CloseDetail)
+  end
   -- Ours is the loot window now — UNLESS the kill-switch stood us down
   -- (persisted lootTakeover=false): then stay out of the way entirely so
   -- Blizzard's frame handles the corpse (no rows, no detach, no announce
@@ -2143,9 +1395,8 @@ function M.OnLootOpened()
 end
 
 function M.OnEvent(event, a1, a2)
-  if event == "CHAT_MSG_SYSTEM" and M.session then
-    -- "Name rolls 42 (1-100)" — same intake the sim echoes register
-    -- through (single parser, single router: IntakeChatRoll).
+  if event == "CHAT_MSG_SYSTEM" and M.roll then
+    -- "Name rolls 42 (1-100)" lands on the open roll, or nowhere.
     M.IntakeChatRoll(a1)
   elseif event == "LOOT_OPENED" then
     M.lootOpen = true

@@ -1396,7 +1396,6 @@ function M.RenderSetup()
     "Auto-switches to Blizzard if ZugLoot clicks stop reaching the server.")
   -- Solo rehearsal toggle (same as /zl rehearse): every corpse item gets
   -- a roll window with invented rollers, then a real loot-through award.
-  -- Right beside it: auto-start toggle (same as /zl rollauto).
   local b7 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b7:SetWidth(150) b7:SetHeight(24)
   b7:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -116)
@@ -1412,21 +1411,6 @@ function M.RenderSetup()
   end)
   Tip(b7, "Rehearse", "Solo master-loot practice: corpse items roll with invented raiders.",
     "Solo only. Awards really loot the corpse.")
-  local b8 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  b8:SetWidth(150) b8:SetHeight(24)
-  b8:SetPoint("LEFT", b7, "RIGHT", 8, 0)
-  local function rehAutoLabel()
-    if Z.DB and Z.DB.rollAuto then return "Auto-start: ON" end
-    return "Auto-start: OFF"
-  end
-  b8:SetText(rehAutoLabel())
-  b8:SetScript("OnClick", function()
-    if Z.DB then Z.DB.rollAuto = not Z.DB.rollAuto end
-    b8:SetText(rehAutoLabel())
-    M.Refresh()
-  end)
-  Tip(b8, "Auto-start rolls", "Rolls start by themselves as corpses are looted.",
-    "OFF (default): the ML picks each item's Roll button. General master-loot behaviour.")
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (/zl log)\n" ..

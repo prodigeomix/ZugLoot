@@ -137,15 +137,15 @@ Sheet = {
   SR, MS, OS or TMOG winner; anything after the award (e.g. a trade) is
   outside the addon. Chat follows the raid-roll style (Pysanka parity):
   one `Name: roll (TYPE)` line per roller (already-won tagged inline),
-  then `Name wins Item (raid-roll).` on award.
+  then `Name wins Item.` on award.
 - Raid-roll (`/zl rr <link>`, loot ... `Raid-roll` choice — RollFor +
   Pysanka parity): the raid is announced numbered (`[1]:Name, ...`,
   chunked), the ML rolls 1-N with `/roll`, the number IS the winner
   (frozen roster, so leavers/joiners mid-roll change nothing; only the
   ML's 1-N roll counts, first number only). Finish/award reuse the
-  normal path, including the `(raid-roll).` award line.
+  normal path, including the award line.
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
-  `WON: Name`; resolver excludes them from later sessions for that itemID.
+  `WON: Name`; the resolver excludes them from later SR contests for that itemID.
   Excluded rollers stay visible everywhere: their rolls are kept in a separate
   `excluded` list (never silently dropped), shown with an `[already won]` tag in
   the raid result line, the live raider roll list (greyed), sim output, and the
@@ -154,7 +154,7 @@ Sheet = {
 
 ### 3.3 Unreserved drops (not on the sheet)
 
-- When a finished roll session (live or sim) had rolls for an itemID absent
+— When a finished roll (live or sim) had rolls for an itemID absent
   from `sheet.items`, a stub `{ quality, rollers = {}, unsr = true }` is added
   via `SRData.EnsureUnreserved` — never touching existing entries, so real SR
   data can't be clobbered. Empty sessions (no rolls) add nothing.
@@ -162,7 +162,7 @@ Sheet = {
   (`SRData.SortedCardIDs`: SR'd numeric first, stubs last), with a grey
   `[not SR'd]` title badge and a `(not on SR sheet — open roll)` body line.
   `CardSummary` / `SRView.RenderText` tag them `[not SR'd]` too.
-- Stubs are local roll-session artifacts: `SerializeSheet` emits no lines for
+- Stubs are local roll artifacts: `SerializeSheet` emits no lines for
   them (empty rollers), so they never pollute broadcasts; roll-log reset
   prunes them (`PruneUnreserved`) and the sheet returns to imported state.
 
@@ -188,7 +188,7 @@ Sheet = {
   single shared scroll body — columns scroll together; card styling
   unchanged): SR rollers in **two columns** inside each card, drop count as
   a green `[xN]` badge, **left-click opens the item roll-log window** (loot
-  icon + name header, every session newest-first): SR'd items alphabetical
+  icon + name header, every roll newest-first): SR'd items alphabetical
   by name (client cache, else sheet name, else item:id fallback; numeric
   ids break ties),
   unreserved items (rolled but never SR'd — auto-added at the bottom, see §3.3):
@@ -203,14 +203,14 @@ Sheet = {
   - title: quality-colored name + `[HR]` tag + green `[rolled xN]` badge +
     grey `[not SR'd]` badge for unreserved items.
   - SR list: `Name xN (+SR+)` (SR+ in gold), `[WON]` marks for already-won.
-  - roll history: every finished session this raid as its own block
+  - roll history: every finished roll this raid as its own block
     (`— rolls #k (mode) => winners`), **one line per player**:
     `Carbon 95(+130=225)` with `WINNER:` prefix, `[miss — no SR]` /
     `[already won]` flags where applicable.
   - zebra rows; row hover tooltip summarizes SR/HR + roll state.
 - Card data comes from pure `ItemCards.BuildCards(sheet)` (tested); roll
-  sessions persist in `sheet.rolls[itemID]` (capped at 25/item), recorded by
-  `MasterLootUI.AnnounceResult` for every finished session.
+  rolls persist in `sheet.rolls[itemID]` (capped at 25/item), recorded by
+  `MasterLootUI.AnnounceResult` for every finished roll.
 - Header: brand row carries a prominent green `ACTIVE RAID: <name> | started
   <date>` (grey `no active raid` when no sheet; name "—" for line sheets
   without instance info); sub-line `ID <raidID> | <raid name> | started <date>
@@ -228,7 +228,7 @@ Sheet = {
   raid shows up even though it was never unloaded). Each row is titled with
   the raid name (+ green `[ACTIVE]` on the live one; "—" when unknown) and
   lists `ID <raidID>`, `started <date>`, importer, source, and counts
-  (items / players / sessions / won). **Activate** makes a raid the live
+  (items / players / rolls / won). **Activate** makes a raid the live
   sheet and continues it — won marks + roll history come along, and the
   outgoing sheet is archived first so no progress is lost (`/zl raid <raidID>`
   does the same from chat). History lives in `ZugLootDB.raidArchive` (capped
@@ -237,14 +237,12 @@ Sheet = {
 
 ### 4.2 Loot console (`MasterLootUI.lua`) — RollFor-like, universal
 
-- `/zl` shows console: loot list (current loot window items w/ SR badges + counts),
-  session controls: `SR roll`, `All roll (/arf equivalent)`, `Raid roll`,
-  `2x top wins`, `Finish early`, `Cancel`, `Award`.
-Roll sessions: triggered by `/zl rf <link>`, `/zl arf <link>`, `/zl rr <link>`,
-`/zl 2x<link>`, or the loot-window Roll button (`/zl roll <item>`). Announce via
-RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message
-(auto-roll path). Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`),
-first-roll-only per player; over-rolls flagged, ties auto re-roll.
+- `/zl` shows console: loot list (current loot window items w/ SR badges + counts).
+Rolls start from the loot-window Roll button only. Announce via
+RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message.
+Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`) while the roll
+window is open, first-roll-only per player; over-rolls flagged, ties
+re-roll fresh. Exactly one roll at a time — closing its window ends it.
 Raider clients pop their roll window off the ML/RL's RAID_WARNING roll
 call ONLY (`MatchRollCall`: `Roll for X: /roll ...` dice line or full
 item link — Pysanka parity). Drop lists, winners, countdowns, stop
@@ -282,15 +280,15 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   path must yield to the stock UI, never strand dimmed rows. Confirms,
   errors, and failed-but-present rescans all disarm the watch; awards
   never arm it; the watch is corpse-scoped (a new corpse starts clean).
-  Open-session flag (`MasterLootUI.lootOpen`, true between `LOOT_OPENED`
-  and `LOOT_CLOSED`): with no session open there is no call that can land.
+  Corpse-open flag (`MasterLootUI.lootOpen`, true between `LOOT_OPENED`
+  and `LOOT_CLOSED`): with no corpse open there is no call that can land.
   Clicks and live awards both check it FIRST — before range, before slot
   verify — and block with `"not looting"` / `"Not awarding <name>: no
-  loot open"`, list + row + menu untouched; re-looting resumes the cached
-  window. This is what stops the walk-away wipe: the old code read an
-  empty (closed) corpse as `"gone"` and rescanned every row away. Rescans
-  with no open session likewise keep all rows (an unreadable corpse
-  proves nothing left). Sim/non-row awards bypass the gate (no corpse).
+  loot open"`, list + row untouched; re-looting resumes the window. This
+  is what stops the walk-away wipe: the old code read an empty (closed)
+  corpse as `"gone"` and rescanned every row away. Rescans with no open
+  corpse likewise keep all rows (an unreadable corpse proves nothing
+  left). Sim/non-row awards bypass the gate (no corpse).
   Range gate: "moved away" is read off `CheckInteractDistance("target",
   1)` against the corpse pinned at scan — by GUID when the client offers
   one, else by target name. Same corpse + out of range = moved: the click
@@ -303,23 +301,15 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   the same second return; GUIDs double as unit tokens). The corpse key is
   `guid:<guid>` when available, else `fp:<name>|<sorted ids>[|+coin]`.
   Walk-away-and-back reuses the window: `LOOT_CLOSED` with leftovers
-  keeps rows/rolls/parked details, and re-looting the SAME corpse
-  (key match) reconciles instead of wiping — live rolls and award state
-  survive the round trip, with no twin-merge (same name + same loot on a
-  different GUID rebuilds). A different corpse rebuilds as before.
-  Session corpse cache (`MasterLootUI.corpseCache`, never persisted —
-  empty at load, no SavedVariables): each not-fully-looted corpse owns
-  rows, open/parked details, live + parked roll sessions, award menus,
-  and click arms under its key. Looting corpse B mid-roll on A parks A
-  intact (A's roll keeps collecting); returning to A restores it whole
-  and B's award never touches A's state — rolls continue and loot
-  distributes per corpse. Restore takes (no stale copies); fully-looted
-  corpses are forgotten; abandoned ones evict oldest-first past a cap of
-  5. Sim flows never touch the cache. Rolls land on the ACTIVE corpse's
-  session; parked corpses collect no chat while parked. Roll state is
-  keyed by (corpse, item) — never bare itemID — so the SAME item on two
-  corpses owns two sessions, two parked details, two award menus and two
-  sim chains; one twin's finish/award can never overwrite the other's.
+  keeps the rows, and re-looting the SAME corpse (key match) reconciles
+  instead of wiping — an open roll keeps collecting while its window is
+  open. A different corpse rebuilds as before.
+  Row corpse cache (`MasterLootUI.corpseCache`, never persisted — empty
+  at load, no SavedVariables): each not-fully-looted corpse owns its rows
+  (+ open detail, click arms) under its key. Restore takes (no stale
+  copies); fully-looted corpses are forgotten; abandoned ones evict
+  oldest-first past a cap of 5. Rolls are never parked: an open window
+  kept collecting, a closed one ended its roll.
   Each roll-row item is
   announced + logged (`loot`/`seen`), awarding loots the corpse slot
   through Blizzard's APIs (master loot hands to another winner by
@@ -345,50 +335,39 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   degrading to a `?` icon and raw-link text when the bare-ID cache key
   misses.
 - **Row detail = the roll window** (RollFor preview → rolling → winners in
-  one window, cf. `gui-sr-tie.gif`): clicking a row opens the detail with
-  SR (direct award on a single holder) / Roll / Close. Choosing **Roll keeps
-  the window open** — it flips to the rolling view listing every valid roll
-  with its kind (`SR: Aaa 90 (=100)`), SR > MS > OS > TMOG best-first, with
-  Finish / Cancel / Close, plus the **countdown bar + seconds** (raider-
-  window parity: green→orange→red, pulsing under 5s) showing the shared
-  roll clock — seeded at the full window the moment the roll starts, ticking
-  every second, surviving row switches (the parked copy keeps ticking), and
-  clearing on finish/cancel. **Finish ends the roll and parks it for award**
-  (the session leaves the live table with rolls + menu intact); the award
-  rows show in the loot list, where the parked view is the same award
-  window: **Award <winner> rows (kind winners), Award TMOG, ... for
-  anyone else** — plus **Continue to reopen the same roll for more
-  rolls** (same session, rolls append). **When the roll finishes the
-  same window
-  becomes the award window**: TWO award buttons -- `Award <winner>` (kind
-  winner by priority) and `Award TMOG (<name>)` whenever the TMOG kind was
-  contested (floating bottom bar: each row justified, wraps when narrow,
-  rolls text always clears it) — `...` for anyone else (menu candidates: any raider, for when
-  something is wrong with the rolls), Close. The
-  confirm popup names the item (`Award <name> to <who>?`, full link kept on
-  the dialog) — never a bare `item:<id>`. Awarding closes it and the row
-  leaves the list (done = gone; the last award closes the window, like a
-  finished live session). **Close parks the item's state**: a rolling or
-  finished-but-unawarded window saves its rolls + winner menu on close and
-  reopens exactly as left — roll A, close, roll and award B, then reopen
-  and award A off its saved rolls. Parked state dies only on award.
-  Cancel drops the window back to pick (re-roll / choose / close). (`HR` red for hard reserves, `SR` / `SR:n` orange for soft
-  reserves). Nothing auto-starts — clicking a row opens the **row detail**
-  (320 wide, so `Award <name>` fits long names on one line): direct **Award**
-  when exactly one SR/HR holder exists (no rolling needed), **...** for a
-  real dropdown (RollFor parity: blue-hover rows — Roll, plus Award per
-  reserver, plus one row per raid class like `Warrior (4) >`): hovering
-  (or clicking) a class row pops a side submenu with that class's players,
-  so the whole raid is one hover away instead of a flat 40-name list.
-  Every submenu name awards directly, even before a roll (no-roll
-  shortcut), and nobody already listed above repeats inside a group.
-  After a roll finishes the same menu grows roll controls on top:
-  **Reopen roll** (Continue — the parked session re-attaches, more rolls
-  come into the same list) and **Raid-roll instead** (replaces the
-  finished roll: parked state is discarded so nobody can award stale
-  winners, and the window flips to the raid-roll view).
+  one window): clicking a row opens the detail with
+  Award (direct award on a single holder) / Roll / Close. Choosing **Roll
+  keeps the window open** — it flips to the rolling view listing every
+  valid roll with its kind (`SR: Aaa 90 (=100)`), SR > MS > OS > TMOG
+  best-first, with Finish / Cancel / Close, plus the **countdown bar +
+  seconds** (raider-window parity: green→orange→red, pulsing under 5s) —
+  seeded at the full window the moment the roll starts, ticking every
+  second, clearing on finish/cancel/close. There is exactly ONE roll at a
+  time (`MasterLootUI.roll`, set only while its window is open): any roll
+  — real `/roll` or test fake — lands on it or nowhere. Closing the window
+  ends the roll early (intake dead, clock disarmed); a closed roll never
+  finishes late and never awards. **Finish resolves the roll and the same
+  window becomes the award window**: TWO award buttons -- `Award <winner>`
+  (kind winner by priority) and `Award TMOG (<name>)` whenever the TMOG
+  kind was contested — `...` for anyone else (candidates: any raider, for
+  when something is wrong with the rolls), Close. Awarding ends any open
+  roll first, then hands out the item and closes the window; the row
+  leaves the list (done = gone). Ties stay open for a fresh re-roll round.
+  Cancel ends the roll and drops the window back to pick (re-roll /
+  choose / close). (`HR` red for hard reserves, `SR` / `SR:n` orange for
+  soft reserves). Nothing auto-starts — clicking a row opens the **row
+  detail**: direct **Award** when exactly one SR/HR holder exists (no
+  rolling needed), **...** for a real dropdown (RollFor parity: blue-hover
+  rows — Roll, plus Award per reserver, plus one row per raid class like
+  `Warrior (4) >`): hovering (or clicking) a class row pops a side submenu
+  with that class's players, so the whole raid is one hover away instead
+  of a flat 40-name list. Every submenu name awards directly, even before
+  a roll, and nobody already listed above repeats inside a group.
+  Mid-roll the same menu offers **Raid-roll instead** (ends the open roll,
+  raid-rolls the item); the award window keeps **Roll again** and
+  **Raid-roll instead** next to the awards.
   **Close** to dismiss and keep working the overview. `/zl cr`
-  returns the item to open. Non-ML clients ignore corpse loot.
+  returns the item to open.
 - **Award menu** (RollFor finish-popup style): on roll completion nothing is
   auto-awarded — the ML gets winners (ranked, roll-typed) + SR/MS/OS/TMOG
   loser groups + a **class-sorted candidate roster** (sheet + rollers + raid
@@ -486,27 +465,22 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
 - When a `ROLL_REQ`/warning arrives for an item the player SR'd (and hasn't won),
   auto `/roll`s with SR cap after 1s jitter (avoids thundering herd).
 - **Auto-resolve**: if every eligible SR roller is version-grid green with auto-roll
-  on, ML resolves immediately from `ROLL_ANS` messages (no chat-roll wait), with a
-  5s fallback to normal rolling if answers are missing.
+  on, the ML is told all rollers are auto (the rolls themselves still
+  arrive as normal `/roll` chat).
 
-### 4.6 Simulation (`Sim.lua` + `BossData.lua` + `pfLoot.lua`)
+### 4.6 Simulation (`Sim.lua`)
 
-In-game, no raid needed. **Requires the loaded sheet** — without one both
-commands refuse with a pointer to `/zl import`. Every roller is a player from
-the sheet; there are no fake Filler/Missroller names unless you pass N > 0.
+In-game, no raid needed. **Requires the loaded sheet** — without one the
+commands refuse with a pointer to `/zl import`. Sim + rehearsal exist ONLY
+to test master looting: they open the SAME roll window through the SAME
+`MasterLootUI` roll, with fake rolls landing instantly (no timers, no
+scheduling) alongside any real `/roll`s. One roll at a time; the open
+window owns everything; closing it ends the roll — exactly like live.
 
-Sim **replays the real live pipeline** (`MasterLootUI` session +
-routed chat + both windows), one item at a time — it is a rehearsal of the
-actual roll flow, not a separate code path. Fake echoes spread across
-the SHARED roll window (same clock as live rolls — the ML rolls
-alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
-
-- `/zl sim <itemLink> [N]` — one-shot: the ML chose it by typing, so it
-  auto-plays immediately (still through the real pipeline: silent session,
-  both windows, group-routed chat, fake echoes across the shared window,
-  clock auto-finish, ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
-  rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
-  item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
+- `/zl sim <itemLink> [N]` — one-shot: queues the item, opens its roll,
+  lands the fakes at once. On-sheet item: its SR rollers roll (plus N
+  optional `RollerN` fillers). Off-sheet item: every player on the sheet
+  rolls (plus N fillers).
 - `/zl simboss <boss> [raid]` — rolls the boss's OWN drops from the LIVE
   Atlas-CFM loot tables (`AtlasLoot.lua` reads `AtlasCFM.InstanceData` —
   the same tables + `dropRate` percents the Atlas browser shows — straight
@@ -523,29 +497,24 @@ alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
   Molten Core`). An all-miss run rolls nothing and says so — try again.
   The drops land in the
   **same loot window** (title `Simulated loot: <boss>`, source `sim`) and
-  stops: the ML — you — initiates every roll from the list (Roll button or
-  `/zl simroll <item>`), in any order. After each finish the award menu
-  decides the winner (headless: `/zl award <name>`); the awarded item leaves
-  the list and stays gone, won marks apply immediately, so the one-win rule
-  chains across drops exactly like a real
-  raid night. `/zl simstop` is a full stop: kills the live session,
-  drops the queue, clears the award menu, and closes the
-  loot window (+ detail) and raider window — a fresh `/zl sim` can start
-  immediately. `/zl cr` mid-sim returns the item to the queue head for
-  a re-roll.
-- `/zl simraid <raid>` — a CONDENSED full raid for reliability testing:
-  ONE boss at a time, each through the SAME simboss starter
-  (`Sim.QueueBossRun` — no parallel implementation). A 0–3 trash pack
-  (weighted, almost always exactly 1) rolls BEFORE each boss — the mobs
-  cleared walking up to it — then the boss. When a boss's queue drains
-  (every drop awarded), the next stage queues automatically off the
-  normal queue-drain path (`Sim.NextRaidStage`, via `RequestNextRoll`);
-  after the last boss the run ends like any sim. Unknown raids get the
-  raid list; a raid with no lootable bosses refuses; `/zl simstop` stops
-  the whole raid anywhere.
-- Nothing auto-awards, ever: the sim replays the live menu too. After the ML
-  picks, the confirm popup fires and the queue continues (in-client: as you
-  accept; headless: the harness's `AwardChosen`).
+  stops: the ML — you — initiates every roll from the list (Roll button),
+  in any order. After each finish the award window decides the winner;
+  the awarded item leaves the list and stays gone, won marks apply
+  immediately, so the one-win rule chains across drops exactly like a
+  real raid night. `/zl simstop` is a full stop: ends any open roll,
+  drops the queue, and closes the windows — a fresh `/zl sim` can start
+  immediately.
+- `/zl simraid <raid>` — a CONDENSED full raid: ONE boss at a time, each
+  through the SAME simboss starter (`Sim.QueueBossRun` — no parallel
+  implementation). A trash row rolls BEFORE each boss — the mobs cleared
+  walking up to it — then the boss. When a boss's queue drains (every
+  drop awarded), the next stage queues automatically off the normal
+  queue-drain path (`Sim.NextRaidStage`, via `AfterAward`); after the
+  last boss the run ends like any sim. Unknown raids get the raid list;
+  a raid with no lootable bosses refuses; `/zl simstop` stops the whole
+  raid anywhere.
+- Nothing auto-awards, ever: the sim awards on the same window too.
+  After the ML picks, the confirm popup fires and the queue continues.
 - `/zl simtmog <itemLink>` — transmog demo: one roller rolls TMOG instead
   of SR; the award window offers the TMOG kind winner next to the outright
   winner and the ML awards either directly.
@@ -553,26 +522,22 @@ alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
   `PARTY` (warnings have no party channel, so plain party text), solo → local
   chat frame. Sim sessions are silent on the addon channel (no
   `ROLL_REQ` broadcast), so other clients' windows and auto-rolls never fire.
-- Every sim session is **written back into the sheet**: roll history
-  (`sheet.rolls`, mode `SIM`/`SIM-OPEN`, same shape as live via
-  `Resolver.ToHistoryEntry`), won marks (skipped on ties), and drop-log
-  entries (source `sim`). Visible in the Sheet tab right away. `/zl reset`
-  clears sim history + won marks.
-- `/zl rehearse [on|off]` (Setup tab `Rehearse` button flips it) — solo
-  master-loot practice, no sheet needed. While on, every solo corpse's
-  non-coin rows queue with 3–5 invented rollers (Aldric, Bryn, Cora, ...) 
-  and wait for the ML: each item's Roll button starts its roll through the
-  same pipeline (roll window, chat-echoed fake rolls, award menu; the
-  ML's own dice work too). `/zl rollauto [on|off]` (Setup `Auto-start`
-  checkbox, default OFF) auto-starts rolls instead. Awarding is a REAL
-  live award — the item leaves the solo corpse via the normal
-  `LootSlot(slot, 1)` take — which is the point: the full distribute flow
-  rehearsed end to end. Runs against a scratch sheet (real sheet parked
-  and restored after; invented marks never touch it). `/zl simstop` and
-  flag-off both end the run, keeping already-looted items.
-- `Timer.lua` stays for the
-  click-to-loot watchdog (`LootWindow.WatchClick`) and the delayed
-  sheet-reply (`SRSecurity`) — sim chains no longer use it.
+- Every sim roll is **written back into the sheet**: roll history
+  (`sheet.rolls`, mode `SIM`, same shape as live via
+  `Resolver.ToHistoryEntry`), won marks, and drop-log entries
+  (source `sim`). Visible in the Sheet tab right away.
+- `/zl rehearse [on|off]` — solo master-loot practice, no sheet needed.
+  While on, every solo corpse's non-coin rows queue with invented rollers
+  (Aldric, Bryn, Cora, ...) and wait for the ML: each item's Roll button
+  starts its roll through the same live path (roll window, instant fake
+  rolls; the ML's own dice work too). Awarding is a REAL live award — the
+  item leaves the solo corpse via the normal `LootSlot(slot, 1)` take —
+  which is the point: the full distribute flow rehearsed end to end.
+  Invented names are fenced off the sheet (won marks + history skip
+  them). `/zl simstop` and flag-off both end the run, keeping
+  already-looted items.
+- `Timer.lua` stays for the roll clock and the click-to-loot watchdog
+  (`LootWindow.WatchClick`).
 - Uses the **same** `Resolver` pure module as real sessions and as `tests/`, so
   sim output matches tested logic. Randomness via `math.random`, seeded by time.
 

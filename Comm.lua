@@ -1,6 +1,6 @@
 -- ZugLoot/Comm.lua
 -- Addon-message transport + receiver-side sheet guard.
--- Prefix ZugLoot. Types: SHEET / ROLL_REQ / ROLL_ANS / VER_REQ / VER_ANS / AWARD / LOG.
+-- Prefix ZugLoot. Types: SHEET / ROLL_REQ / VER_REQ / VER_ANS / AWARD / LOG.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
@@ -49,12 +49,8 @@ function M.BroadcastSheet(sheet, raidID)
   send("SHEET:" .. ver .. ":" .. tostring(raidID) .. ":" .. M.EncodeSheetPayload(sheet), channel)
 end
 
-function M.SendRollReq(sessionID, itemLink, mode)
-  send("ROLL_REQ:" .. tostring(sessionID) .. ":" .. tostring(itemLink) .. ":" .. tostring(mode), M.Channel())
-end
-
-function M.SendRollAns(sessionID, rollType)
-  send("ROLL_ANS:" .. tostring(sessionID) .. ":" .. UnitName("player") .. ":" .. tostring(rollType), M.Channel())
+function M.SendRollReq(itemID, itemLink, mode)
+  send("ROLL_REQ:" .. tostring(itemID) .. ":" .. tostring(itemLink) .. ":" .. tostring(mode), M.Channel())
 end
 
 function M.RequestVersions()
@@ -213,10 +209,6 @@ function M.OnMessage(msg, sender)
   end
   if string.sub(msg, 1, 9) == "ROLL_REQ:" then
     if Z.RaiderLootUI then Z.RaiderLootUI.OnRollReq(msg, sender) end
-    return
-  end
-  if string.sub(msg, 1, 9) == "ROLL_ANS:" then
-    if Z.MasterLootUI then Z.MasterLootUI.OnRollAns(msg, sender) end
     return
   end
   if string.sub(msg, 1, 6) == "AWARD:" then

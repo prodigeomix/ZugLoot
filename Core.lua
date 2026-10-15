@@ -29,6 +29,7 @@ function Z.HelpLines()
     "    simraid <raid> ... condensed full raid: one boss at a time (+ trash), you roll each",
     "    simstop .......... stop the sim, reset everything",
     "    rehearse [on|off]  solo master-loot practice with invented rollers",
+    "    rolldebug ........ trace roll feeds (ML window diagnosis)",
     "    help ............. this list",
   }
 end
@@ -50,11 +51,6 @@ function Z.InitDB()
   -- a roll window with invented rollers, then a real loot-through award.
   -- Persisted like other options; effect is solo-only. Absent = off.
   if ZugLootDB.rehearse == nil then ZugLootDB.rehearse = false end
-  -- Master-loot auto-start (see /zl rollauto): rolls begin by themselves
-  -- as corpses are looted. Default OFF — the ML picks each item's Roll
-  -- button. General behaviour, not rehearsal-specific (rehearsal inherits
-  -- it). Absent = off.
-  if ZugLootDB.rollAuto == nil then ZugLootDB.rollAuto = false end
   -- Loot-takeover kill-switch state (see LootWindow.NoteSilentLoot):
   -- once our LootSlot path proves dead, the takeover stays OFF across
   -- corpses and sessions until the user opts back in. Survives reloads
@@ -176,6 +172,11 @@ function Z.Slash(msg)
   elseif cmd == "simstop" then Z.Sim.Stop()
   elseif cmd == "rehearse" then
     if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end
+  elseif cmd == "rolldebug" then
+    if Z.LootWindow then
+      Z.LootWindow.rollDebug = not Z.LootWindow.rollDebug
+      Z.Print("rolldebug " .. (Z.LootWindow.rollDebug and "ON" or "OFF"))
+    end
   else Z.Print("unknown command. /zl help")
   end
 end

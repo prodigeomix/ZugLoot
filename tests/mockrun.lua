@@ -75,6 +75,7 @@ dofile("SRData.lua"); dofile("Resolver.lua"); dofile("ItemCards.lua");
 dofile("ItemIcon.lua");
 dofile("RaidArchive.lua");
 dofile("SRSecurity.lua");
+dofile("RollList.lua")
 dofile("Comm.lua");
 dofile("Pysanka.lua");
 ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
@@ -159,15 +160,13 @@ print("item roll-log window OK");
 Z.LootWindow.SetItems({ { itemID=19137, link="[Test Dagger]", quality=4, sr=1 } }, "loot");
 Z.LootWindow.Show("Boss loot");
 assert(Z.LootWindow.Find(19137) ~= nil, "loot window lists the drop");
-local sess = { id=1, itemID=19137, itemLink="[Test Dagger]", mode="SR", rolls={ { name="Blackfang", roll=95, type="SR" } }, itemCount=1 };
-local res = Z.Resolver.ResolveItem(s, 19137, sess.rolls, { cap=100 });
-assert(type(Z.MasterLootUI.BuildAwardMenu) == "function", "menu builder loaded");
-local menu = Z.MasterLootUI.BuildAwardMenu(sess, res);
+local fakeRolls = { { name="Blackfang", roll=95, type="SR" } };
+local res = Z.Resolver.ResolveItem(s, 19137, fakeRolls, { cap=100 });
+assert(type(Z.MasterLootUI.AwardMenu) == "function", "menu builder loaded");
+local menu = Z.MasterLootUI.AwardMenu(19137, "[Test Dagger]", res);
 assert(type(menu) == "table" and type(menu.winners) == "table", "menu shape");
 assert(menu.winners[1].name == "Blackfang", "menu top winner");
 assert(#menu.candidates >= 2, "candidate roster built");
-local lines = Z.MasterLootUI.AwardMenuLines(menu);
-assert(#lines >= 3, "menu lines render");
 print("loot window + award menu OK");
 -- client frames: overview rows + row detail under the mock frame API.
 Z.LootWindow.Show("Boss loot");
@@ -179,7 +178,7 @@ assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
 assert(Z.LootWindow.detailFrame.rolls ~= nil, "roll list widget built");
 -- rolling + award phases repaint under the mock API (persistent window).
 Z.LootWindow.detail.phase = "rolling";
-Z.LootWindow.DetailOnRoll(19137, nil, "Blackfang", 95, "SR", 115);
+Z.LootWindow.DetailOnRoll(19137, "Blackfang", 95, "SR", 115);
 Z.LootWindow.detail.countdown = 12;
 Z.LootWindow.detail.countdownDur = 15;
 Z.LootWindow.RefreshDetail();
@@ -212,20 +211,15 @@ assert(string.find(df2.tmogB.label or "", "SoloPlayer", 1, true) ~= nil,
 Z.LootWindow.detail.menu.perType.TMOG = {};
 Z.LootWindow.RefreshDetail();
 assert(df2.tmogB.hidden == true, "Award TMOG hidden without a TMOG roll");
--- preaward (parked award view): same winner rows as the award window.
-Z.LootWindow.detail.phase = "preaward";
+-- award phase: same winner rows power the primary button.
+Z.LootWindow.detail.phase = "award";
 Z.LootWindow.RefreshDetail();
 local preActs = Z.LootWindow.DetailActions();
-assert(preActs[1].id == "award-name", "preaward primary is the top winner");
-assert(preActs[1].name == "Blackfang", "preaward winner named");
-local preContinue = false
-for _, a in ipairs(preActs) do
-  if a.id == "continue" then preContinue = true end
-end
-assert(preContinue, "preaward offers Continue");
-assert(df2.awardB.hidden ~= true, "preaward primary button visible");
+assert(preActs[1].id == "award-name", "award primary is the top winner");
+assert(preActs[1].name == "Blackfang", "award winner named");
+assert(df2.awardB.hidden ~= true, "award primary button visible");
 assert(string.find(df2.awardB.label or "", "Blackfang", 1, true) ~= nil,
-  "preaward primary names the winner, got: " .. tostring(df2.awardB.label));
+  "award primary names the winner, got: " .. tostring(df2.awardB.label));
 -- button bar geometry: flow-layout invariants — every VISIBLE button
 -- inside the frame, no two buttons on the same row overlap, rows stack
 -- on the 10 + k*30 grid (wraps when narrow, shares one row when wide).
@@ -310,11 +304,7 @@ if classRow then
   local first = sub.rows[1];
   local click = first:GetScript("OnClick");
   assert(click, "submenu award click wired");
-  -- Stage the pending menu like PresentAwardMenu would in-client
-  -- (AwardChosen decides off it), with an open corpse for the award.
-  Z.MasterLootUI.pendingAwardMenu = { sess = sess, data = menu };
-  Z.MasterLootUI.pendingAwardMenus =
-    { [Z.MasterLootUI.RollKey(19137)] = Z.MasterLootUI.pendingAwardMenu };
+  -- Awarding needs an open corpse: the mock keeps lootOpen from setup.
   Z.MasterLootUI.lootOpen = true;
   local targetItem = Z.LootWindow.detail and Z.LootWindow.detail.itemID;
   click();

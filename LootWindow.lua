@@ -18,9 +18,9 @@
 --   badge: "HR" | "SR" | "SR:n" | ""; status: "open"|"rolling"|"done";
 --   source: "loot"|"sim"; index: 1-based row number (RollFor modern skin).
 -- Detail: BuildDetail fields + phase ("pick"|"rolling"|"award"),
---   sessionID (roll it tracks), rolls ({name, roll, rollType, effective}),
---   menu (award data once finished), countdown (seconds left) +
---   countdownDur (full window, bar paint denominator).
+--   rolls ({name, roll, rollType, effective}), menu (award data once
+--   finished), countdown (seconds left) + countdownDur (full window,
+--   bar paint denominator).
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
@@ -41,13 +41,10 @@ end
 
 -- Row detail state (plain data): { itemID, link, badge, rollers={names},
 -- single=bool (exactly one SR/HR holder), status, source }.
--- Parked states: one saved detail per (corpse, item) roll key
--- (M.parked[RollKey]) so the ML can close an item after a roll and come
--- back later — rolls, winner menu and all. Same item on two corpses
--- parks two snapshots. Deleted on award, never resurrected.
+-- Only ONE detail exists at a time: the open window. Closing it ends any
+-- open roll — there is no parked state anywhere.
 M.detail = nil
 M.detailFrame = nil
-M.parked = {}
 
 M.ROW_HEIGHT = 24
 M.ICON_SIZE = 20
@@ -82,7 +79,6 @@ end
 function M.Clear()
   M.items = {}
   M.detail = nil
-  M.parked = {}
   M.DisarmWatchdogs()
   M.Refresh()
   M.RefreshDetail()
@@ -334,8 +330,7 @@ function M.IsGroupRollItem(quality)
 end
 
 -- Handed out = gone: drop the row from the list (by itemID; scanning the
--- corpse again re-adds the odd leftover). Parked state for the item dies
--- with it — awarded state is never resurrected. A list with zero rows
+-- corpse again re-adds the odd leftover). A list with zero rows
 -- left is not a record — history lives in the Sheet tab.
 -- slotHint narrows to the CLICKED row when duplicate itemIDs share the
 -- corpse (two of the same grey): looting one leaves the other listed.
@@ -353,7 +348,6 @@ function M.RemoveItem(itemID, slotHint)
   for i = 1, Z.Util.ArrayCount(M.items) do
     M.items[i].index = i
   end
-  M.DropParked(itemID)
   if M.detail and M.detail.itemID == itemID then
     M.detail = nil
     if M.detailFrame and M.detailFrame.Hide then M.detailFrame:Hide() end
@@ -413,10 +407,9 @@ function M.HideBlizzardFallback() end
 -- Nil-safe headless (no corpse APIs -> no-op).
 function M.OnEvent(event, arg1)
   if event == "LOOT_CLOSED" then
-    -- Walk-away with leftovers: park the corpse into the session cache
-    -- (rolls/parks/menus intact) so re-looting resumes it whole. The
-    -- window stays visible; only a fully-distributed corpse hides it.
-    -- The corpse pin survives LOOT_CLOSED for the walk-back comparison.
+    -- Walk-away with leftovers: park the rows so re-looting resumes the
+    -- list. An open roll keeps collecting (its window is open); a closed
+    -- one already ended. Only a fully-distributed corpse hides the window.
     if Z.Util.ArrayCount(M.items or {}) == 0 then
       M.Hide()
     elseif Z.MasterLootUI and Z.MasterLootUI.ParkCorpse then
@@ -857,7 +850,6 @@ function M.BuildDetail(itemID)
     rollers = rollers,
     single = Z.Util.ArrayCount(rollers) == 1,
     phase = "pick", -- pick -> rolling -> award
-    sessionID = nil,
     rolls = {},
     menu = nil,
     countdown = nil,
@@ -865,184 +857,85 @@ function M.BuildDetail(itemID)
   }
 end
 
--- Feed a roll into a detail (called from OnSystemRoll): only rolls for
--- the tracked session, first-roll-only, exactly the live list rule.
--- Targets the OPEN detail when it tracks this item, else the PARKED one
--- (multi-roll: timed rolls land on the closed item's saved state).
--- Returns true when the roll landed on a detail.
-function M.DetailOnRoll(itemID, sessionID, player, roll, rollType, effective, minR, maxR)
-  -- Multi-roll: timed rolls land on the closed item's saved state when
-  -- the open detail is tracking a different item. Parked lookup prefers
-  -- the active corpse's snapshot (same item, two corpses), then any lone
-  -- snapshot for the item.
-  local d = M.detail
-  if not d or d.itemID ~= itemID then
-    d = M.ParkedDetail(itemID)
+-- Mirror the open roll onto the OPEN detail. Only the rolling window
+-- for THIS item takes rolls; anything else is a dead window and the
+-- roll is dropped. Rebuilds the list from the roll table every time
+-- (like the raider client rebuilds from M.rolls): a missed or doubled
+-- feed can never desync the window, because no feed carries state.
+-- Returns true when the window shows the roll.
+function M.DetailOnRoll(itemID, player, roll, rollType, effective, minR, maxR)
+  local MLUI = Z.MasterLootUI
+  local live = MLUI and MLUI.roll
+  if live and live.itemID == itemID then
+    M.SyncRoll(live, "DetailOnRoll")
+    local d = M.detail
+    return d ~= nil and d.itemID == itemID
+      and (d.phase or "pick") == "rolling"
   end
-  if not d or d.itemID ~= itemID then return false end
-  if d.phase ~= "rolling" then return false end
-  if sessionID and d.sessionID and sessionID ~= d.sessionID then return false end
-  d.rolls = d.rolls or {}
-  for i = 1, Z.Util.ArrayCount(d.rolls) do
-    if d.rolls[i].name == player then return false end
-  end
-  table.insert(d.rolls, { name = player, roll = roll, rollType = rollType,
-    effective = effective, min = minR, max = maxR })
-  if d == M.detail then M.RefreshDetail() end
-  return true
+  return false
 end
 
--- The roll finished: hand the award menu to the open detail, which becomes
--- the award window (winner rows + ... for anyone else). Keeps sessionID so
--- late rolls for the same session still land (harmless).
-function M.DetailOnFinish(itemID, menu)
-  -- The finished item's detail may be parked (closed mid-roll) while
-  -- another row is open: hand the menu to whichever copy tracks it.
+-- Rebuild the open detail's roll list from the roll table (single
+-- source of truth). No-op unless the window is open and rolling.
+function M.SyncRoll(roll, why)
   local d = M.detail
-  if not d or d.itemID ~= itemID then
-    d = M.ParkedDetail(itemID)
+  if M.rollDebug then
+    Z.Print("rolldebug: sync item=" .. tostring(roll and roll.itemID)
+      .. " detail=" .. tostring(d and d.itemID)
+      .. " phase=" .. tostring(d and d.phase)
+      .. " rolls=" .. tostring(roll and roll.rolls and Z.Util.ArrayCount(roll.rolls))
+      .. (why and (" (" .. tostring(why) .. ")") or ""))
   end
-  if not d or d.itemID ~= itemID then return false end
-  -- Carry the landed rolls into the award view: sim/rehearsal feeds run
-  -- inline inside the Roll click, so the window flips rolling -> award
-  -- without ever painting the rolling list. The award view renders
-  -- d.rolls (SortedDetailRolls), so dropping them here shows "waiting
-  -- for rolls..." on a finished roll — and the router's post-starter
-  -- flip (doAction) must not wipe them either. Session rolls stay the
-  -- source of truth; the window only mirrors them.
-  local MLUI = Z.MasterLootUI
-  local sess = MLUI and MLUI.SessionAny and MLUI.SessionAny(itemID) or nil
-  if sess and sess.itemID == itemID and Z.Util.ArrayCount(sess.rolls or {}) > 0
-      and Z.Util.ArrayCount(d.rolls or {}) == 0 then
-    d.rolls = {}
-    for i = 1, Z.Util.ArrayCount(sess.rolls) do
-      local r = sess.rolls[i]
-      if r then
-        table.insert(d.rolls, { name = r.name, roll = r.roll,
-          rollType = r.type, effective = r.effective or r.roll,
-          min = r.min, max = r.max })
-      end
+  if not d or not roll or d.itemID ~= roll.itemID then return end
+  if (d.phase or "pick") ~= "rolling" then return end
+  local rows = {}
+  for i = 1, Z.Util.ArrayCount(roll.rolls) do
+    local r = roll.rolls[i]
+    if r and r.name then
+      table.insert(rows, { name = r.name, roll = r.roll,
+        rollType = r.type, effective = r.effective or r.roll,
+        min = r.min, max = r.max })
     end
-    if sess.id then d.sessionID = sess.id end
   end
+  d.rolls = rows
+  d.countdown = roll.rollLeft or d.countdown
+  d.countdownDur = roll.rollDur or d.countdownDur
+  M.RefreshDetail()
+end
+
+-- The roll finished: the OPEN detail becomes the award window (winner
+-- rows + ... for anyone else). A closed window means no award view --
+-- closing the window ended the roll, full stop.
+function M.DetailOnFinish(itemID, menu)
+  local d = M.detail
+  if not d or d.itemID ~= itemID then return false end
   d.menu = menu
   d.phase = "award"
   d.countdown = nil
   d.countdownDur = nil
-  if d == M.detail then M.RefreshDetail() end
+  M.RefreshDetail()
   return true
 end
 
--- "56/98" for a TMOG roll (max of the /roll command used), with
--- " (=100)" when an SR bonus pushes the effective past it. The stored
--- max (parsed off the system roll line) is authoritative; the kind cap
--- covers old rows that predate it.
+-- Roll range text + sorted roll rows: both come from the shared
+-- RollList view (the same view the raider frame paints through), so a
+-- roll reads identically in either window. Thin wrappers kept so old
+-- callers/tests keep working.
 function M.RollRangeText(r)
-  r = r or {}
-  local max = r.max
-  if max == nil and Z.MasterLootUI and Z.MasterLootUI.RollCap then
-    max = Z.MasterLootUI.RollCap(r.rollType)
+  if Z.RollList and Z.RollList.RangeText then
+    return Z.RollList.RangeText(r)
   end
-  local s = tostring(r.roll)
-  if max ~= nil then s = s .. "/" .. tostring(max) end
-  if r.effective ~= nil and r.effective ~= r.roll then
-    s = s .. " (=" .. tostring(r.effective) .. ")"
-  end
-  return s
+  return tostring((r or {}).roll)
 end
 
--- Sorted roll rows for paint/text: SR > MS > OS > TMOG, best first.
 function M.SortedDetailRolls(d)
   d = d or M.detail
-  local order = { SR = 1, MS = 2, OS = 3, TMOG = 4 }
-  local out = {}
-  for i = 1, Z.Util.ArrayCount((d and d.rolls) or {}) do
-    table.insert(out, d.rolls[i])
+  if Z.RollList and Z.RollList.SortedRolls then
+    return Z.RollList.SortedRolls(d and d.rolls)
   end
-  table.sort(out, function(a, b)
-    local oa, ob = order[a.rollType] or 9, order[b.rollType] or 9
-    if oa ~= ob then return oa < ob end
-    if (a.effective or a.roll or 0) ~= (b.effective or b.roll or 0) then
-      return (a.effective or a.roll or 0) > (b.effective or b.roll or 0)
-    end
-    return (a.name or "") < (b.name or "")
-  end)
-  return out
+  return {}
 end
 
--- Park the open detail so its state survives row switching and Close:
--- rolling/award windows, plus any window whose row still has a LIVE
--- session (a mid-roll pick-phase close must keep the session's rolls so
--- switching back shows the live roll). Pure-idle pick windows (no live
--- session, no rolls, no menu) rebuild identically from the row and park
--- nothing. Deep-copies rolls + menu so later rolls/finishes can't alias
--- the saved state.
-local function snapshotDetail(d)
-  if not d then return nil end
-  local liveSess = Z.MasterLootUI and Z.MasterLootUI.SessionFor
-    and Z.MasterLootUI.SessionFor(d.itemID) or nil
-  if liveSess and liveSess.itemID ~= d.itemID then liveSess = nil end
-  local hasState = (d.phase or "pick") == "rolling"
-    or (d.phase or "pick") == "award"
-    or (d.rolls and Z.Util.ArrayCount(d.rolls) > 0)
-    or d.menu ~= nil or liveSess ~= nil
-  if not hasState then return nil end
-  local rolls = {}
-  for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
-    local r = d.rolls[i]
-    table.insert(rolls, { name = r.name, roll = r.roll,
-      rollType = r.rollType, effective = r.effective, min = r.min, max = r.max })
-  end
-  return { itemID = d.itemID, link = d.link, name = d.name,
-    tipLink = d.tipLink, badge = d.badge, status = d.status,
-    source = d.source, rollers = d.rollers, single = d.single,
-    phase = d.phase, sessionID = d.sessionID, rolls = rolls,
-    menu = d.menu, countdown = d.countdown,
-    countdownDur = d.countdownDur }
-end
-
-function M.ParkDetail()
-  local d = M.detail
-  if not d then return end
-  local snap = snapshotDetail(d)
-  if snap then
-    M.parked = M.parked or {}
-    local MLUI = Z.MasterLootUI
-    local pk = MLUI and MLUI.RollKey(d.itemID) or d.itemID
-    M.parked[pk] = snap
-  end
-end
-
-function M.DropParked(itemID)
-  if not M.parked then return end
-  local MLUI = Z.MasterLootUI
-  -- Scoped to THIS corpse's snapshot (+ the legacy bare key): a twin
-  -- corpse's parked window is its own state and survives. No phantom
-  -- risk — snapshots are only ever read through the keyed path
-  -- (OpenDetail/ParkedDetail), so a twin copy can never open here.
-  local kk = MLUI and MLUI.RollKey(itemID) or itemID
-  M.parked[kk] = nil
-  M.parked[itemID] = nil
-end
-
--- Parked snapshot for an item: the active corpse's copy first (same item
--- on two corpses), else the lone copy, else nil (ambiguous twins need
--- the pinned corpse — callers with one pass it via the key form below).
-function M.ParkedDetail(itemID, key)
-  local t = M.parked or (Z.LootWindow and Z.LootWindow.parked)
-  if not t then return nil end
-  local MLUI = Z.MasterLootUI
-  local kk = key or (MLUI and MLUI.RollKey(itemID)) or itemID
-  if t[kk] then return t[kk] end
-  local found = nil
-  for _, v in pairs(t) do
-    if v and v.itemID == itemID then
-      if found then return nil end
-      found = v
-    end
-  end
-  return found
-end
 
 -- Row click entry: coin/free rows loot immediately through Blizzard's
 -- frame (the only path that moves the item) and leave the list. Solo,
@@ -1117,9 +1010,8 @@ function M.OnRowClick(itemID, clickSlot)
         .. "Loot it again to resume — the window is still open.")
       return "not looting"
     end
-    -- No open loot session (walked away / corpse closed): same block,
-    -- same intact list. The corpse pin + cache survive, so re-looting
-    -- resumes the window whole.
+    -- No open corpse (walked away / closed): same block, same intact
+    -- list. Re-looting resumes the window whole.
     if issued == "nolooot" then
       Z.Print("Not looting " .. tostring(M.DisplayName(it))
         .. ": no loot open. "
@@ -1167,6 +1059,13 @@ end
 -- /zl lootdebug: verbose click-to-loot logging (slot, corpse size, link).
 M.lootDebug = false
 
+-- /zl rolldebug: one chat line per roll feed naming exactly where it
+-- landed (or which guard dropped it: no window / wrong item / not
+-- rolling). Off by default; turn it on when the ML window ever shows
+-- rolls going missing again — the log names the guard instead of
+-- guessing. Headless-safe: plain Z.Print.
+M.rollDebug = false
+
 -- Silent-call kill-switch: tracks consecutive click-to-loot calls that
 -- issued clean but never confirmed (no LOOT_SLOT_CLEARED, no error).
 -- LOOT_SLOT_CLEARED disarms via RescanLeftovers (arms clear there); any
@@ -1213,35 +1112,19 @@ function M.NoteSilentLoot(slot, itemID)
       corpse = Z.MasterLootUI and Z.MasterLootUI.lootKey or nil })
 end
 
+-- Open the row detail. Switching rows CLOSES the current window: if
+-- it was rolling, the roll ends early right there (EndRoll) — a closed
+-- window never keeps rolling behind anything. The new row opens fresh
+-- in pick phase.
 function M.OpenDetail(itemID)
-  -- Switching rows parks the current detail first (state saved), then
-  -- reopens the requested one: parked state if it has any, else a fresh
-  -- pick window. Multi-roll: each item's rolls survive the switching.
-  if M.detail and M.detail.itemID ~= itemID then
-    M.ParkDetail()
-    M.CloseMoreDropdown()
-    M.detail = nil
-  end
-  -- A parked ROLLING/AWARD detail reopens exactly as it was closed:
-  -- rolls, kind rows, winner menu, all intact. Stale IDLE pick snapshots
-  -- (no session, no rolls, no menu) are dropped: the row rebuilds an
-  -- identical pick window from live data.
-  local MLUI = Z.MasterLootUI
-  local okey = MLUI and MLUI.RollKey(itemID) or itemID
-  local psnap = M.parked and M.parked[okey] or nil
-  if psnap then
-    if (psnap.phase or "pick") == "pick" and (psnap.sessionID == nil or psnap.sessionID == 0)
-        and (psnap.rolls == nil or Z.Util.ArrayCount(psnap.rolls) == 0)
-        and psnap.menu == nil then
-      M.parked[okey] = nil
-      psnap = nil
-    end
-  end
-  if psnap then
-    M.detail = psnap
-    M.parked[okey] = nil
+  -- Already on this item: the window stays exactly as it is (a rolling
+  -- window keeps its rolls; nothing rebuilds under it).
+  if M.detail and M.detail.itemID == itemID then
     M.RefreshDetail()
     return M.detail
+  end
+  if M.detail then
+    M.doAction(M.detail.itemID, "close")
   end
   local d = M.BuildDetail(itemID)
   if not d then return nil end
@@ -1257,13 +1140,17 @@ function M.OnCloseButton()
   if M.detail then return M.doAction(M.detail.itemID, "close") end
 end
 
+-- Close the detail window. Closing a ROLLING window ends the roll early
+-- (EndRoll first): nothing keeps rolling behind a closed window, and a
+-- closed roll never auto-finishes late. Anything else just goes away.
 function M.CloseDetail()
-  -- Closing parks a rolling/award window (state saved); pick windows
-  -- just go away. Awarded items are removed from the list anyway, and
-  -- RemoveItem clears any parked state for them.
-  M.ParkDetail()
+  local d = M.detail
   M.CloseMoreDropdown()
   M.detail = nil
+  if d and (d.phase or "pick") == "rolling"
+      and Z.MasterLootUI and Z.MasterLootUI.EndRoll then
+    Z.MasterLootUI.EndRoll(d.itemID)
+  end
   if M.detailFrame and M.detailFrame.Hide then M.detailFrame:Hide() end
   M.detailFrame = nil
 end
@@ -1296,9 +1183,8 @@ function M.DetailLines(d)
           .. PName(r.name) .. " " .. M.RollRangeText(r))
       end
     end
-  elseif (d.phase == "award" or d.phase == "preaward") and d.menu then
-    -- Award window (open or parked): winner rows first, then the ...
-    -- choices. Continue returns to the roll; award hands it out.
+  elseif d.phase == "award" and d.menu then
+    -- Award window: winner rows first, then the ... choices.
     local winners = d.menu.winners or {}
     for i = 1, Z.Util.ArrayCount(winners) do
       local w = winners[i]
@@ -1328,39 +1214,10 @@ end
 
 -- Detail actions (data) per phase.
 -- pick:    Award (single holder only), ... (More), Close.
--- rolling: Finish (ends the roll and parks it for award), Cancel (cr),
---          Close (window only, roll runs on).
--- preaward: finished roll parked for award — same award rows as award
---          (Award <winner> per kind winner, ... for anyone else) plus
---          Continue (reopens rolling for more rolls) and Close.
--- award:   Award <winner> per winner row, ... (anyone else), Close.
-function M.AwardRowActions(d, actions)
-  -- Every kind winner gets its own row: overall winner(s) first, then
-  -- each contested kind (SR/MS/OS/TMOG) not already listed. The ML
-  -- awards the SR, MS, OS or TMOG winner directly; ... covers anyone
-  -- else (e.g. when something is wrong with the rolls).
-  -- Labels color the name (buttons render FontStrings); the raw name
-  -- rides along for the award call.
-  local listed = {}
-  for i = 1, Z.Util.ArrayCount(d.menu.winners or {}) do
-    local w = d.menu.winners[i]
-    table.insert(actions, { id = "award-name", label = "Award " .. PName(w.name)
-      .. " (" .. tostring(w.rollType) .. ")", name = w.name, via = "winner" })
-    listed[w.name] = true
-  end
-  for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
-    local trow = (d.menu.perType or {})[gt]
-    if trow and trow.entry and not listed[trow.entry.name] then
-      listed[trow.entry.name] = true
-      local via = (gt == "TMOG") and "tmog" or "winner"
-      table.insert(actions, { id = "award-name",
-        label = "Award " .. PName(trow.entry.name) .. " (" .. gt .. ")",
-        name = trow.entry.name, via = via })
-    end
-  end
-  return actions
-end
-
+-- rolling: Finish (resolve now, award on this window), Cancel (end the
+--          roll, window back to pick), Close (ends the roll AND closes).
+-- award:   Award <winner> per winner row, ... (anyone else, incl. Roll
+--          again + Raid-roll instead), Close.
 function M.DetailActions(d)
   d = d or M.detail
   local actions = {}
@@ -1371,15 +1228,26 @@ function M.DetailActions(d)
     table.insert(actions, { id = "close", label = "Close" })
     return actions
   end
-  if (d.phase or "pick") == "preaward" and d.menu then
-    M.AwardRowActions(d, actions)
-    table.insert(actions, { id = "continue", label = "Continue" })
-    table.insert(actions, { id = "more", label = "..." })
-    table.insert(actions, { id = "close", label = "Close" })
-    return actions
-  end
   if (d.phase or "pick") == "award" and d.menu then
-    M.AwardRowActions(d, actions)
+    -- Every kind winner gets its own row: overall winner(s) first, then
+    -- each contested kind not already listed. ... covers anyone else.
+    local listed = {}
+    for i = 1, Z.Util.ArrayCount(d.menu.winners or {}) do
+      local w = d.menu.winners[i]
+      table.insert(actions, { id = "award-name", label = "Award " .. PName(w.name)
+        .. " (" .. tostring(w.rollType) .. ")", name = w.name, via = "winner" })
+      listed[w.name] = true
+    end
+    for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
+      local trow = (d.menu.perType or {})[gt]
+      if trow and trow.entry and not listed[trow.entry.name] then
+        listed[trow.entry.name] = true
+        local via = (gt == "TMOG") and "tmog" or "winner"
+        table.insert(actions, { id = "award-name",
+          label = "Award " .. PName(trow.entry.name) .. " (" .. gt .. ")",
+          name = trow.entry.name, via = via })
+      end
+    end
     table.insert(actions, { id = "more", label = "..." })
     table.insert(actions, { id = "close", label = "Close" })
     return actions
@@ -1400,33 +1268,15 @@ function M.doAction(itemID, actionID, extra)
     d = M.OpenDetail(itemID)
   end
   if not d then return "unknown item" end
+  local MLUI = Z.MasterLootUI
   if actionID == "close" then
-    -- Close FINISHES first: a live roll resolves into parked award rows,
-    -- exactly as if Finish was pressed — then the window closes. Nothing
-    -- keeps rolling behind a closed window; reopening shows the award
-    -- rows (Continue reopens the roll). Idle pick windows just close.
-    local MLUI = Z.MasterLootUI
-    if (d.phase or "pick") == "rolling"
-        and MLUI and MLUI.SessionFor
-        and MLUI.SessionFor(itemID)
-        and MLUI.SessionFor(itemID).itemID == itemID then
-      MLUI.Finish(true, itemID)
-      -- DetailOnFinish retargeted the (possibly parked) detail; re-read.
-      d = M.detail
-      if not d or d.itemID ~= itemID then
-        d = M.ParkedDetail(itemID, MLUI and MLUI.RollKey(itemID))
-      end
-      if d and (d.phase or "pick") == "award" and d.menu then
-        d.phase = "preaward"
-      end
-    end
     M.CloseDetail()
     return "closed"
   end
   if actionID == "award" then
     if not d.single then return "needs choice (...)" end
-    if Z.MasterLootUI and Z.MasterLootUI.AwardDirect then
-      Z.MasterLootUI.AwardDirect(d.itemID, d.rollers[1], d.source)
+    if MLUI and MLUI.AwardDirect then
+      MLUI.AwardDirect(d.itemID, d.rollers[1], d.source)
     end
     M.CloseDetail()
     return "awarded " .. d.rollers[1]
@@ -1434,208 +1284,108 @@ function M.doAction(itemID, actionID, extra)
   if actionID == "more" then
     return M.MoreLines(d)
   end
-  if actionID == "roll" or actionID == "raidroll" then
-    -- Initiate the roll from the detail. The detail STAYS OPEN and becomes
-    -- the roll window (RollFor: preview flips to the rolling view); the
-    -- session hooks below flip it to the award view on finish, and the
-    -- view parks for award the moment it finishes.
-    -- Sequential holds: refused when THIS item already rolls, or when
-    -- ANOTHER item's roll is running (finish, cancel or close it first).
-    local MLUI = Z.MasterLootUI
-    if MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
-        and MLUI.SessionFor(itemID).itemID == itemID then
-      return "roll failed"
-    end
-    if MLUI and MLUI.session then
-      return "roll failed"
-    end
-    -- Re-roll of a parked item: drop the stale snapshot so the fresh
-    -- session builds pristine roll state (no phantom duplicate rolls).
-    M.DropParked(itemID)
-    -- Rehearsal queue first: the ML's Roll button plays the queued
-    -- invented-roller entry (fakes included), not a bare live roll.
-    if Z.Sim and Z.Sim.RehearseRoll then
-      local queued = false
-      for i = 1, Z.Util.ArrayCount(Z.Sim.pending or {}) do
-        local e = Z.Sim.pending[i]
-        if e and e.itemID == itemID and e.rehearse then queued = true break end
-      end
-      if queued then
-        if Z.Sim.RehearseRoll(itemID) then return "rolling" end
-        return "roll failed"
-      end
-    end
-    local ok = false
-    if actionID == "raidroll" then
-      -- Raid-roll: ML numbers the raid 1-N and rolls the number (RollFor
-      -- + Pysanka parity). No sim/rehearsal routing — always live.
-      -- Raid-rolling AFTER a finished roll replaces it: when the starter
-      -- actually produced a live session, discard the old parked session
-      -- + pending award menu (a later Continue re-attaches the
-      -- raid-roll, nobody can award stale winners) and wipe the open
-      -- award view so the shared flip below turns it into the rolling
-      -- view. A refused start leaves the finished state untouched.
-      if Z.MasterLootUI and Z.MasterLootUI.StartRaidRoll then
-        Z.MasterLootUI.StartRaidRoll(d.itemID)
-        local live = MLUI.SessionFor and MLUI.SessionFor(d.itemID) or nil
-        if live and live.itemID == d.itemID then
-          if MLUI.DiscardParkedRoll then MLUI.DiscardParkedRoll(d.itemID) end
-          d.rolls = {}
-          d.menu = nil
-          ok = true
-        end
-      end
+  if actionID == "roll" then
+    -- Refused while ANY roll is open (finish, award, or close it first).
+    if MLUI and MLUI.roll then return "roll failed" end
+    -- Starters report by return (roll table / true = rolling). The
+    -- window flips only on a real start — never on a refusal.
+    local started = false
+    -- Rehearsal rows roll invented raiders through the same live path.
+    if d.source ~= "sim" and Z.Sim and Z.Sim.RequestRoll
+        and Z.Sim.Rehearsing and Z.Sim.Rehearsing() then
+      started = Z.Sim.RequestRoll(d.itemID)
     elseif d.source == "sim" then
-      if Z.Sim and Z.Sim.RequestRoll then
-        Z.Sim.RequestRoll(d.itemID)
-        ok = true
-      end
+      started = Z.Sim and Z.Sim.RequestRoll and Z.Sim.RequestRoll(d.itemID)
     else
-      if Z.MasterLootUI and Z.MasterLootUI.StartItemRoll then
-        Z.MasterLootUI.StartItemRoll(d.itemID)
-        ok = true -- invocation is success (stub or real session)
-      end
+      started = MLUI and MLUI.StartItemRoll and MLUI.StartItemRoll(d.itemID)
     end
-    if ok then
-      -- playOne (sim/rehearsal starters) owns the rolling flip and may
-      -- have replaced M.detail; re-fetch so the checks below land on
-      -- the live object, never a stale snapshot.
-      if M.detail and M.detail.itemID == itemID then d = M.detail end
-      if ((d.phase or "pick") == "rolling" and d.sessionID)
-          or (((d.phase or "pick") == "award" or (d.phase or "pick") == "preaward") and d.menu) then
-        -- The starter already owns this window: a live rolling view
-        -- with landed rolls, or a finished award view (sim/rehearse
-        -- feeds + finish run inline inside the starter). Leave it
-        -- alone — re-flipping would wipe d.rolls (the reported "0
-        -- fake rolls in the ML window") or drag a finished award view
-        -- back to a sessionless rolling state.
-        return "rolling"
-      end
-      local sess = Z.MasterLootUI and Z.MasterLootUI.SessionFor
-        and Z.MasterLootUI.SessionFor(itemID)
-        or (Z.MasterLootUI and Z.MasterLootUI.session)
-      -- Idempotent either way: a fresh pick window becomes the rolling
-      -- view for the session the starter just created.
+    if started then
       d.phase = "rolling"
-      d.sessionID = sess and sess.id or nil
       d.rolls = {}
       d.menu = nil
       d.status = "rolling"
-      -- Seed the countdown at once (full window, not one tick late):
-      -- the session clock repaints it every second from here.
-      local seedDur = (sess and sess.rollDur)
-        or (Z.MasterLootUI and Z.MasterLootUI.RollDuration
-        and Z.MasterLootUI.RollDuration()) or nil
-      d.countdown = (sess and sess.rollLeft) or seedDur
-      d.countdownDur = seedDur or d.countdown
+      M.seedCountdown(d)
+      -- Starters that land rolls instantly (sim/rehearsal fakes feed
+      -- AddRoll -> SyncRoll mid-start) already filled the mirror — the
+      -- wipe above just cleared it, so rebuild off the live roll.
+      -- Live starts hold no rolls yet: the rebuild is an empty no-op
+      -- and the window correctly shows "waiting for rolls...".
+      if MLUI and MLUI.roll then M.SyncRoll(MLUI.roll, "roll-start") end
       M.RefreshDetail()
       return "rolling"
     end
     return "roll failed"
   end
-  if actionID == "award-name" then
-    -- Award a named raider: from an award window (award OR parked
-    -- preaward phase) this is the ROLLED award (menu confirm, history,
-    -- sim continuation via AwardChosen); pre-roll (More list) it is the
-    -- direct no-roll shortcut via AwardDirect.
-    -- Stays open on failure, closes on success.
-    if ((d.phase or "pick") == "award" or (d.phase or "pick") == "preaward") and d.menu then
-      if Z.MasterLootUI and Z.MasterLootUI.AwardChosen then
-        -- extra may be a plain name (More list) or {name, via}
-        -- (award row). Default via="menu".
-        local nm, via = extra, "menu"
-        if type(extra) == "table" then nm, via = extra.name, extra.via or "menu" end
-        Z.MasterLootUI.AwardChosen({ name = nm, via = via }, d.itemID)
-        return "awarded " .. tostring(nm)
-      end
-      return "award failed"
+  if actionID == "raidroll" then
+    -- Raid-roll instead: the open roll (if any) for this item ends
+    -- early FIRST (explicit user end), then the raid-roll starts on the
+    -- same window. On success the old view wipes and flips to rolling;
+    -- on refusal the window drops back to pick with the old rolls kept
+    -- for the record (nothing live behind them).
+    if MLUI and MLUI.roll and MLUI.roll.itemID ~= d.itemID then
+      return "roll failed"
     end
-    if Z.MasterLootUI and Z.MasterLootUI.AwardDirect then
-      Z.MasterLootUI.AwardDirect(d.itemID, extra, d.source)
-      M.CloseDetail()
-      return "awarded " .. tostring(extra)
+    if MLUI and MLUI.EndRoll then MLUI.EndRoll(d.itemID) end
+    local started = MLUI and MLUI.StartRaidRoll
+      and MLUI.StartRaidRoll(d.itemID)
+    if started then
+      d.rolls = {}
+      d.menu = nil
+      d.phase = "rolling"
+      d.status = "rolling"
+      M.seedCountdown(d)
+      M.RefreshDetail()
+      return "rolling"
+    end
+    d.phase = "pick"
+    d.status = "open"
+    d.countdown = nil
+    d.countdownDur = nil
+    M.RefreshDetail()
+    return "roll failed"
+  end
+  if actionID == "award-name" then
+    -- Award a named raider from ANY phase: the roll (if any) ends early
+    -- inside the award. Stays open on failure, closes on success.
+    local nm = extra
+    if type(extra) == "table" then nm = extra.name end
+    if MLUI and MLUI.AwardChosen then
+      MLUI.AwardChosen({ name = nm }, d.itemID, d.source)
+      return "awarded " .. tostring(nm)
     end
     return "award failed"
   end
   if actionID == "finish" then
-    -- Finish: resolve THIS item's roll, then PARK the window for award.
-    -- The award rows live in the loot list (preaward phase); Continue
-    -- reopens the roll for more rolls, Close leaves it parked.
-    -- Targets this item's session; other rolls run on.
-    if Z.MasterLootUI and Z.MasterLootUI.FinishEarly then
-      local out = Z.MasterLootUI.FinishEarly(itemID)
-      if (d.phase or "pick") == "award" and d.menu then
-        d.phase = "preaward"
-        M.ParkDetail()
-        M.RefreshDetail()
-        return "finished"
-      end
-      return out == "tie" and "tie" or "finishing"
+    if MLUI and MLUI.FinishRoll then
+      return MLUI.FinishRoll(itemID)
     end
     return "finish failed"
   end
-  if actionID == "continue" then
-    -- Reopen a parked (finished) roll for more rolls. The SAME session
-    -- object re-attaches, so new rolls append to the same list and the
-    -- session id is unchanged (stale feed guards stay valid).
-    local MLUI = Z.MasterLootUI
-    if MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
-        and MLUI.SessionFor(itemID).itemID == itemID then
-      return "already rolling"
-    end
-    local sess = MLUI and MLUI.ParkedSession
-      and MLUI.ParkedSession(itemID) or nil
-    if not sess then
-      return "nothing to continue"
-    end
-    MLUI.UnparkSession(sess)
-    if Z.Sim and Z.Sim.FeedFreshRolls then Z.Sim.FeedFreshRolls(itemID) end
-    d.phase = "rolling"
-    d.sessionID = sess.id
-    d.status = "rolling"
-    -- Continued roll, continued clock: full window again (UnparkSession
-    -- re-armed the session timer), painted at once like a fresh roll.
-    d.countdown = sess.rollLeft
-    d.countdownDur = sess.rollDur
-      or (MLUI and MLUI.RollDuration and MLUI.RollDuration())
-      or sess.rollLeft
-    if Z.LootWindow and Z.LootWindow.MarkRolling then
-      Z.LootWindow.MarkRolling(itemID)
-    end
-    M.RefreshDetail()
-    return "continuing"
-  end
   if actionID == "cancel" then
-    -- Cancel the ROLL (session back to open); the window stays on the item
-    -- in pick phase so the ML can re-roll or choose differently.
-    if Z.MasterLootUI and Z.MasterLootUI.Cancel then
-      Z.MasterLootUI.Cancel(itemID)
+    if MLUI and MLUI.Cancel then MLUI.Cancel(itemID) end
+    if M.detail and M.detail.itemID == itemID then
       local dd = M.detail
-      if dd and dd.itemID == itemID then
-        dd.phase = "pick"
-        dd.sessionID = nil
-        dd.rolls = {}
-        dd.menu = nil
-        dd.countdown = nil
-        dd.countdownDur = nil
-        dd.status = "open"
-        M.RefreshDetail()
-      end
-      local parked = M.parked and M.parked[itemID] or nil
-      if parked then
-        parked.phase = "pick"
-        parked.sessionID = nil
-        parked.rolls = {}
-        parked.menu = nil
-        parked.countdown = nil
-        parked.countdownDur = nil
-        parked.status = "open"
-      end
-      return "cancelled"
+      dd.phase = "pick"
+      dd.rolls = {}
+      dd.menu = nil
+      dd.countdown = nil
+      dd.countdownDur = nil
+      dd.status = "open"
+      M.RefreshDetail()
     end
-    return "cancel failed"
+    return "cancelled"
   end
   return "unknown action"
+end
+
+-- Seed the rolling countdown at once (full window, not one tick late).
+function M.seedCountdown(d)
+  local MLUI = Z.MasterLootUI
+  local roll = MLUI and MLUI.roll
+  local dur = (roll and roll.rollDur)
+    or (MLUI and MLUI.RollDuration and MLUI.RollDuration()) or nil
+  d.countdown = (roll and roll.rollLeft) or dur
+  d.countdownDur = dur or d.countdown
 end
 
 -- The "..." (More) list: every awardable name + roll initiation.
@@ -1671,8 +1421,7 @@ function M.MoreLines(d)
       end
     end
   else
-    -- Post-roll: reopen for more rolls (when the finished session is
-    -- parked) + raid-roll instead, mirroring the menu rows.
+    -- Award phase: Roll again + Raid-roll instead, mirroring the menu.
     for i = 1, Z.Util.ArrayCount(M.MoreRollControls(d)) do
       local c = M.MoreRollControls(d)[i]
       if c then table.insert(lines, "  " .. tostring(c.label)) end
@@ -1797,10 +1546,10 @@ function M.BuildDetailFrame()
   if rolls.Hide then rolls:Hide() end
   f.rolls = rolls
   -- Button bar pinned to the BOTTOM (never overlapping the roll list):
-  -- primary left, ... + Close right. The primary is context per phase
+  -- primary left, ... right. The primary is context per phase
   -- (re-labeled, never rebuilt):
   -- pick:    "Award <name>" on a single holder, else hidden (use ...).
-  -- rolling: "Finish" (finish early -> this window becomes the award view).
+  -- rolling: "Finish" (resolve now, award on this window).
   -- award:   "Award <top winner>" (further winners via their own rows).
   -- Width fits the label: measured text + padding, capped to the bar.
   -- NOTE: no SetPoint here — LayoutBar places all buttons (flow layout).
@@ -1811,15 +1560,13 @@ function M.BuildDetailFrame()
     if not M.detail then return end
     local ph = M.detail.phase or "pick"
     if ph == "rolling" then M.doAction(M.detail.itemID, "finish")
-    elseif ph == "award" or ph == "preaward" then
+    elseif ph == "award" then
       -- First award action row (top winner, incl. TMOG via choice).
       local acts = M.DetailActions(M.detail)
       local first = acts and acts[1]
       if first and first.id == "award-name" then
         M.doAction(M.detail.itemID, "award-name",
           { name = first.name, via = first.via })
-      elseif first and first.id == "continue" then
-        M.doAction(M.detail.itemID, "continue")
       end
     else M.doAction(M.detail.itemID, "award") end
   end)
@@ -1854,17 +1601,12 @@ function M.BuildDetailFrame()
     if M.detail then M.ToggleMoreDropdown(moreB) end
   end)
   f.moreB = moreB
-  -- X in the top-right corner: dismiss, keep the overview.
+  -- X in the top-right corner: close the window (ends any open roll).
   local closeB = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   closeB:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -4)
   f.closeB = closeB
-  -- Close button shares the Close ACTION path (doAction "close"), not a
-  -- bare CloseDetail: closing a rolling window finishes it into parked
-  -- award rows first, so the session alias clears and the next item's
-  -- roll (plus live /roll intake) routes to the new session. A bare
-  -- dismiss would strand the old session as the alias and every later
-  -- roll — fakes and self-rolls alike — would land on the dead item.
   -- Routed via OnCloseButton (named for tests) rather than inline.
+
   closeB:SetScript("OnClick", function() M.OnCloseButton() end)
   M.detailFrame = f
   return f
@@ -1889,7 +1631,7 @@ function M.PaintDetailFrame()
       local n = Z.Util.ArrayCount(d.rolls or {})
       local cd = d.countdown and (" (" .. tostring(d.countdown) .. "s)") or ""
       f.sub:SetText("Rolling..." .. cd .. " (" .. n .. " roll" .. (n == 1 and "" or "s") .. ")")
-    elseif (phase == "award" or phase == "preaward") and d.menu then
+    elseif phase == "award" and d.menu then
       local winners = d.menu.winners or {}
       if Z.Util.ArrayCount(winners) > 0 then
         local w = {}
@@ -1943,33 +1685,23 @@ function M.PaintDetailFrame()
       if f.timerBar.SetAlpha then f.timerBar:SetAlpha(1) end
     end
   end
-  -- Live roll list: two columns like the raider frame (names left,
-  -- "roll/max" right, e.g. 56/98 for a TMOG roll). The legacy f.rolls
-  -- mirror stays hidden always: showing it paints a second bare-name
-  -- block stacked above the two columns (every roller twice).
+  -- The legacy f.rolls mirror stays hidden always: showing it paints
+  -- a second bare-name block stacked above the two columns (every
+  -- roller twice).
   if f.rolls and f.rolls.Hide then f.rolls:Hide() end
-  local function paintRollColumns(rows, waiting)
-    local left, right = {}, {}
-    for i = 1, Z.Util.ArrayCount(rows) do
-      local r = rows[i]
-      local nm = string.sub(tostring(r.name or "?"), 1, 12)
-      table.insert(left, PName(nm))
-      table.insert(right, M.RollRangeText(r))
-    end
-    if waiting then
-      if f.rollsL and f.rollsL.SetText then f.rollsL:SetText("waiting for rolls...") end
-      if f.rollsR and f.rollsR.SetText then f.rollsR:SetText("") end
-    else
-      if f.rollsL and f.rollsL.SetText then f.rollsL:SetText(table.concat(left, "\n")) end
-      if f.rollsR and f.rollsR.SetText then f.rollsR:SetText(table.concat(right, "\n")) end
-    end
-  end
-  if f.rollsL or f.rollsR then
+  -- Live roll list: painted through the shared RollList view (same
+  -- grouping/colors/ranges as the raider frame). Empty + ROLLING shows
+  -- the waiting text; pick phase stays blank; the award phase shows
+  -- the landed rolls (possibly none — the sub header already says
+  -- "No eligible rolls", never "waiting" once the roll is over).
+  if Z.RollList and Z.RollList.Paint then
     if phase == "pick" then
-      paintRollColumns({}, false)
+      Z.RollList.Paint(f.rollsL, f.rollsR, d.rolls, nil)
+    elseif phase == "rolling" then
+      Z.RollList.Paint(f.rollsL, f.rollsR, d.rolls,
+        { waiting = "waiting for rolls..." })
     else
-      local rows = M.SortedDetailRolls(d)
-      paintRollColumns(rows, Z.Util.ArrayCount(rows) == 0)
+      Z.RollList.Paint(f.rollsL, f.rollsR, d.rolls, nil)
     end
   end
   -- Button bar: collect the visible buttons, then flow-layout them
@@ -1983,11 +1715,10 @@ function M.PaintDetailFrame()
     if btn.Enable then btn:Enable() end
     table.insert(slots, { btn = btn, w = M.ButtonWidth(btn, text) })
   end
-  -- Award rows share one renderer across award + preaward (the parked
-  -- view is the same award window, plus Continue): primary = top winner,
-  -- TMOG button = TMOG kind winner, ... = everyone else.
+  -- Award rows: primary = top winner, TMOG button = TMOG kind
+  -- winner, ... = everyone else.
   local function awardButtons()
-    if not (d.menu and (phase == "award" or phase == "preaward")) then
+    if not (d.menu and phase == "award") then
       return
     end
     local acts = M.DetailActions(d)
@@ -2010,20 +1741,18 @@ function M.PaintDetailFrame()
     local show, label = false, "Award"
     if phase == "rolling" then
       show, label = true, "Finish"
-    elseif phase == "preaward" and not d.menu then
-      show, label = true, "Continue"
-    elseif d.single and (phase == "pick" or (phase == "preaward" and not d.menu)) then
+    elseif d.single and phase == "pick" then
       show, label = true, "Award " .. PName(d.rollers[1])
     end
-    if phase == "award" or (phase == "preaward" and d.menu) then
-      -- Award window (open or parked): winner rows own the primary slot.
+    if phase == "award" and d.menu then
+      -- Award window: winner rows own the primary slot.
       awardButtons()
     elseif show then
       showBtn(f.awardB, label)
     elseif f.awardB.Hide then
       f.awardB:Hide()
     end
-    if f.tmogB and phase ~= "award" and not (phase == "preaward" and d.menu) then
+    if f.tmogB and phase ~= "award" then
       -- TMOG button only lives on award windows; hidden otherwise
       -- (pick/rolling, or no TMOG roll).
       if f.tmogB.Hide then f.tmogB:Hide() end
@@ -2037,7 +1766,7 @@ function M.PaintDetailFrame()
   -- every roller fits without scrolling; capped for huge raids.
   -- Award rows render below the roll list, so count them too.
   local nShown = Z.Util.ArrayCount(M.SortedDetailRolls(d))
-  if (phase == "award" or phase == "preaward") and d.menu then
+  if phase == "award" and d.menu then
     nShown = nShown + Z.Util.ArrayCount((d.menu or {}).winners or {})
   end
   if f.SetHeight then f:SetHeight(M.DetailHeight(nShown, barRows)) end
@@ -2067,27 +1796,28 @@ M.moreDropdown = nil
 -- Dropdown choice rows for the detail (data, headless-testable):
 -- { { id="roll", label="Roll" }, { id="award-name", label="Award <name>" },
 --   { id="class", label="Warrior (3) >", class="Warrior", members={...} },
---   { id="continue", ... }, { id="raidroll", ... } }
--- Priority rows (roll initiation pre-roll, reopen/raid-roll post-roll,
--- labeled rollers, kind winners) stay top-level for one click; the REST
+--   { id="raidroll", ... } }
+-- Priority rows (roll initiation, labeled rollers, kind winners, and
+-- post-roll Roll-again/Raid-roll) stay top-level for one click; the REST
 -- of the awardable roster groups by class (MoreClassGroups), each group
 -- opening a side submenu with its players — a flat 40-name list becomes
 -- ~9 class rows. Every group member awards directly, even pre-roll
 -- (AwardDirect, no roll needed).
--- Roll-control rows for the ... menu (data): after a roll finished,
--- the ML can reopen it for more rolls (Continue, same session) or
--- raid-roll instead — so both stay on the menu next to the awards.
--- Returns {} when neither applies (pick phase, rolling, no parked roll).
+-- Roll-control rows for the ... menu (data): mid-roll the menu offers
+-- Raid-roll instead (ends the open roll, raid-rolls the item); the award
+-- window keeps Roll again and Raid-roll instead next to the awards.
+-- Returns {} in pick phase.
 function M.MoreRollControls(d)
   d = d or M.detail
   local out = {}
   if not d then return out end
   local ph = d.phase or "pick"
-  if ph ~= "award" and ph ~= "preaward" then return out end
-  local MLUI = Z.MasterLootUI
-  if MLUI and MLUI.ParkedSession and MLUI.ParkedSession(d.itemID) then
-    table.insert(out, { id = "continue", label = "Reopen roll (more rolls)" })
+  if ph == "rolling" then
+    table.insert(out, { id = "raidroll", label = "Raid-roll instead" })
+    return out
   end
+  if ph ~= "award" or not d.menu then return out end
+  table.insert(out, { id = "roll", label = "Roll again" })
   table.insert(out, { id = "raidroll", label = "Raid-roll instead" })
   return out
 end
@@ -2100,8 +1830,8 @@ function M.MoreChoices(d)
     table.insert(out, { id = "roll", label = "Roll" })
     table.insert(out, { id = "raidroll", label = "Raid-roll" })
   else
-    -- Post-roll: reopen for more rolls / raid-roll instead, above the
-    -- award rows so the ML never has to close the menu to re-roll.
+    -- Award phase: Roll again + Raid-roll instead above the award rows,
+    -- so the ML never has to close the menu to roll again.
     for i = 1, Z.Util.ArrayCount(M.MoreRollControls(d)) do
       table.insert(out, M.MoreRollControls(d)[i])
     end
@@ -2127,8 +1857,7 @@ function M.MoreChoices(d)
       table.insert(out, { id = "award-name", label = label, name = nm })
     end
   end
-  local inAward = ((d.phase or "pick") == "award"
-    or (d.phase or "pick") == "preaward") and d.menu
+  local inAward = (d.phase or "pick") == "award" and d.menu
   if inAward then
     -- ... covers everyone the primary buttons do not: landed rollers
     -- first (labeled with their roll), then kind winners. The
@@ -2182,8 +1911,7 @@ function M.MoreClassGroups(d, skip)
   local groups = {}
   if not d then return groups end
   local sheet = Z.DB and Z.DB.sheet
-  local inAward = ((d.phase or "pick") == "award"
-    or (d.phase or "pick") == "preaward") and d.menu
+  local inAward = (d.phase or "pick") == "award" and d.menu
   local roster = nil
   if inAward then
     roster = (d.menu or {}).candidates
@@ -2320,7 +2048,6 @@ function M.ToggleMoreDropdown(anchor)
         if M.detail then
           if c.id == "roll" then M.doAction(M.detail.itemID, "roll")
           elseif c.id == "raidroll" then M.doAction(M.detail.itemID, "raidroll")
-          elseif c.id == "continue" then M.doAction(M.detail.itemID, "continue")
           elseif c.id == "award-name" then M.doAction(M.detail.itemID, "award-name", c.name) end
         end
       end)
