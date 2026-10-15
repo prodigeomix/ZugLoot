@@ -27,7 +27,15 @@ dofile("Timer.lua")
 ZugLoot.Caps = ZugLoot.Caps or { SR = 100, MS = 100, OS = 99, TMOG = 98 }
 local printed = {}
 ZugLoot.Print = function(m) table.insert(printed, tostring(m)) end
-ZugLoot.BossData = { TestBoss = { 1001, 1002 } }
+-- Atlas-CFM fixture: sim drops are read live from THE GAME's loot tables
+-- (fake AtlasCFM here). TestBoss: 1001 @20%, 1002 @8%, 1003 @0% (never
+-- drops); a rigged drop draw of 2 hits both (2<=2000, 2<=800), so every
+-- SimBoss("TestBoss") below queues exactly 1001+1002.
+AtlasCFM = { InstanceData = { TestRaid = { Name = "Test Raid", Acronym = "TR", MaxPlayers = 40,
+  Bosses = { { id = "TestBoss", name = "Test Boss", items = {
+      { id = 1001, dropRate = 20 }, { id = 1002, dropRate = 8 },
+      { id = 1003, dropRate = 0 } } } } } } }
+dofile("AtlasLoot.lua")
 local dropAdds = {}
 ZugLoot.DropLog = { Add = function(itemID, link, src, outcome, winner)
   table.insert(dropAdds, { itemID = itemID, src = src, outcome = outcome, winner = winner }) end }

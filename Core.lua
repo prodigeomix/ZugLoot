@@ -16,7 +16,7 @@ end
 -- Multi-line /zl help: grouped sections, one line per command with a
 -- real description. Headless-testable (returns the lines too).
 -- Slim command set: windows do the rest via buttons/menus. Kept:
--- sheet, import, loadfile, sheetreq, sync, simboss, simstop, rehearse.
+-- sheet, import, loadfile, sheetreq, sync, simboss, simraid, simstop, rehearse.
 function Z.HelpLines()
   return {
     "|cFFFFD700ZugLoot v" .. tostring(Z.VERSION or "?") .. " — commands:|r",
@@ -26,6 +26,7 @@ function Z.HelpLines()
     "    sheetreq ......... ask the group for the current sheet (ML/leader answers)",
     "    sync <name> ...... ask ONE player for their sheet (player link works)",
     "    simboss <boss> ... queue a boss's drops, you roll each",
+    "    simraid <raid> ... queue a whole raid's drops (+ trash), you roll each",
     "    simstop .......... stop the sim, reset everything",
     "    rehearse [on|off]  solo master-loot practice with invented rollers",
     "    help ............. this list",
@@ -160,7 +161,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   -- Slim command set (windows do the rest via buttons/menus):
-  -- sheet, import, loadfile, sheetreq, sync, simboss, simstop, rehearse.
+  -- sheet, import, loadfile, sheetreq, sync, simboss, simraid, simstop, rehearse.
   if cmd == "" or cmd == "help" then
     Z.PrintHelp()
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
@@ -169,6 +170,7 @@ function Z.Slash(msg)
   elseif cmd == "sheetreq" then Z.Comm.RequestSheet()
   elseif cmd == "sync" then Z.Comm.RequestSheetFrom(rest)
   elseif cmd == "simboss" then Z.Sim.SimBoss(rest)
+  elseif cmd == "simraid" then Z.Sim.SimRaid(rest)
   elseif cmd == "simstop" then Z.Sim.Stop()
   elseif cmd == "rehearse" then
     if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end

@@ -107,13 +107,16 @@ entry carries an invented roster, the session is stamped
 `rehearse + invented` (fences invented names off sheet writes), and the
 award is a **real** corpse take (`source='raid'`).
 
-## 3. Simboss (fake boss drops, ML-driven, no corpse)
+## 3. Simboss (Atlas-CFM boss drops, ML-driven, no corpse)
 
 ```mermaid
 flowchart TD
     A2["simboss name to SimBoss"] --> B2["RequireSheet + Busy guard"]
-    B2 --> C2{"drop source: pfLoot.BossDrops vs BossData?"}
-    C2 --> D2["RollStaticDrops re-rolled subset"]
+    B2 --> B3{"Atlas-CFM loaded?"}
+    B3 -- no --> B4["refuse with pointer"]
+    B3 -- yes --> C2{"FindBoss, or peel trailing raid name"}
+    C2 -- miss --> C3["unknown: usage, or that raid's bosses"]
+    C2 --> D2["AtlasLoot.BossDrops: independent chance roll per listed drop"]
     D2 --> E2["ResetFresh"]
     E2 --> F2["per drop: BuildEntry FakeRolls SIM / SIM-OPEN"]
     F2 --> G2["pending, auto=false SyncLootWindow + Show sim loot"]
@@ -140,8 +143,17 @@ flowchart TD
     class A2,B2,C2,D2,E2,F2,G2,H2,J2,K3,K4,L3,N2,T2,U2 simOnly
 ```
 
-Simboss-only parts: fake drop sourcing (`pfLoot` / `BossData`), `BuildEntry`
+Simboss-only parts: live drop sourcing (`AtlasLoot` chance rolls off the
+in-game Atlas-CFM tables — no pfQuest, no bundled lists), `BuildEntry`
 with `FakeRolls`, `StartQueuedRoll` (sim queue guards), and the `source='sim'`
 award with no corpse take. The middle of the pipe — `playOne`,
 `BeginSession`, chat-intake `feedRoll`, `Finish`, `AwardChosen` — is shared
 with rehearsal (blue) and, for the green nodes, with live loot too.
+
+## 4. Simraid (whole raid + trash, ML-driven, no corpse)
+
+`/zl simraid <raid>` runs the simboss pipe once per raid: `AtlasLoot.RaidDrops`
+rolls every boss's drops in table order with a FRESH trash batch between
+consecutive bosses (the raid's `*Trash` table), all flattened into ONE shared
+queue via the same `StartRun` starter (`Simulated raid: <name>` window).
+Unknown raids get the raid list; an all-miss run says so and queues nothing.
