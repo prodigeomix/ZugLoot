@@ -1170,15 +1170,27 @@ function M.RenderPysanka()
     cellB:SetPoint("TOPLEFT", row, "TOPLEFT", koX, dbY)
     if cellB.CreateTexture then
       local tex = cellB:CreateTexture(nil, "ARTWORK")
-      if tex.SetTexture then
-        tex:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+      if tex then
+        -- Blizzard's own raid-icon setter first (guaranteed texture);
+        -- explicit file path second; question mark last.
+        local done = false
+        local markIdx = Z.Pysanka.MARK_ICONS and Z.Pysanka.MARK_ICONS[mark]
+        if markIdx and SetRaidTargetIconTexture then
+          local okA = pcall(SetRaidTargetIconTexture, tex, markIdx)
+          if okA then done = true end
+        end
+        if not done and tex.SetTexture then
+          tex:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+        end
+        if tex.SetWidth then tex:SetWidth(koSize) tex:SetHeight(koSize) end
+        if tex.SetAllPoints then tex:SetAllPoints(cellB) end
+        if tex.Show then tex:Show() end
+        cellB.zlIconVia = done and "api" or "path"
       end
-      if tex.SetAllPoints then tex:SetAllPoints(cellB) end
-      if tex.Show then tex:Show() end
     end
     cellB.zlMark, cellB.zlIcon = mark, iconPath
     Tip(cellB, mark, "Kill priority " .. i .. " of " .. nMarks)
-    table.insert(M.zlPysKillOrder, { mark = mark, icon = cellB.zlIcon })
+    table.insert(M.zlPysKillOrder, { mark = mark, icon = cellB.zlIcon, via = cellB.zlIconVia })
     koX = koX + koSize + 4
     if i < nMarks then
       local sep = PYLabel(row, ">", 12, "CENTER")

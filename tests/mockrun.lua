@@ -19,7 +19,7 @@ local function newObj(kind)
   function o:SetAlpha(a) self.alpha=a end
   function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
-  function o:CreateTexture(...) local t={scripts={}}; function t:SetTexture() end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight() end; function t:SetWidth() end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
+  function o:CreateTexture(...) local t={scripts={}, w=0, h=0}; function t:SetTexture(p) self.tex=p end; function t:GetTexture() return self.tex end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight(h) self.h=h end; function t:SetWidth(w) self.w=w end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
   function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
   function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
   function o:SetStatusBarTexture() end
@@ -386,6 +386,16 @@ for i = 1, 8 do
     "kill icon " .. i .. " is a raid icon, got: " .. tostring(ko[i].icon));
   assert(ko[i].mark == Z.Pysanka.MARKS[i], "kill icon " .. i .. " order");
 end
+-- Without the client API the path is used; with it (stock 1.12
+-- SetRaidTargetIconTexture) the API paints the texture directly.
+SetRaidTargetIconTexture = function(tex, idx)
+  tex:SetTexture("API-ICON-" .. tostring(idx))
+end;
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+local koApi = Z.MainWindow.DebugPysankaKillOrder();
+assert(koApi and koApi[1].via == "api", "client raid-icon API used when present");
+SetRaidTargetIconTexture = nil;
 print("pysanka tab OK");
 for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
