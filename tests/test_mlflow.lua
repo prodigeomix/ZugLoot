@@ -286,6 +286,13 @@ ML.OnLootOpened()
 ML.AwardDirect(1001, "SomebodyElse", "loot")
 eq(#masterGiven, 1, "master loot handed to the winner")
 eq(masterGiven[1][2], 2, "correct candidate index")
+-- Self-award under master loot ALSO hands off by candidate index:
+-- plain LootSlot is a silent server no-op for threshold+ items, so
+-- awarding yourself must go through GiveMasterLoot (own index).
+ML.OnLootOpened()
+ML.AwardDirect(1001, "SoloPlayer", "loot")
+eq(#masterGiven, 2, "self-award hands off too")
+eq(masterGiven[2][2], 1, "own candidate index")
 ML.OnLootOpened()
 local refusedBefore = #masterGiven
 ML.AwardDirect(1001, "NobodyHere", "loot")

@@ -40,6 +40,7 @@ run("test_minimap.lua")
 run("test_settings_reset.lua")
 run("test_mlflow.lua")
 run("test_lootwindow.lua")
+run("test_threshold.lua")
 run("test_atlasloot.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a

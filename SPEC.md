@@ -252,8 +252,9 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   + two-column roll list) — always ours, never Blizzard's): on
   `LOOT_OPENED`, whoever opened the corpse (solo, any loot method, ML or
   not), EVERY corpse slot gets a row (RollFor parity): coin first, then
-  roll-worthy items (quality ≥ `minLootQuality`, default rare+), then
-  below-threshold leftovers as one-click free rows. Blizzard's `LootFrame`
+  roll-worthy items (quality ≥ the party's `GetLootThreshold`, 1 common
+  .. 4 epic), then below-threshold leftovers (grey quality 0 always) as
+  one-click free rows that loot straight to the player in any loot method. Blizzard's `LootFrame`
   is DETACHED session-wide (RollFor `main.lua:on_player_login` parity:
   `UnregisterAllEvents` + `OnHide` stripped at `ADDON_LOADED`, re-armed
   per `LOOT_OPENED`) — one-shot hiding is NOT enough, FrameXML re-shows
@@ -261,12 +262,12 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   looting situation. NOTHING falls back to Blizzard: coin/free rows loot
   their slot on click; grouped, roll rows open the detail, while SOLO every
   row loots on click (Blizzard solo behavior — nobody to roll against, so
-  no detail opens). Group loot honors the PARTY threshold
-  (`GetLootThreshold`, green→epic): items at/above it enter a real group
-  roll — listed with a `ROLL` badge, click never loots (Blizzard's
-  Need/Greed frames own them, mirrored in our dice frame which votes via
-  `RollOnLoot`, never chat `/roll`); items below it are directly lootable
-  (grey/white never roll). Slot quality comes from the slot's own
+  no detail opens). At/above the PARTY threshold (`GetLootThreshold`,
+  1 common→4 epic): master-loot hands the item out via the roll window,
+  group loot enters a real group roll — listed with a `ROLL` badge, click
+  never loots (Blizzard's Need/Greed frames own them, mirrored in our dice
+  frame which votes via `RollOnLoot`, never chat `/roll`); below it the
+  item loots straight to the player (grey/white never roll). Slot quality comes from the slot's own
   `GetLootSlotInfo`, never the maybe-cold item cache. Click-to-loot is
   CONFIRM-driven, never optimistic: the click issues the corpse call and
   dims the row; the row drops only when `LOOT_SLOT_CLEARED` confirms the

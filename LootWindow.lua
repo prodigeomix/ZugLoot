@@ -2,9 +2,11 @@
 -- RollFor-LootFrame-style (modern skin) loot list — universal: whoever
 -- opens the corpse runs it (solo, any loot method, ML or not):
 -- a numbered list covering EVERY corpse slot (RollFor parity): coin plus
--- all qualities. Threshold+ items are roll rows (SR/HR badge on the right;
--- clicking opens the row detail); coin and below-threshold items are free
--- rows (one click loots the slot, no rolling). The detail STAYS OPEN as
+-- all qualities. Threshold+ items (quality >= the party's GetLootThreshold)
+-- are roll rows (SR/HR badge on the right; clicking opens the row detail);
+-- coin and below-threshold items (grey quality 0 always) are free rows
+-- (one click loots the slot straight to the player, no rolling, any loot
+-- method). The detail STAYS OPEN as
 -- the roll window (RollFor preview ->
 -- rolling -> winners flow): choose SR (direct award on a single holder) /
 -- Roll / Close; while rolling it lists every valid roll with its kind

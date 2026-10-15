@@ -642,8 +642,6 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
   local slot = M.VerifySlot(itemID, slotHint)
   if slot == "gone" then return "gone" end
   if not slot then return "noslot" end
-  local me = nil
-  if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
   local method = nil
   if GetLootMethod then local ok, m = pcall(GetLootMethod) if ok then method = m end end
   if method == nil and Z.SRSecurity and Z.SRSecurity.LootMethod then
@@ -664,17 +662,29 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
     if LootSlot then return pcall(LootSlot, s, 1) end
   end
   local function callLoot()
-    if method == "master" and me and winnerName and winnerName ~= me then
-      -- Master loot hands the corpse item to ANOTHER player by candidate
-      -- index (RollFor parity: GetMasterLootCandidate(slot, i) -> index).
-      -- Vanilla quirk: one-arg GetMasterLootCandidate(i) ignores the slot.
-      local idx = M.MasterLootIndex(slot, winnerName)
-      if not idx then
-        Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.")
-        return false
+    if method == "master" and winnerName and winnerName ~= "" then
+      -- Roll rows under master loot ALWAYS hand off by candidate index
+      -- (RollFor parity: GetMasterLootCandidate(slot, i) -> index) —
+      -- INCLUDING awards to yourself: plain LootSlot is a silent
+      -- server-side no-op for threshold+ items under master loot, so a
+      -- self-award must go through GiveMasterLoot with your own
+      -- candidate index. Vanilla quirk: one-arg
+      -- GetMasterLootCandidate(i) ignores the slot.
+      -- Free/coin rows (below threshold) stay on plain LootSlot: under
+      -- master loot anyone loots those directly off the corpse.
+      local row = Z.LootWindow and Z.LootWindow.Find
+        and Z.LootWindow.Find(itemID) or nil
+      local isFree = (itemID == "Coin")
+        or (row and (row.free or row.coin))
+      if not isFree then
+        local idx = M.MasterLootIndex(slot, winnerName)
+        if not idx then
+          Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.")
+          return false
+        end
+        if GiveMasterLoot then return pcall(GiveMasterLoot, slot, idx) end
+        return "noslot"
       end
-      if GiveMasterLoot then return pcall(GiveMasterLoot, slot, idx) end
-      return "noslot"
     end
     if LootSlot then return superLoot(slot) end
     return "noslot"
@@ -962,20 +972,38 @@ end
 
 -- Universal loot scan: whoever opens a corpse runs the window — solo,
 -- party/raid, any loot method. EVERY corpse slot gets a row (RollFor
--- parity): coin first, then roll-worthy items (quality >= threshold, SR/HR
--- badge, announce + log `loot`/`seen`), then below-threshold leftovers as
--- one-click free rows. No Blizzard fallback — our window IS the loot UI.
+-- parity): coin first, then roll-worthy items (quality >= the party's
+-- GetLootThreshold, SR/HR badge, announce + log `loot`/`seen`), then
+-- below-threshold leftovers (grey quality 0 always) as one-click free
+-- rows that loot straight to the player via LootSlot, even under master
+-- loot. No Blizzard fallback — our window IS the loot UI.
 -- Further items go through /rf (or the sim loot window in sim).
 -- Scan one corpse slot into a row entry (nil when the slot is empty or
 -- unreadable). Coin slots carry no link: { itemID="Coin" }.
--- threshold: OUR roll-row cutoff (DB minLootQuality, default rare+).
--- groupThresh: the PARTY's Need/Greed cutoff (GetLootThreshold, default
--- uncommon) — items below it never enter a group roll.
--- Row kinds: coin (always click-loot) | roll (>= threshold: SR detail) |
--- group (group-loot item at/above groupThresh but BELOW our threshold:
--- Blizzard's Need/Greed frames own it — we list it but never loot it) |
--- free (everything else: one click loots, no rolling).
-function M.ScanSlot(slot, threshold, groupThresh)
+-- threshold: the PARTY's loot threshold (GetLootThreshold: 1 common ..
+-- 4 epic). Nil = read it live via M.LootThreshold().
+-- Row kinds: coin (always click-loot) | roll (>= threshold: SR detail,
+-- master-lootable under master loot) | group (group-loot method AND
+-- at/above threshold: Blizzard's Need/Greed frames own it — we list it
+-- but never loot it) | free (below threshold, grey quality 0 included:
+-- one click loots straight to the player).
+-- The PARTY's loot threshold (GetLootThreshold: 1 common .. 4 epic):
+-- the single cutoff for roll rows. At/above it rolls (master loot hands
+-- it out, group loot Needs/Greeds it); below it — grey quality 0 always
+-- — loots straight to the player via LootSlot, in any loot method.
+-- Single reader so scan, rescan, and open can never disagree; falls back
+-- to the client default (uncommon) headless or when the API is absent.
+function M.LootThreshold()
+  if Z.LootWindow and Z.LootWindow.GroupRollThreshold then
+    return Z.LootWindow.GroupRollThreshold()
+  end
+  if GetLootThreshold then
+    local ok, t = pcall(GetLootThreshold)
+    if ok and type(t) == "number" then return t end
+  end
+  return (Z.Limits and Z.Limits.LOOT_THRESHOLD_DEFAULT) or 2
+end
+function M.ScanSlot(slot, threshold)
   if not GetNumLootItems then return nil end
   -- Coin first: no link, texture + amount text from the slot info.
   -- Zero-copper corpses still carry an (empty) coin slot client-side —
@@ -1024,15 +1052,18 @@ function M.ScanSlot(slot, threshold, groupThresh)
   local entry = { link = link, quality = q,
     texture = tex, quantity = qty, slot = slot, name = slotName }
   entry.itemID = Z.Util.ItemID(link)
-  if q >= (threshold or 3) then
+  local thresh = threshold or M.LootThreshold()
+  if q >= thresh then
+    if Z.LootWindow and Z.LootWindow.IsGroupRollItem
+        and Z.LootWindow.IsGroupRollItem(q) then
+      entry.group = true -- Blizzard's Need/Greed owns it: list, don't touch
+      return entry
+    end
     return entry -- roll row (badge added below)
   end
-  if Z.LootWindow and Z.LootWindow.IsGroupRollItem
-      and Z.LootWindow.IsGroupRollItem(q) then
-    entry.group = true -- Blizzard's Need/Greed owns it: list, don't touch
-    return entry
-  end
-  entry.free = true -- leftover: one click loots, no rolling
+  -- Below threshold (grey quality 0 always lands here): loots straight
+  -- to the player via LootSlot, even under master loot.
+  entry.free = true
   return entry
 end
 
@@ -1050,7 +1081,7 @@ function M.RescanLeftovers()
   local rows = (Z.LootWindow and Z.LootWindow.items) or M.items
   if not GetNumLootItems then return Z.Util.ArrayCount(rows) end
   if not M.lootOpen then return Z.Util.ArrayCount(rows) end
-  local threshold = (Z.DB and Z.DB.minLootQuality) or 3
+  local threshold = M.LootThreshold()
   local n = GetNumLootItems()
   -- Slot NUMBERS shift when a slot is looted (old slot 2 becomes slot 1),
   -- so reconciliation matches by identity multiset, not slot index:
@@ -1286,7 +1317,7 @@ function M.OnLootOpened()
   -- New corpse while another is open: park the active one's rows,
   -- then build fresh below.
   if M.lootKey and M.lootKey ~= key then M.ParkCorpse() end
-  local threshold = (Z.DB and Z.DB.minLootQuality) or 3
+  local threshold = M.LootThreshold()
   local found, coin, free, grouped = {}, {}, {}, {}
   local n = GetNumLootItems()
   for slot = 1, n do
