@@ -382,6 +382,11 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   so the whole raid is one hover away instead of a flat 40-name list.
   Every submenu name awards directly, even before a roll (no-roll
   shortcut), and nobody already listed above repeats inside a group.
+  After a roll finishes the same menu grows roll controls on top:
+  **Reopen roll** (Continue — the parked session re-attaches, more rolls
+  come into the same list) and **Raid-roll instead** (replaces the
+  finished roll: parked state is discarded so nobody can award stale
+  winners, and the window flips to the raid-roll view).
   **Close** to dismiss and keep working the overview. `/zl cr`
   returns the item to open. Non-ML clients ignore corpse loot.
 - **Award menu** (RollFor finish-popup style): on roll completion nothing is

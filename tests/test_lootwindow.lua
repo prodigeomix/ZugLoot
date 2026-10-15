@@ -383,6 +383,78 @@ for i = 1, #LW.MoreChoices() do
   end
 end
 eq(bareDup, nil, "rollers show with their roll, never again bare")
+-- 6c2. ... menu after a finished roll: reopen for more rolls + raid-roll
+-- instead, above the award rows. (Detail is the award window from above.)
+ML.parkedSessions = nil
+ML.sessions = {}
+ML.session = nil
+local rc0 = LW.MoreRollControls()
+eq(#rc0, 1, "no parked roll: raid-roll only")
+eq(rc0[1].id, "raidroll", "raid-roll stays for a fresh decision")
+-- Park the finished session (as Finish does): reopen appears.
+local finSess = { id = 7, itemID = 1001, itemLink = "item:1001", mode = "SR",
+  silent = false, rolls = {}, t = 0, itemCount = 1, dispName = "item:1001" }
+ML.ParkSession(finSess)
+local rc1 = LW.MoreRollControls()
+eq(#rc1, 2, "parked roll: reopen + raid-roll")
+eq(rc1[1].id, "continue", "reopen first")
+eq(rc1[2].id, "raidroll", "raid-roll second")
+local chAfter = LW.MoreChoices()
+eq(chAfter[1].id, "continue", "menu leads with reopen")
+eq(chAfter[2].id, "raidroll", "menu second raid-roll")
+-- Reopen from the menu: the SAME session re-attaches, rolling again.
+eq(LW.doAction(1001, "continue"), "continuing", "menu reopen continues")
+eq(LW.detail.phase, "rolling", "rolling again after menu reopen")
+eq(LW.detail.sessionID, 7, "reopened session kept")
+-- Park it again for the raid-roll cases (award view + parked session).
+ML.ParkSession(ML.sessions[1001])
+LW.detail.phase = "award"
+LW.detail.status = nil
+local pendKey = ML.RollKey(1001)
+ML.pendingAwardMenus = { [pendKey] = { sess = finSess, data = menu6 } }
+ML.pendingAwardMenu = ML.pendingAwardMenus[pendKey]
+-- Refused raid-roll (starter produces no live session): finished state
+-- untouched. (No-op stub: the real starter's roster depends on leaked
+-- client globals, so refusal is forced deterministically.)
+local realRaidRoll = ML.StartRaidRoll
+ML.StartRaidRoll = function() end
+-- A second item's pending menu: the refusal must not touch it either.
+local otherKey = ML.RollKey(1002)
+ML.pendingAwardMenus[otherKey] = { sess = { itemID = 1002 }, data = {} }
+eq(LW.doAction(1001, "raidroll"), "roll failed", "refused raid-roll fails")
+eq(LW.detail.phase, "award", "refused raid-roll keeps award view")
+ok(LW.detail.menu ~= nil, "refused raid-roll keeps menu")
+ok(ML.ParkedSession(1001) ~= nil, "refused raid-roll keeps parked session")
+ok(ML.pendingAwardMenus[pendKey] ~= nil, "refused raid-roll keeps pending menu")
+-- Raid-roll replacing the finished roll: parked state discarded, the
+-- window flips to the raid-roll view. (The other item's pending menu
+-- staged above survives; the alias re-points at it.)
+ML.StartRaidRoll = function(id)
+  ML.sessions = ML.sessions or {}
+  ML.sessions[id] = { id = 77, itemID = id, itemLink = "item:" .. id,
+    mode = "RAIDROLL", silent = false, rolls = {}, t = 0, itemCount = 1,
+    dispName = "item:" .. id }
+  ML.session = ML.sessions[id]
+end
+eq(LW.doAction(1001, "raidroll"), "rolling", "raid-roll replaces finished roll")
+eq(LW.detail.phase, "rolling", "window flips to raid-roll view")
+eq(LW.detail.sessionID, 77, "detail tracks the raid-roll session")
+ok(LW.detail.menu == nil, "old award view wiped")
+ok(ML.ParkedSession(1001) == nil, "old parked session discarded")
+ok(ML.pendingAwardMenus[pendKey] == nil, "stale pending menu discarded")
+eq(ML.pendingAwardMenu, ML.pendingAwardMenus[otherKey], "alias re-points at surviving menu")
+ML.StartRaidRoll = realRaidRoll
+-- Reopen re-attaches the RAID-roll (id 77), never the old session.
+ML.ParkSession(ML.sessions[1001])
+eq(LW.doAction(1001, "continue"), "continuing", "reopen re-attaches raid-roll")
+eq(LW.detail.sessionID, 77, "continued session is the raid-roll")
+ok(ML.ParkedSession(1001) == nil, "raid-roll session live again")
+-- Tidy for 6d: no live/parked/pending state leaks forward.
+ML.sessions = {}
+ML.session = nil
+ML.parkedSessions = nil
+ML.pendingAwardMenus = nil
+ML.pendingAwardMenu = nil
 -- 6d. Continue: reopen a parked roll for more rolls on the SAME list.
 -- Parked session re-attaches (same id), phase flips to rolling, the
 -- primary button offers Continue while parked for award.

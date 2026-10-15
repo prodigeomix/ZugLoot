@@ -1469,9 +1469,21 @@ function M.doAction(itemID, actionID, extra)
     if actionID == "raidroll" then
       -- Raid-roll: ML numbers the raid 1-N and rolls the number (RollFor
       -- + Pysanka parity). No sim/rehearsal routing — always live.
+      -- Raid-rolling AFTER a finished roll replaces it: when the starter
+      -- actually produced a live session, discard the old parked session
+      -- + pending award menu (a later Continue re-attaches the
+      -- raid-roll, nobody can award stale winners) and wipe the open
+      -- award view so the shared flip below turns it into the rolling
+      -- view. A refused start leaves the finished state untouched.
       if Z.MasterLootUI and Z.MasterLootUI.StartRaidRoll then
         Z.MasterLootUI.StartRaidRoll(d.itemID)
-        ok = true
+        local live = MLUI.SessionFor and MLUI.SessionFor(d.itemID) or nil
+        if live and live.itemID == d.itemID then
+          if MLUI.DiscardParkedRoll then MLUI.DiscardParkedRoll(d.itemID) end
+          d.rolls = {}
+          d.menu = nil
+          ok = true
+        end
       end
     elseif d.source == "sim" then
       if Z.Sim and Z.Sim.RequestRoll then
@@ -1659,7 +1671,12 @@ function M.MoreLines(d)
       end
     end
   else
-    table.insert(lines, "  Roll: start a roll for this item")
+    -- Post-roll: reopen for more rolls (when the finished session is
+    -- parked) + raid-roll instead, mirroring the menu rows.
+    for i = 1, Z.Util.ArrayCount(M.MoreRollControls(d)) do
+      local c = M.MoreRollControls(d)[i]
+      if c then table.insert(lines, "  " .. tostring(c.label)) end
+    end
   end
   table.insert(lines, "  Anyone: /zl award <name> after the roll, or award now")
   return lines
@@ -2049,12 +2066,32 @@ M.moreDropdown = nil
 
 -- Dropdown choice rows for the detail (data, headless-testable):
 -- { { id="roll", label="Roll" }, { id="award-name", label="Award <name>" },
---   { id="class", label="Warrior (3) >", class="Warrior", members={...} } }
--- Priority rows (roll initiation, labeled rollers, kind winners) stay
--- top-level for one click; the REST of the awardable roster groups by
--- class (MoreClassGroups), each group opening a side submenu with its
--- players — a flat 40-name list becomes ~9 class rows. Every group
--- member awards directly, even pre-roll (AwardDirect, no roll needed).
+--   { id="class", label="Warrior (3) >", class="Warrior", members={...} },
+--   { id="continue", ... }, { id="raidroll", ... } }
+-- Priority rows (roll initiation pre-roll, reopen/raid-roll post-roll,
+-- labeled rollers, kind winners) stay top-level for one click; the REST
+-- of the awardable roster groups by class (MoreClassGroups), each group
+-- opening a side submenu with its players — a flat 40-name list becomes
+-- ~9 class rows. Every group member awards directly, even pre-roll
+-- (AwardDirect, no roll needed).
+-- Roll-control rows for the ... menu (data): after a roll finished,
+-- the ML can reopen it for more rolls (Continue, same session) or
+-- raid-roll instead — so both stay on the menu next to the awards.
+-- Returns {} when neither applies (pick phase, rolling, no parked roll).
+function M.MoreRollControls(d)
+  d = d or M.detail
+  local out = {}
+  if not d then return out end
+  local ph = d.phase or "pick"
+  if ph ~= "award" and ph ~= "preaward" then return out end
+  local MLUI = Z.MasterLootUI
+  if MLUI and MLUI.ParkedSession and MLUI.ParkedSession(d.itemID) then
+    table.insert(out, { id = "continue", label = "Reopen roll (more rolls)" })
+  end
+  table.insert(out, { id = "raidroll", label = "Raid-roll instead" })
+  return out
+end
+
 function M.MoreChoices(d)
   d = d or M.detail
   local out = {}
@@ -2062,6 +2099,12 @@ function M.MoreChoices(d)
   if (d.phase or "pick") == "pick" and d.status == "open" then
     table.insert(out, { id = "roll", label = "Roll" })
     table.insert(out, { id = "raidroll", label = "Raid-roll" })
+  else
+    -- Post-roll: reopen for more rolls / raid-roll instead, above the
+    -- award rows so the ML never has to close the menu to re-roll.
+    for i = 1, Z.Util.ArrayCount(M.MoreRollControls(d)) do
+      table.insert(out, M.MoreRollControls(d)[i])
+    end
   end
   -- Landed rolls by name (their row carries roll + range for labels).
   local rolled = {}
@@ -2277,6 +2320,7 @@ function M.ToggleMoreDropdown(anchor)
         if M.detail then
           if c.id == "roll" then M.doAction(M.detail.itemID, "roll")
           elseif c.id == "raidroll" then M.doAction(M.detail.itemID, "raidroll")
+          elseif c.id == "continue" then M.doAction(M.detail.itemID, "continue")
           elseif c.id == "award-name" then M.doAction(M.detail.itemID, "award-name", c.name) end
         end
       end)
