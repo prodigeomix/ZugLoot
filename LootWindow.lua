@@ -59,6 +59,24 @@ M.BTN_MORE_W = 44
 -- widest content). 320 fits ~35-char names next to the ... button.
 -- (Close lives top-right as X, no bar width needed.)
 M.DETAIL_WIDTH = 220 -- raider-window width (was 320)
+-- Detail auto-height: header block + roll rows + button bar. The roll
+-- list grows one line per roll instead of clipping at a fixed height —
+-- a 40-man raid roll shows every roller without scrolling.
+M.DETAIL_HEADER_H = 130 -- icon + title + sub + top padding
+M.DETAIL_ROLL_H = 12 -- one roll-list line (FontString line height)
+M.DETAIL_BASE_H = 250 -- the old fixed height: windows never shrink,
+-- only grow past ~7 rolls
+M.DETAIL_MAX_H = 650 -- cap: a full 40-man list still fits
+-- Pure (headless-testable): frame height for a roll count + bar rows.
+function M.DetailHeight(nRolls, barRows)
+  local rows = math.max(0, tonumber(nRolls) or 0)
+  local barH = (math.max(1, tonumber(barRows) or 1)) * M.BTN_HEIGHT
+    + (math.max(1, tonumber(barRows) or 1) - 1) * M.BTN_GAP + M.BTN_MARGIN + 4
+  local h = M.DETAIL_HEADER_H + rows * M.DETAIL_ROLL_H + barH
+  if h < M.DETAIL_BASE_H then h = M.DETAIL_BASE_H end
+  if h > M.DETAIL_MAX_H then h = M.DETAIL_MAX_H end
+  return h
+end
 
 function M.Clear()
   M.items = {}
@@ -1800,11 +1818,20 @@ function M.PaintDetailFrame()
   -- Close lives in the top-right corner now (f.closeB), not the bar.
   local barRows = M.PlaceBarRows(f, M.LayoutBarRows(slots, barW), barW)
   if barRows == 0 then barRows = 1 end -- ... always slots in
-  -- Fixed raider-style height (220x250): header + two roll columns +
-  -- button bar. No content sizing (raider frame doesn't grow either).
-  local barH = (barRows or 1) * M.BTN_HEIGHT
-    + ((barRows or 1) - 1) * M.BTN_GAP + M.BTN_MARGIN + 4
-  if f.SetHeight then f:SetHeight(250) end
+  -- Auto-height: the frame grows one line per roll (DetailHeight) so
+  -- every roller fits without scrolling; capped for huge raids.
+  -- Award rows render below the roll list, so count them too.
+  local nShown = Z.Util.ArrayCount(M.SortedDetailRolls(d))
+  if (phase == "award" or phase == "preaward") and d.menu then
+    nShown = nShown + Z.Util.ArrayCount((d.menu or {}).winners or {})
+  end
+  if f.SetHeight then f:SetHeight(M.DetailHeight(nShown, barRows)) end
+  -- The roll columns stretch with the frame (fixed 70px clipped long
+  -- lists before); anchored top + button bar, never overlapping it.
+  local listH = M.DetailHeight(nShown, 1) - M.DETAIL_HEADER_H - 40
+  if listH < 24 then listH = 24 end
+  if f.rollsL and f.rollsL.SetHeight then f.rollsL:SetHeight(listH) end
+  if f.rollsR and f.rollsR.SetHeight then f.rollsR:SetHeight(listH) end
   -- Item icon follows the detail's item (mirrors the raider header).
   if f.dicon and f.dicon.SetTexture and d then
     local tex = nil

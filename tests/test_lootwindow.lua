@@ -206,6 +206,13 @@ eq(choices[1].id, "roll", "first choice is SR roll")
 eq(choices[2].id, "raidroll", "second choice is raid-roll")
 eq(choices[4].name, "Bbb", "award row carries the name")
 ok(LW.DETAIL_WIDTH == 220, "raider-style detail width")
+-- Detail auto-height: frame grows one line per roll, never shrinks
+-- below the old fixed 250, capped for huge raids.
+eq(LW.DetailHeight(0, 1), 250, "empty window keeps old height")
+eq(LW.DetailHeight(7, 1), 250, "small rolls keep old height")
+ok(LW.DetailHeight(10, 1) > 250, "10 rolls grow the window")
+eq(LW.DetailHeight(10, 1) - LW.DetailHeight(9, 1), 12, "one line per roll")
+ok(LW.DetailHeight(40, 1) <= LW.DETAIL_MAX_H, "40-man list capped")
 
 -- 6. Persistent roll window: pick -> rolling -> award in ONE window.
 -- Roll from the detail: it stays open and tracks the session.
