@@ -1219,7 +1219,7 @@ function M.OpenDetail(itemID)
   -- pick window. Multi-roll: each item's rolls survive the switching.
   if M.detail and M.detail.itemID ~= itemID then
     M.ParkDetail()
-    M.moreDropdown = nil
+    M.CloseMoreDropdown()
     M.detail = nil
   end
   -- A parked ROLLING/AWARD detail reopens exactly as it was closed:
@@ -1262,7 +1262,7 @@ function M.CloseDetail()
   -- just go away. Awarded items are removed from the list anyway, and
   -- RemoveItem clears any parked state for them.
   M.ParkDetail()
-  M.moreDropdown = nil
+  M.CloseMoreDropdown()
   M.detail = nil
   if M.detailFrame and M.detailFrame.Hide then M.detailFrame:Hide() end
   M.detailFrame = nil
@@ -1628,6 +1628,8 @@ end
 
 -- The "..." (More) list: every awardable name + roll initiation.
 -- Returns lines (headless) and stores them for the client frame.
+-- Pre-roll the roster groups by class (same groups the client shows as
+-- side submenus); every listed name awards directly, no roll needed.
 function M.MoreLines(d)
   d = d or M.detail
   local lines = {}
@@ -1638,7 +1640,27 @@ function M.MoreLines(d)
       table.insert(lines, "  SR: " .. PName(d.rollers[i]))
     end
   end
-  table.insert(lines, "  Roll: start a roll for this item")
+  if (d.phase or "pick") == "pick" then
+    table.insert(lines, "  Roll: start a roll for this item")
+    local seen = {}
+    for i = 1, Z.Util.ArrayCount(d.rollers or {}) do
+      if d.rollers[i] then seen[d.rollers[i]] = true end
+    end
+    for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
+      if d.rolls[i] and d.rolls[i].name then seen[d.rolls[i].name] = true end
+    end
+    for _, g in ipairs(M.MoreClassGroups(d, seen)) do
+      local names = {}
+      for m = 1, Z.Util.ArrayCount(g.members) do
+        if g.members[m] then table.insert(names, PName(g.members[m].name)) end
+      end
+      if Z.Util.ArrayCount(names) > 0 then
+        table.insert(lines, "  " .. tostring(g.class) .. ": " .. table.concat(names, ", "))
+      end
+    end
+  else
+    table.insert(lines, "  Roll: start a roll for this item")
+  end
   table.insert(lines, "  Anyone: /zl award <name> after the roll, or award now")
   return lines
 end
@@ -2026,7 +2048,13 @@ end
 M.moreDropdown = nil
 
 -- Dropdown choice rows for the detail (data, headless-testable):
--- { { id="roll", label="Roll" }, { id="award-name", label="Award <name>" } }
+-- { { id="roll", label="Roll" }, { id="award-name", label="Award <name>" },
+--   { id="class", label="Warrior (3) >", class="Warrior", members={...} } }
+-- Priority rows (roll initiation, labeled rollers, kind winners) stay
+-- top-level for one click; the REST of the awardable roster groups by
+-- class (MoreClassGroups), each group opening a side submenu with its
+-- players — a flat 40-name list becomes ~9 class rows. Every group
+-- member awards directly, even pre-roll (AwardDirect, no roll needed).
 function M.MoreChoices(d)
   d = d or M.detail
   local out = {}
@@ -2060,9 +2088,10 @@ function M.MoreChoices(d)
     or (d.phase or "pick") == "preaward") and d.menu
   if inAward then
     -- ... covers everyone the primary buttons do not: landed rollers
-    -- first (labeled with their roll), then kind winners, then the
+    -- first (labeled with their roll), then kind winners. The
     -- non-roller candidates (any raider, for when something is wrong
-    -- with the rolls).
+    -- with the rolls) ride the class groups below — never a flat
+    -- 40-name list.
     for i = 1, Z.Util.ArrayCount(M.SortedDetailRolls(d)) do
       local r = M.SortedDetailRolls(d)[i]
       if r then addAward(r.name) end
@@ -2077,10 +2106,6 @@ function M.MoreChoices(d)
         if row.tied[t] then addAward(row.tied[t].name) end
       end
     end
-    local cds = d.menu.candidates or {}
-    for i = 1, Z.Util.ArrayCount(cds) do
-      if cds[i] then addAward(cds[i].name) end
-    end
   else
     -- Pre-roll (pick, or rolling): reserves + landed rollers — nobody
     -- rolled on an award list yet, so labeled rollers dedupe the bare
@@ -2088,6 +2113,97 @@ function M.MoreChoices(d)
     for i = 1, Z.Util.ArrayCount(d.rollers or {}) do addAward(d.rollers[i]) end
     for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
       if d.rolls[i] then addAward(d.rolls[i].name) end
+    end
+  end
+  -- Class-grouped roster: everyone awardable NOT already listed above
+  -- (seen) — the full raid, not just reserves, so anyone can be
+  -- rewarded directly before a roll. In-client each group opens a side
+  -- submenu; headless each member is an award row like the rest.
+  for _, g in ipairs(M.MoreClassGroups(d, seen)) do
+    table.insert(out, g)
+  end
+  return out
+end
+
+-- Class groups for the ... menu (data, headless-testable): every
+-- awardable raider outside `skip`, grouped by class in roster order
+-- (class-sorted, unknown last):
+-- { { class="Warrior", members={ { id="award-name", ... }, ... } }, ... }.
+-- Source is the award menu's class-sorted candidates once finished,
+-- else the same class-sorted roster BuildCandidates builds (sheet +
+-- landed rollers + live raid roster) — so pre-roll the ... menu still
+-- reaches every raider for a direct award. Empty classes omitted;
+-- members never duplicate the labeled top-level rows.
+function M.MoreClassGroups(d, skip)
+  d = d or M.detail
+  local groups = {}
+  if not d then return groups end
+  local sheet = Z.DB and Z.DB.sheet
+  local inAward = ((d.phase or "pick") == "award"
+    or (d.phase or "pick") == "preaward") and d.menu
+  local roster = nil
+  if inAward then
+    roster = (d.menu or {}).candidates
+  elseif Z.MasterLootUI and Z.MasterLootUI.BuildCandidates then
+    roster = Z.MasterLootUI.BuildCandidates(sheet, d.rolls)
+  else
+    roster = {}
+    for i = 1, Z.Util.ArrayCount(d.rollers or {}) do
+      if d.rollers[i] then table.insert(roster, { name = d.rollers[i] }) end
+    end
+    for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
+      if d.rolls[i] and d.rolls[i].name then
+        table.insert(roster, { name = d.rolls[i].name })
+      end
+    end
+  end
+  -- One roster-map lookup for the whole menu (ClassOf would rebuild it
+  -- per name); sheet fills names the live roster never saw.
+  local rawMap = (Z.ClassColors and Z.ClassColors.RosterMap
+    and Z.ClassColors.RosterMap()) or {}
+  local function classOf(nm)
+    local c = nil
+    local raw = rawMap[nm]
+    if raw and raw ~= "" and Z.ClassColors and Z.ClassColors.NormalizeClass then
+      c = Z.ClassColors.NormalizeClass(raw)
+    end
+    if not c and sheet and Z.SRData and Z.SRData.PlayerClass then
+      c = Z.SRData.PlayerClass(sheet, nm)
+    end
+    return c
+  end
+  skip = skip or {}
+  local byClass = {}
+  for i = 1, Z.Util.ArrayCount(roster) do
+    local e = roster[i]
+    local nm = (type(e) == "table" and e.name)
+      or (type(e) == "string" and e) or nil
+    if nm and nm ~= "" and not skip[nm] then
+      skip[nm] = true
+      local cls = nil
+      if type(e) == "table" and e.class
+          and Z.ClassColors and Z.ClassColors.NormalizeClass then
+        cls = Z.ClassColors.NormalizeClass(e.class)
+      end
+      if not cls then cls = classOf(nm) end
+      local key = cls or "Unknown"
+      local g = byClass[key]
+      if not g then
+        g = { class = key, members = {} }
+        byClass[key] = g
+        table.insert(groups, g)
+      end
+      table.insert(g.members,
+        { id = "award-name", label = "Award " .. PName(nm), name = nm })
+    end
+  end
+  local out = {}
+  for i = 1, Z.Util.ArrayCount(groups) do
+    local g = groups[i]
+    if Z.Util.ArrayCount(g.members) > 0 then
+      table.insert(out, { id = "class", class = g.class,
+        label = g.class .. " (" .. Z.Util.ArrayCount(g.members) .. ") >",
+        members = g.members })
     end
   end
   return out
@@ -2102,8 +2218,7 @@ function M.ToggleMoreDropdown(anchor)
     return
   end
   if M.moreDropdown then
-    if M.moreDropdown.Hide then M.moreDropdown:Hide() end
-    M.moreDropdown = nil
+    M.CloseMoreDropdown()
     return -- was open: toggle shut
   end
   local choices = M.MoreChoices(d)
@@ -2119,13 +2234,19 @@ function M.ToggleMoreDropdown(anchor)
   if dd.SetBackdropColor then dd:SetBackdropColor(0, 0, 0, 1) end
   if dd.SetBackdropBorderColor then dd:SetBackdropBorderColor(0.2, 0.2, 0.2, 1) end
   if dd.EnableMouse then dd:EnableMouse(true) end
-  -- Hide when the mouse leaves the menu (RollFor dropdown parity).
+  -- Hide when the mouse leaves the menu AND its submenu (RollFor
+  -- dropdown parity): hovering a side submenu must not shut the list.
   if dd.SetScript and MouseIsOver then
     dd:SetScript("OnLeave", function()
-      if not MouseIsOver(dd) then M.CloseMoreDropdown() end
+      local sub = dd.submenu
+      if not MouseIsOver(dd) and not (sub and MouseIsOver(sub)) then
+        M.CloseMoreDropdown()
+      end
     end)
   end
-  -- One button per choice; width fits the longest label.
+  -- One button per choice; width fits the longest label. Class-group
+  -- rows (id="class") hover-open a side submenu with that class's
+  -- players (each awards directly); every other row runs on click.
   local width, y = 0, -4
   dd.rows = {}
   for i = 1, Z.Util.ArrayCount(choices) do
@@ -2141,9 +2262,17 @@ function M.ToggleMoreDropdown(anchor)
     end
     hover(0)
     if b.SetScript then
-      b:SetScript("OnEnter", function() hover(0.2) end)
+      b:SetScript("OnEnter", function()
+        hover(0.2)
+        if c.id == "class" then M.OpenMoreSubmenu(dd, b, c) end
+      end)
       b:SetScript("OnLeave", function() hover(0) end)
       b:SetScript("OnClick", function()
+        if c.id == "class" then
+          -- Click pins the submenu too (hover alone opens it).
+          M.OpenMoreSubmenu(dd, b, c)
+          return
+        end
         M.CloseMoreDropdown()
         if M.detail then
           if c.id == "roll" then M.doAction(M.detail.itemID, "roll")
@@ -2162,6 +2291,7 @@ function M.ToggleMoreDropdown(anchor)
       if w == 0 then w = string.len(c.label) * 7 end
       if w > width then width = w end
     end
+    b.choice = c
     table.insert(dd.rows, b)
     y = y - 18
   end
@@ -2179,11 +2309,107 @@ function M.ToggleMoreDropdown(anchor)
   M.moreDropdown = dd
 end
 
+-- Side submenu for one class group: pops to the RIGHT of the hovered
+-- class row, one award button per player of the class. Rebuilt per
+-- hover (one open at a time); closes with the main dropdown.
+function M.OpenMoreSubmenu(dd, anchorRow, group)
+  if not (CreateFrame and dd and anchorRow and group) then return end
+  if dd.submenu and dd.submenuClass == group.class then return end -- already open
+  M.CloseMoreSubmenu()
+  local members = group.members or {}
+  if Z.Util.ArrayCount(members) == 0 then return end
+  local parent = M.detailFrame or M.frame or UIParent
+  local sub = CreateFrame("Frame", "ZugLootLootMoreSubmenu", parent)
+  if type(sub) ~= "table" or type(sub.SetWidth) ~= "function" then return end
+  if sub.SetFrameStrata then pcall(sub.SetFrameStrata, sub, "TOOLTIP") end
+  if sub.SetBackdrop then
+    sub:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8",
+      edgeFile = "Interface/Buttons/WHITE8x8", edgeSize = 0.5 })
+  end
+  if sub.SetBackdropColor then sub:SetBackdropColor(0, 0, 0, 1) end
+  if sub.SetBackdropBorderColor then sub:SetBackdropBorderColor(0.2, 0.2, 0.2, 1) end
+  if sub.EnableMouse then sub:EnableMouse(true) end
+  -- Leaving both frames shuts the menu (main list guards the same way).
+  if sub.SetScript and MouseIsOver then
+    sub:SetScript("OnLeave", function()
+      if not MouseIsOver(sub) and not MouseIsOver(dd) then
+        M.CloseMoreDropdown()
+      end
+    end)
+  end
+  local width, y = 0, -4
+  sub.rows = {}
+  for i = 1, Z.Util.ArrayCount(members) do
+    local m = members[i] -- fresh local per iteration for the closure
+    local b = CreateFrame("Button", nil, sub)
+    if type(b) ~= "table" or type(b.SetWidth) ~= "function" then break end
+    b:SetHeight(16)
+    b:SetPoint("TOPLEFT", sub, "TOPLEFT", 5, y)
+    b:SetPoint("RIGHT", sub, "RIGHT", -5, 0)
+    if b.SetBackdrop then b:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" }) end
+    local function hover(a)
+      if b.SetBackdropColor then b:SetBackdropColor(0.125, 0.624, 0.976, a) end
+    end
+    hover(0)
+    if b.SetScript then
+      b:SetScript("OnEnter", function() hover(0.2) end)
+      b:SetScript("OnLeave", function() hover(0) end)
+      b:SetScript("OnClick", function()
+        M.CloseMoreDropdown()
+        if M.detail and m.name then
+          M.doAction(M.detail.itemID, "award-name", m.name)
+        end
+      end)
+    end
+    if b.CreateFontString then
+      local fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      fs:SetPoint("LEFT", b, "LEFT", 5, 0)
+      if fs.SetText then fs:SetText(m.label) end
+      local w = 0
+      if fs.GetStringWidth then w = fs:GetStringWidth() or 0 end
+      if w == 0 then w = string.len(m.label or "") * 7 end
+      if w > width then width = w end
+    end
+    table.insert(sub.rows, b)
+    y = y - 18
+  end
+  sub:SetWidth(width + 20)
+  sub:SetHeight(-y + 5)
+  if sub.ClearAllPoints then sub:ClearAllPoints() end
+  if sub.SetPoint then
+    -- To the side of the hovered class row (pops right, never over
+    -- the main list); falls right of the dropdown when unanchorable.
+    if anchorRow and anchorRow ~= sub then
+      sub:SetPoint("TOPLEFT", anchorRow, "TOPRIGHT", 2, 0)
+    else
+      sub:SetPoint("TOPLEFT", dd, "TOPRIGHT", 2, 0)
+    end
+  end
+  if sub.Show then sub:Show() end
+  dd.submenu = sub
+  dd.submenuClass = group.class
+  if M.moreDropdown == dd then M.moreSubmenu = sub end
+end
+
+function M.CloseMoreSubmenu()
+  local dd = M.moreDropdown
+  local sub = (dd and dd.submenu) or M.moreSubmenu
+  if sub then
+    if sub.Hide then sub:Hide() end
+    if dd then dd.submenu, dd.submenuClass = nil, nil end
+    M.moreSubmenu = nil
+  end
+end
+
+M.moreSubmenu = nil
+
 function M.CloseMoreDropdown()
+  M.CloseMoreSubmenu()
   if M.moreDropdown then
     if M.moreDropdown.Hide then M.moreDropdown:Hide() end
     M.moreDropdown = nil
   end
+  M.moreSubmenu = nil
 end
 
 -- "..." headless/text entry (kept for /zl text UIs): prints the choice list.
