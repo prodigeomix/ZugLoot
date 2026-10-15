@@ -38,6 +38,10 @@ local function newObj(kind)
   function o:SetVerticalScroll() end
   function o:GetHeight() return self.h or 10 end
   function o:Raise() end
+  function o:SetFrameStrata(s) self.strata=s end
+  function o:GetFrameStrata() return self.strata end
+  function o:SetFrameLevel(l) self.flevel=l end
+  function o:GetFrameLevel() return self.flevel or 5 end
   return o;
 end
 CreateFrame = function(kind, name, parent, tmpl) return newObj(kind) end
@@ -359,7 +363,29 @@ assert(tankClick, "tank button click wired");
 tankClick();
 local pick = Z.MainWindow.DebugPysankaPicker();
 assert(pick ~= nil, "picker opened on tank click");
+assert(pick.open == true, "picker records open state");
 assert(Z.Util.ArrayCount(pick.names) >= 2, "picker merges sheet players, got " .. tostring(pick.names and Z.Util.ArrayCount(pick.names)));
+-- Picker paints ABOVE the main window (TOOLTIP strata + higher level),
+-- or it slides under the window and cannot be clicked.
+local drop = Z.MainWindow.DebugPysankaDrop();
+assert(drop ~= nil, "picker frame built");
+assert(drop.strata == "TOOLTIP", "picker strata above window, got: " .. tostring(drop.strata));
+assert((drop.flevel or 0) > 5, "picker level above window, got: " .. tostring(drop.flevel));
+-- Clicking the same field again toggles the picker shut.
+tankClick();
+assert(Z.MainWindow.DebugPysankaPicker().open == false, "second click closes picker");
+assert(Z.MainWindow.DebugPysankaDrop() == nil, "picker frame torn down");
+-- Kill order renders the 8 real raid-target icons in order.
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+local ko = Z.MainWindow.DebugPysankaKillOrder();
+assert(ko and Z.Util.ArrayCount(ko) == 8, "kill order holds 8 icons, got " .. tostring(ko and Z.Util.ArrayCount(ko)));
+assert(ko[1].mark == "Skull" and ko[1].icon == Z.Pysanka.MarkIcon("Skull"), "kill order starts at skull");
+for i = 1, 8 do
+  assert(ko[i].icon and string.find(ko[i].icon, "UI-RaidTargetingIcon_", 1, true),
+    "kill icon " .. i .. " is a raid icon, got: " .. tostring(ko[i].icon));
+  assert(ko[i].mark == Z.Pysanka.MARKS[i], "kill icon " .. i .. " order");
+end
 print("pysanka tab OK");
 for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);

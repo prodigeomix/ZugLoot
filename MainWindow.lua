@@ -847,9 +847,19 @@ function M.PysankaSheet()
   return nil
 end
 
--- Test hook: last-opened pysanka picker ({ anchor, names }) or nil.
+-- Test hook: last-opened pysanka picker ({ anchor, names, open }) or nil.
 function M.DebugPysankaPicker()
   return M.zlPysPicker
+end
+
+-- Test hook: kill-order icons of the last render ({ {mark, icon}... }).
+function M.DebugPysankaKillOrder()
+  return M.zlPysKillOrder
+end
+
+-- Test hook: live picker frame (for the strata/level assert).
+function M.DebugPysankaDrop()
+  return M.pysDrop
 end
 
 -- Test hook: pysanka widget inventory ({ {desc, kind}... }).
@@ -909,8 +919,15 @@ function M.PysankaPick(anchor)
     return
   end
   if M.pysDrop then
+    local sameAnchor = M.pysAnchor == anchor
     if M.pysDrop.Hide then M.pysDrop:Hide() end
     M.pysDrop = nil
+    M.pysAnchor = nil
+    if sameAnchor then
+      -- Clicking the same field toggles the picker shut.
+      M.zlPysPicker = { anchor = anchor, names = names, open = false }
+      return
+    end
   end
   local dd = CreateFrame("Frame", "ZugLootPysPicker", UIParent)
   if type(dd) ~= "table" or type(dd.SetWidth) ~= "function" then
@@ -920,6 +937,9 @@ function M.PysankaPick(anchor)
   end
   dd:SetWidth(150)
   dd:SetHeight(18 + Z.Util.ArrayCount(names) * 16 + 18)
+  -- Above the main window: TOOLTIP strata (same as the loot "..."
+  -- dropdown) plus a level over the main frame, or the picker paints
+  -- underneath the window and cannot be clicked.
   if dd.SetBackdrop then
     dd:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
       edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -927,6 +947,18 @@ function M.PysankaPick(anchor)
       insets = { left = 4, right = 4, top = 4, bottom = 4 } })
   end
   if dd.SetBackdropColor then dd:SetBackdropColor(0, 0, 0, 0.95) end
+  if dd.SetFrameStrata then pcall(dd.SetFrameStrata, dd, "TOOLTIP") end
+  if dd.SetFrameLevel then
+    local lvl = 100
+    if M.frame and M.frame.GetFrameLevel then
+      local okL, ml = pcall(M.frame.GetFrameLevel, M.frame)
+      if okL and tonumber(ml) then lvl = tonumber(ml) + 10 end
+    end
+    pcall(dd.SetFrameLevel, dd, lvl)
+  end
+  -- Clickable above the window (EnableMouse) and self-closing when
+  -- the mouse leaves (loot "..." dropdown parity).
+  if dd.EnableMouse then pcall(dd.EnableMouse, dd, true) end
   if dd.SetPoint and anchor and anchor.GetPoint then
     dd:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
   elseif dd.SetPoint and anchor then
@@ -938,6 +970,8 @@ function M.PysankaPick(anchor)
     if anchor and anchor.zlRefresh then anchor.zlRefresh() end
     if dd.Hide then dd:Hide() end
     M.pysDrop = nil
+    M.pysAnchor = nil
+    M.zlPysPicker = { anchor = anchor, names = names, open = false }
   end
   local function choiceRow(text, value, first)
     local b = CreateFrame("Button", nil, dd)
@@ -956,8 +990,17 @@ function M.PysankaPick(anchor)
     choiceRow(names[i], names[i])
   end
   if dd.Show then dd:Show() end
+  if dd.SetScript and MouseIsOver then
+    dd:SetScript("OnLeave", function()
+      local over = true
+      local okO, isOver = pcall(MouseIsOver, dd)
+      if okO then over = isOver end
+      if not over then M.ClosePysankaPicker() end
+    end)
+  end
   M.pysDrop = dd
-  M.zlPysPicker = { anchor = anchor, names = names }
+  M.pysAnchor = anchor
+  M.zlPysPicker = { anchor = anchor, names = names, open = true }
 end
 
 function M.ClosePysankaPicker()
@@ -965,6 +1008,7 @@ function M.ClosePysankaPicker()
     if M.pysDrop.Hide then M.pysDrop:Hide() end
     M.pysDrop = nil
   end
+  M.pysAnchor = nil
 end
 
 function M.RenderPysanka()
@@ -1111,16 +1155,38 @@ function M.RenderPysanka()
     cell:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * d2CellW, dbY + 2)
   end
   dbY = dbY - (PY_FIELD_H + 10)
-  -- Default Kill Order footer.
+  -- Default Kill Order footer: real raid-target icons with ">" between.
   local koT = PYHead(row, "Default Kill Order", 260)
   koT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, dbY)
-  dbY = dbY - 16
-  local koW = math.floor((BODY_WIDTH - 16) / 8)
-  for i = 1, Z.Util.ArrayCount(Z.Pysanka.MARKS) do
-    local ml = PYLabel(row, Z.Pysanka.MARKS[i], koW, "CENTER")
-    ml:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (i - 1) * koW, dbY)
+  dbY = dbY - 20
+  M.zlPysKillOrder = {} -- placement record for the icon assert
+  local koX, koSize = 8, 20
+  local nMarks = Z.Util.ArrayCount(Z.Pysanka.MARKS)
+  for i = 1, nMarks do
+    local mark = Z.Pysanka.MARKS[i]
+    local iconPath = Z.Pysanka.MarkIcon(mark)
+    local cellB = CreateFrame("Button", nil, row)
+    cellB:SetWidth(koSize) cellB:SetHeight(koSize)
+    cellB:SetPoint("TOPLEFT", row, "TOPLEFT", koX, dbY)
+    if cellB.CreateTexture then
+      local tex = cellB:CreateTexture(nil, "ARTWORK")
+      if tex.SetTexture then
+        tex:SetTexture(iconPath or "Interface\\Icons\\INV_Misc_QuestionMark")
+      end
+      if tex.SetAllPoints then tex:SetAllPoints(cellB) end
+      if tex.Show then tex:Show() end
+    end
+    cellB.zlMark, cellB.zlIcon = mark, iconPath
+    Tip(cellB, mark, "Kill priority " .. i .. " of " .. nMarks)
+    table.insert(M.zlPysKillOrder, { mark = mark, icon = cellB.zlIcon })
+    koX = koX + koSize + 4
+    if i < nMarks then
+      local sep = PYLabel(row, ">", 12, "CENTER")
+      sep:SetPoint("TOPLEFT", row, "TOPLEFT", koX, dbY - 4)
+      koX = koX + 16
+    end
   end
-  dbY = dbY - 18
+  dbY = dbY - (koSize + 8)
   local totalH = (-dbY) + 12
   if totalH < 200 then totalH = 200 end
   row:SetHeight(totalH)
@@ -1387,6 +1453,7 @@ function M.Refresh()
 end
 
 function M.SelectTab(key)
+  if key ~= M.activeTab then M.ClosePysankaPicker() end
   M.activeTab = key
   M.Refresh()
 end

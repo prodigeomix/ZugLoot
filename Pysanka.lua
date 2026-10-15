@@ -29,6 +29,20 @@ M.BUFF_ROWS = { "1-2", "3-4", "5-6", "7-8" }
 
 -- Tank & Healer Assignments: one row per raid mark.
 M.MARKS = { "Skull", "Cross", "Square", "Moon", "Triangle", "Diamond", "Circle", "Star" }
+-- Raid-target icon index per mark (client UI-RaidTargetingIcon_N texture
+-- numbering: 1 Star, 2 Circle, 3 Diamond, 4 Triangle, 5 Moon, 6 Square,
+-- 7 Cross, 8 Skull).
+M.MARK_ICONS = {
+  Star = 1, Circle = 2, Diamond = 3, Triangle = 4,
+  Moon = 5, Square = 6, Cross = 7, Skull = 8,
+}
+
+-- Texture path for a mark's raid icon (nil for unknown marks). Pure.
+function M.MarkIcon(mark)
+  local n = M.MARK_ICONS[mark]
+  if not n then return nil end
+  return "Interface\\TargetingFrame\\UI-RaidTargetingIcon_" .. n
+end
 M.TANK_FIELDS = { "tank", "healer", "healer2" }
 M.N_TANKS = 8
 

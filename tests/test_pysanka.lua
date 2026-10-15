@@ -68,4 +68,15 @@ ok(db.pysanka.buffs[1] ~= nil, "ensure refills buffs")
 local detached = PY.Ensure(nil)
 ok(detached ~= nil and PY.GetInvite(detached) == "invite", "ensure works headless")
 
+-- Raid-target icons: stock UI-RaidTargetingIcon_N paths (Blizzard numbering:
+-- 1 Star, 2 Circle, 3 Diamond, 4 Triangle, 5 Moon, 6 Square, 7 Cross, 8 Skull).
+eq(PY.MarkIcon("Skull"), "Interface\\TargetingFrame\\UI-RaidTargetingIcon_8", "skull icon")
+eq(PY.MarkIcon("Star"), "Interface\\TargetingFrame\\UI-RaidTargetingIcon_1", "star icon")
+eq(PY.MarkIcon("Moon"), "Interface\\TargetingFrame\\UI-RaidTargetingIcon_5", "moon icon")
+eq(PY.MarkIcon("Bogus"), nil, "unknown mark has no icon")
+ok(PY.MARK_ICONS["Skull"] == 8 and PY.MARK_ICONS["Cross"] == 7
+  and PY.MARK_ICONS["Square"] == 6 and PY.MARK_ICONS["Triangle"] == 4
+  and PY.MARK_ICONS["Diamond"] == 3 and PY.MARK_ICONS["Circle"] == 2,
+  "all mark icon numbers")
+
 return T
