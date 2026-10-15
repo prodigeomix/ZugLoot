@@ -96,10 +96,37 @@ function M.Hide()
   end
 end
 
+-- Modifier state (nil-guarded for headless/tests). Chat-open counts:
+-- a plain click while typing must insert the link, never roll/loot.
+function M.CtrlDown()
+  return (IsControlKeyDown and IsControlKeyDown()) and true or false
+end
+function M.ShiftDown()
+  return (IsShiftKeyDown and IsShiftKeyDown()) and true or false
+end
+function M.ChatOpen()
+  return (ChatFrameEditBox and ChatFrameEditBox.IsVisible
+    and ChatFrameEditBox:IsVisible()) and true or false
+end
+function M.ModifierDown()
+  return M.CtrlDown() or M.ShiftDown() or M.ChatOpen()
+end
+
+-- Row-click gate: loot overview rows (body AND icon overlay) call this
+-- FIRST inside OnRowClick. With any modifier/chat held it runs the
+-- shared icon action (ctrl dress-up, shift/chat link) and returns its
+-- result so the row action (open detail / loot slot) never fires.
+-- Returns nil for a plain click (caller runs the row action), else
+-- "dressup" / "insert" / "print" — or "modifier" when the keys
+-- were held but nothing applied (unseen item: still swallow, never roll).
+function M.RowClick(itemID, link, name, onLink)
+  if not M.ModifierDown() then return nil end
+  return M.HandleClick(itemID, link, name, onLink) or "modifier"
+end
+
 -- Click: ctrl tries the item on; otherwise resolve to a full link and
 -- insert it into an open chat box (print it when none is open).
--- Returns "dressup" / "insert" / "print", or nil when nothing applied
--- (no modifier consumed: row callers fall through to the normal action).
+-- Returns "dressup" / "insert" / "print", or nil when nothing applied.
 function M.HandleClick(itemID, link, name, onLink)
   local id = tonumber(itemID)
   if not id and link then
@@ -107,7 +134,7 @@ function M.HandleClick(itemID, link, name, onLink)
   end
   -- Ctrl-click: try it on (DressUp), like normal item links. Checked
   -- first, same order everywhere.
-  if IsControlKeyDown and IsControlKeyDown() and DressUpItemLink and id then
+  if M.CtrlDown() and DressUpItemLink and id then
     DressUpItemLink("item:" .. tostring(id))
     return "dressup"
   end
@@ -124,8 +151,11 @@ function M.HandleClick(itemID, link, name, onLink)
       if onLink then pcall(onLink, full) end
     end
   end
-  if full and ChatFrameEditBox and ChatFrameEditBox.IsVisible
-      and ChatFrameEditBox:IsVisible() then
+  -- Shift-click inserts/links; an open chat box captures any click.
+  -- Plain icon clicks (sheet cards etc.) keep the old print fallback;
+  -- loot rows never reach here plain (RowClick gates modifiers first,
+  -- the icon overlay overwrites Wire's click with the row action).
+  if full and M.ChatOpen() then
     if ChatFrameEditBox.Insert then ChatFrameEditBox:Insert(full) end
     return "insert"
   end

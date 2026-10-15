@@ -685,4 +685,46 @@ local narrow = LW.LayoutBarRows({
 eq(#narrow, 2, "narrow bar: wraps to two rows")
 eq(#narrow[1], 1, "first row holds the wide primary alone")
 eq(narrow[2][1].btn, "b", "TMOG floats to the next row, not over ...")
+
+-- 10. Modifier clicks never roll/loot: ctrl previews (dress-up),
+-- shift links into chat, and neither opens the detail. Plain click
+-- still opens the detail.
+dofile("ItemIcon.lua")
+local II = ZugLoot.ItemIcon
+local FULL10 = "|cffa335ee|Hitem:1001:0:0:0|h[Test Sword]|h|r"
+LW.blizzardTakeover = true -- rows active (headless default is detached-off)
+LW.SetItems({ { itemID = 1001, link = FULL10 } }, "loot")
+LW.CloseDetail()
+local tried10, inserted10 = {}, {}
+DressUpItemLink = function(l) table.insert(tried10, l) end
+GetItemInfo = function(id) return "Test Sword", FULL10, 4 end
+ChatFrameEditBox = { IsVisible = function() return false end,
+  Insert = function(self, s) table.insert(inserted10, s) end }
+-- ctrl: dress-up, no detail
+IsControlKeyDown = function() return true end
+IsShiftKeyDown = function() return false end
+if LW.CloseDetail then LW.CloseDetail() end
+local rCtrl = LW.OnRowClick(1001, 1)
+eq(rCtrl, "dressup", "ctrl-click previews")
+eq(#tried10, 1, "ctrl-click tries on once")
+ok(LW.detail == nil, "ctrl-click opens no detail")
+-- shift with chat open: link inserted, no detail
+IsControlKeyDown = function() return false end
+IsShiftKeyDown = function() return true end
+ChatFrameEditBox = { IsVisible = function() return true end,
+  Insert = function(self, s) table.insert(inserted10, s) end }
+local rShift = LW.OnRowClick(1001, 1)
+eq(rShift, "insert", "shift-click links")
+eq(#inserted10, 1, "shift-click inserts once")
+ok(LW.detail == nil, "shift-click opens no detail")
+-- plain: detail as usual
+IsShiftKeyDown = function() return false end
+ChatFrameEditBox = { IsVisible = function() return false end }
+ZugLoot.DB = ZugLoot.DB or {}
+ZugLoot.DB.rehearse = true -- solo rows open the detail, not loot
+local rPlain = LW.OnRowClick(1001, 1)
+eq(rPlain, "detail", "plain click still opens")
+ok(LW.detail and LW.detail.itemID == 1001, "plain click opens the detail")
+IsControlKeyDown = nil; IsShiftKeyDown = nil
+ChatFrameEditBox = nil; DressUpItemLink = nil; GetItemInfo = nil
 return T

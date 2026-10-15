@@ -799,21 +799,11 @@ function M.Refresh()
                   name = M.DisplayName(thisRow),
                   onLink = function(full) thisRow.link = full end }
               end)
-              -- Click: modifiers run the shared icon action (ctrl
-              -- dress-up, shift-link into chat); a PLAIN click is the
-              -- row action (open detail / loot slot) — the overlay must
-              -- never swallow it into a print.
+              -- Same as the row body: plain click is the row action,
+              -- modifiers never roll/loot (OnRowClick diverts them to
+              -- dress-up / link first). Overwrites Wire's click so a
+              -- plain icon click opens the detail instead of printing.
               btn:SetScript("OnClick", function()
-                local ctrl = IsControlKeyDown and IsControlKeyDown()
-                local chatOpen = ChatFrameEditBox
-                  and ChatFrameEditBox.IsVisible
-                  and ChatFrameEditBox:IsVisible()
-                if ctrl or chatOpen then
-                  local r = ZL.HandleClick(thisRow.itemID, thisRow.link,
-                    M.DisplayName(thisRow),
-                    function(full) thisRow.link = full end)
-                  if r then return end
-                end
                 M.OnRowClick(id, clickSlot)
               end)
             end
@@ -1061,6 +1051,15 @@ end
 -- display-only: report it and touch nothing, Blizzard's own frame loots.
 function M.OnRowClick(itemID, clickSlot)
   local it = M.Find(itemID)
+  -- Modifiers never roll/loot: ctrl previews (dress-up), shift links
+  -- the item into chat (or prints it). Applies to the whole row — body
+  -- and icon alike — so click-to-open-roll can't swallow them.
+  if Z.ItemIcon and Z.ItemIcon.RowClick then
+    local mod = Z.ItemIcon.RowClick(it and it.itemID or itemID,
+      it and it.link, it and M.DisplayName(it),
+      function(full) if it then it.link = full end end)
+    if mod then return mod end
+  end
   if it and it.group then return "group roll" end
   local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
     and Z.SRSecurity.IsSolo()
