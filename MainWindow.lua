@@ -1070,25 +1070,31 @@ function M.RenderPysanka()
     y = y - (PY_FIELD_H + 2)
   end
   y = y - 4
-  -- Pally Power + Coordinator line.
-  local palT = PYHead(row, "Pally Power Blessings", 180)
-  palT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
-  local coT = PYHead(row, "Coordinator:", 110)
-  coT:SetPoint("TOPLEFT", row, "TOPLEFT", 190, y)
-  local coBox = PYPlayer(row, 140, function() return pys.coordinator or "" end,
-    function(v) Z.Pysanka.SetCoordinator(pys, v) end, "coordinator")
-  coBox:SetPoint("TOPLEFT", row, "TOPLEFT", 300, y + 2)
-  local palBox = PYPlayer(row, 170,
+  -- Pally Power + Coordinator + Puller: three side-by-side columns,
+  -- each with its input BELOW its label.
+  local colW = math.floor((BODY_WIDTH - 16 - 2 * 12) / 3)
+  local colX = { 4, 4 + colW + 12, 4 + 2 * (colW + 12) }
+  local palT = PYHead(row, "Pally Power Blessings", colW)
+  palT:SetPoint("TOPLEFT", row, "TOPLEFT", colX[1], y)
+  local coT = PYHead(row, "Coordinator:", colW)
+  coT:SetPoint("TOPLEFT", row, "TOPLEFT", colX[2], y)
+  local pullT = PYHead(row, "Puller", colW)
+  pullT:SetPoint("TOPLEFT", row, "TOPLEFT", colX[3], y)
+  local palBox = PYPlayer(row, colW,
     function() return pys.pallyPower or "" end,
     function(v) Z.Pysanka.SetPally(pys, v) end, "pallyPower")
-  palBox:SetPoint("TOPLEFT", row, "TOPLEFT", 14, y - 18)
-  y = y - (PY_FIELD_H + 24)
+  palBox:SetPoint("TOPLEFT", row, "TOPLEFT", colX[1], y - (PY_FIELD_H + 2))
+  local coBox = PYPlayer(row, colW, function() return pys.coordinator or "" end,
+    function(v) Z.Pysanka.SetCoordinator(pys, v) end, "coordinator")
+  coBox:SetPoint("TOPLEFT", row, "TOPLEFT", colX[2], y - (PY_FIELD_H + 2))
+  local pullBox = PYPlayer(row, colW, function() return pys.puller or "" end,
+    function(v) Z.Pysanka.SetPuller(pys, v) end, "puller")
+  pullBox:SetPoint("TOPLEFT", row, "TOPLEFT", colX[3], y - (PY_FIELD_H + 2))
+  y = y - (PY_FIELD_H + 2) - (PY_FIELD_H + 4)
   y = y - 4
-  -- Tank & Healer Assignments + Puller side by side.
+  -- Tank & Healer Assignments.
   local thT = PYHead(row, "Tank & Healer Assignments", 260)
   thT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
-  local pullT = PYHead(row, "Puller", 120)
-  pullT:SetPoint("TOPLEFT", row, "TOPLEFT", BODY_WIDTH / 2 + 20, y)
   y = y - 18
   local markW, tw, hw = 60, 120, 120
   local subY = y
@@ -1120,10 +1126,6 @@ function M.RenderPysanka()
     function(v) Z.Pysanka.SetRaidAll(pys, "healer", v) end, "raidAll:healer")
   raH:SetPoint("TOPLEFT", row, "TOPLEFT", 196, subY + 2)
   subY = subY - (PY_FIELD_H + 2)
-  -- Puller box (right column).
-  local pullBox = PYPlayer(row, 140, function() return pys.puller or "" end,
-    function(v) Z.Pysanka.SetPuller(pys, v) end, "puller")
-  pullBox:SetPoint("TOPLEFT", row, "TOPLEFT", BODY_WIDTH / 2 + 20, y - 2)
   local endTankY = subY
   -- Debuffs (below tanks, full width): two rows 7 + 4.
   local dbT = PYHead(row, "Debuffs", 200)
