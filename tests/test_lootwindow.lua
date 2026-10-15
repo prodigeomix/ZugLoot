@@ -201,10 +201,36 @@ ok(#lines == 3, "three detail lines")
 ok(string.find(lines[1], "SR:2", 1, true) ~= nil, "title carries badge")
 ok(string.find(lines[2], "Aaa", 1, true) ~= nil, "rollers listed")
 local choices = LW.MoreChoices()
-eq(#choices, 4, "roll + raid-roll + two awards")
+-- roll + raid-roll + two reserve awards + the class-grouped REST of the
+-- roster (Solo, reserved on 1002) for direct pre-roll awards.
+eq(#choices, 5, "roll + raid-roll + two awards + class group")
 eq(choices[1].id, "roll", "first choice is SR roll")
 eq(choices[2].id, "raidroll", "second choice is raid-roll")
 eq(choices[4].name, "Bbb", "award row carries the name")
+eq(choices[5].id, "class", "rest of roster groups by class")
+eq(choices[5].members[1].name, "Solo", "group member awards directly")
+-- Class groups never duplicate the labeled top-level rows.
+local topSeen = {}
+for i = 1, #choices do
+  local c = choices[i]
+  if c.id == "award-name" then topSeen[c.name] = true end
+end
+local grpDup = nil
+for i = 1, #choices do
+  local c = choices[i]
+  if c.id == "class" then
+    for m = 1, #c.members do
+      if topSeen[c.members[m].name] then grpDup = c.members[m].name end
+    end
+  end
+end
+eq(grpDup, nil, "class groups add nobody twice")
+-- A grouped member awards directly (no roll): same path as a bare name.
+local soloWonBefore = SRData.HasWon(ZugLoot.DB.sheet, 1001, "Solo")
+eq(LW.doAction(1001, "award-name", "Solo"), "awarded Solo", "grouped member direct award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Solo") and not soloWonBefore, "grouped award won-marks")
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
 ok(LW.DETAIL_WIDTH == 220, "raider-style detail width")
 -- Detail auto-height: frame grows one line per roll, never shrinks
 -- below the old fixed 250, capped for huge raids.

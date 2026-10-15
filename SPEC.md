@@ -377,7 +377,12 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   (320 wide, so `Award <name>` fits long names on one line): direct **Award**
   when exactly one SR/HR holder exists (no rolling needed), **...** for a
   real dropdown (RollFor parity: blue-hover rows — Roll, plus Award per
-  reserver), **Close** to dismiss and keep working the overview. `/zl cr`
+  reserver, plus one row per raid class like `Warrior (4) >`): hovering
+  (or clicking) a class row pops a side submenu with that class's players,
+  so the whole raid is one hover away instead of a flat 40-name list.
+  Every submenu name awards directly, even before a roll (no-roll
+  shortcut), and nobody already listed above repeats inside a group.
+  **Close** to dismiss and keep working the overview. `/zl cr`
   returns the item to open. Non-ML clients ignore corpse loot.
 - **Award menu** (RollFor finish-popup style): on roll completion nothing is
   auto-awarded — the ML gets winners (ranked, roll-typed) + SR/MS/OS/TMOG

@@ -283,9 +283,49 @@ print("top-right X buttons OK");
 Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
 assert(Z.LootWindow.moreDropdown ~= nil, "more dropdown opened");
 assert(#Z.LootWindow.moreDropdown.rows >= 2, "dropdown rows painted");
+-- Class-group side submenu: find a class row, hover it, the submenu
+-- pops to the side with that class's players (no flat 40-name list).
+local classRow = nil;
+for _, r in ipairs(Z.LootWindow.moreDropdown.rows) do
+  if r.choice and r.choice.id == "class" then classRow = r break end
+end
+if classRow then
+  local enter = classRow:GetScript("OnEnter");
+  assert(enter, "class row hover wired");
+  enter();
+  local sub = Z.LootWindow.moreDropdown.submenu;
+  assert(sub ~= nil, "submenu opened on class hover");
+  assert(sub.rows and #sub.rows >= 1, "submenu holds the class players");
+  local anchored = false;
+  for _, p in ipairs((sub.points or {})) do
+    if p[1] == "TOPLEFT" then anchored = true end
+  end
+  assert(anchored, "submenu anchored to the side");
+  -- Submenu award click runs the direct award path and closes the menu.
+  local first = sub.rows[1];
+  local click = first:GetScript("OnClick");
+  assert(click, "submenu award click wired");
+  -- Stage the pending menu like PresentAwardMenu would in-client
+  -- (AwardChosen decides off it), with an open corpse for the award.
+  Z.MasterLootUI.pendingAwardMenu = { sess = sess, data = menu };
+  Z.MasterLootUI.pendingAwardMenus =
+    { [Z.MasterLootUI.RollKey(19137)] = Z.MasterLootUI.pendingAwardMenu };
+  Z.MasterLootUI.lootOpen = true;
+  local targetItem = Z.LootWindow.detail and Z.LootWindow.detail.itemID;
+  click();
+  assert(Z.LootWindow.moreDropdown == nil, "submenu award closes the menu");
+  assert(Z.LootWindow.Find(targetItem) == nil, "submenu award hands out the row");
+  Z.LootWindow.SetItems({ { itemID=19137, link="[Test Dagger]", quality=4, sr=1 } }, "loot");
+  Z.LootWindow.OpenDetail(19137);
+  Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
+  assert(Z.LootWindow.moreDropdown ~= nil, "dropdown reopens after submenu award");
+else
+  print("note: no class row in ... menu (solo sheet), submenu skipped");
+end
 Z.LootWindow.CloseDetail();
 assert(Z.LootWindow.detail == nil, "detail closed");
 assert(Z.LootWindow.moreDropdown == nil, "dropdown closed with detail");
+assert(Z.LootWindow.moreSubmenu == nil, "submenu closed with detail");
 print("loot frames OK");
 Z.RaidArchive.ArchiveActive(Z.DB, 2000);
 -- Member-tab role icons: hunter (ranged/bow), warrior (melee/sword),
