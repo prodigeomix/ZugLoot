@@ -163,13 +163,6 @@ function M.RaidRoster()
   return names
 end
 
-function M.StartRoll(linkText, mode)
-  if not M.RequireML() then return end
-  local itemID = Z.Util.ItemID(linkText)
-  if not itemID then Z.Print("Usage: /zl rf <itemlink>") return end
-  M.BeginSession(itemID, linkText, mode, false)
-end
-
 -- Raid-roll (RollFor parity + Pysanka's raid flow): the raid is numbered
 -- [1..N], the ML rolls 1-N with /roll, the number IS the winner.
 -- Announce: "Raid rolling <link>..." + one "[i]:Name" line per raider
@@ -669,10 +662,10 @@ function M.Finish(manual, itemID)
   if not sess then Z.Print("No active session.") return "closed" end
   M.session = sess
   local sheet = Z.DB and Z.DB.sheet
-  local openRoll = sess.mode == "OPEN" or sess.mode == "RAID" or sess.mode == "SIM-OPEN"
-    or sess.mode == "RAIDROLL"
+  -- Single resolution path: the sheet is input (SR holders + bonuses),
+  -- never a mode switch. Kind priority SR > MS > OS always.
   local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} }, sess.itemID, sess.rolls,
-    { cap = Z.Caps.SR, requireSR = (not openRoll and sheet ~= nil), itemCount = sess.itemCount })
+    { cap = Z.Caps.SR, itemCount = sess.itemCount })
   M.AnnounceResult(sess, res)
   if Z.Util.ArrayCount(res.tied) > 0 then
     Z.Print("Tie at top — tied players re-roll.")
@@ -1497,7 +1490,7 @@ function M.AwardChosen(choice, itemID)
     pend = { sess = M.session, data = M.BuildAwardMenu(M.session,
       Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
         M.session.itemID, M.session.rolls,
-        { cap = Z.Caps.SR, requireSR = true, itemCount = M.session.itemCount })) }
+        { cap = Z.Caps.SR, itemCount = M.session.itemCount })) }
   end
   if not pend then pend = M.pendingAwardMenu end
   if not pend then
@@ -1506,7 +1499,7 @@ function M.AwardChosen(choice, itemID)
     if not sess then Z.Print("No active session.") return end
     pend = { sess = sess, data = M.BuildAwardMenu(sess,
       Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
-        sess.itemID, sess.rolls, { cap = Z.Caps.SR, requireSR = true, itemCount = sess.itemCount })) }
+        sess.itemID, sess.rolls, { cap = Z.Caps.SR, itemCount = sess.itemCount })) }
   end
   local sess, data = pend.sess, pend.data
   local name = choice and choice.name
@@ -1611,7 +1604,7 @@ function M.Award(itemID, itemLink, winnerEntry)
     local akey = sess.key or M.RollKey(itemID)
     local menu = { sess = sess, data = M.BuildAwardMenu(sess,
       Z.Resolver.ResolveItem(Z.DB.sheet or { items = {}, won = {} },
-        sess.itemID, sess.rolls, { cap = Z.Caps.SR, requireSR = true, itemCount = sess.itemCount })) }
+        sess.itemID, sess.rolls, { cap = Z.Caps.SR, itemCount = sess.itemCount })) }
     M.pendingAwardMenus = M.pendingAwardMenus or {}
     M.pendingAwardMenus[akey] = menu
     M.pendingAwardMenu = menu

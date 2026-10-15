@@ -160,7 +160,7 @@ Z.LootWindow.SetItems({ { itemID=19137, link="[Test Dagger]", quality=4, sr=1 } 
 Z.LootWindow.Show("Boss loot");
 assert(Z.LootWindow.Find(19137) ~= nil, "loot window lists the drop");
 local sess = { id=1, itemID=19137, itemLink="[Test Dagger]", mode="SR", rolls={ { name="Blackfang", roll=95, type="SR" } }, itemCount=1 };
-local res = Z.Resolver.ResolveItem(s, 19137, sess.rolls, { cap=100, requireSR=true });
+local res = Z.Resolver.ResolveItem(s, 19137, sess.rolls, { cap=100 });
 assert(type(Z.MasterLootUI.BuildAwardMenu) == "function", "menu builder loaded");
 local menu = Z.MasterLootUI.BuildAwardMenu(sess, res);
 assert(type(menu) == "table" and type(menu.winners) == "table", "menu shape");

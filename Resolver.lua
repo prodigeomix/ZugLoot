@@ -27,7 +27,10 @@ end
 -- Build eligible entries for an item from the sheet.
 -- sheetLike: { items = { [id] = { rollers = { {name, rolls, sr_plus} } } }, won = {...} }
 -- rolls: { {name=..., roll=1..cap, type="SR"|...} } (chat rolls observed)
--- opts: { cap=100, requireSR=true, srPlusByName={name=bonus} }
+-- opts: { cap=100, srPlusByName={name=bonus} }
+-- The sheet is INPUT, not a mode switch: it names who may claim SR and
+-- carries the SR+ bonus. An empty/missing sheet just means nobody can
+-- claim SR — MS/OS/TMOG still contest by kind priority.
 -- Returns entries = { {name, base, sr_plus, effective, missroll=bool,
 --   excludedWon=bool, rollType, overCap=bool} }.
 -- Per-type rules: a roll only counts in its own range (15 on TMOG is a
@@ -37,8 +40,6 @@ end
 function M.BuildEntries(sheetLike, itemID, rolls, opts)
   opts = opts or {}
   local cap = opts.cap or 100
-  local requireSR = opts.requireSR
-  if requireSR == nil then requireSR = true end
   local srMap = {}
   local rollers = {}
   if sheetLike and sheetLike.items and sheetLike.items[itemID] then
@@ -81,14 +82,13 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
       local excluded = wonMap[rv.name] == true and rtype == "SR"
       -- Over-cap: above the TYPE range (e.g. 99 on a 1-98 TMOG roll).
       local over = base > typeCap
-      -- Miss: only legacy/test input still carries an SR tag for someone
-      -- WITHOUT the reserve (a fake SR claim — the live feed re-types
-      -- those as MS in OnSystemRoll). MS/OS/TMOG rolls are valid kind
-      -- contests from anyone (the sheet only holds SR rollers).
+      -- Miss: an SR tag from someone WITHOUT the reserve is a fake SR
+      -- claim (the live feed re-types those as MS in OnSystemRoll).
+      -- MS/OS/TMOG rolls are valid kind contests from anyone (the
+      -- sheet only holds SR rollers).
       local miss = false
       if not over and not excluded then
-        if rtype == "SR" then miss = requireSR and not isSR
-        else miss = false end
+        if rtype == "SR" then miss = not isSR end
       end
       -- SR bonus: SR-kind rolls by sheet rollers only.
       local bonus = 0
@@ -165,8 +165,10 @@ end
 -- so later sessions show who rolled while ineligible.
 -- opts: { itemCount=1 }
 -- Per-type contests (TypeWinners): each kind crowns its own best, ties
--- re-roll WITHIN the kind; the overall winners come from priority
--- SR > MS > OS (TMOG never takes a winner slot).
+-- re-roll WITHIN the kind; the overall winner comes from priority
+-- SR > MS > OS (TMOG never takes a winner slot) — ONE path for every
+-- roll, sheet or off-sheet. Without SR holders the SR contest is empty
+-- and the best MS wins; OS only wins with no MS contest.
 -- Returns ranked (best-per-player, type order then effective), winners
 -- (overall by priority, then itemCount-1 following SR/MS/OS kinds),
 -- perType (the four contests), tied (cutoff ties needing re-roll),
@@ -186,30 +188,13 @@ function M.Resolve(entries, opts)
     k = k + 1
   end
   local perType = M.TypeWinners(entries)
-  -- Overall winner:
-  -- requireSR (sheet discipline): priority SR > MS > OS (TMOG excluded —
-  -- TMOG excluded from the overall slot).
-  -- open (!requireSR): every kind is a fair contest — highest effective
-  -- wins regardless of the type letter (TMOG still excluded: even open,
-  -- TMOG excluded from the overall slot).
+  -- Overall winner: priority SR > MS > OS (TMOG never takes the
+  -- overall slot). Single path — the sheet only feeds holder names
+  -- into BuildEntries, never switches the rule.
   local winners = {}
   local tied = {}
   local prio = { "SR", "MS", "OS" }
-  local requireSR = opts.requireSR
-  if requireSR == nil then requireSR = true end
-  local first = nil
-  if requireSR then
-    first = M.PriorityWinner(perType)
-  else
-    local bestEff, bestRow = -1, nil
-    for _, t in ipairs(prio) do
-      local row = perType[t]
-      if row and row.entry and (row.entry.effective or 0) > bestEff then
-        bestEff, bestRow = row.entry.effective, row
-      end
-    end
-    if bestRow then first = bestRow.entry end
-  end
+  local first = M.PriorityWinner(perType)
   if first and itemCount >= 1 then
     winners[1] = first
     -- A tie INSIDE the winning kind forces a re-roll of that kind.

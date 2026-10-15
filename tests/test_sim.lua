@@ -545,7 +545,7 @@ math.random = realRandom
 -- 12. ToHistoryEntry shape shared with live: winners/entries/missrolls/t sorted.
 local r = ZugLoot.Resolver.ResolveItem(makeSheet(), 1001,
   { { name = "Aaa", roll = 90, type = "SR" }, { name = "Bbb", roll = 80, type = "SR" } },
-  { cap = 100, requireSR = true })
+  { cap = 100 })
 local h = ZugLoot.Resolver.ToHistoryEntry(r, "SIM", 1234)
 eq(h.t, 1234, "history time")
 eq(h.mode, "SIM", "history mode")

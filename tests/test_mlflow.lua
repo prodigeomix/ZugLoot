@@ -159,7 +159,7 @@ SRData.SetPlayerClass(ZugLoot.DB.sheet, "Bbb", "Mage")
 SRData.SetPlayerClass(ZugLoot.DB.sheet, "Ccc", "Druid")
 local res2b = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
   { { name = "Aaa", roll = 90, type = "SR" }, { name = "Bbb", roll = 80, type = "SR" } },
-  { cap = 100, requireSR = true })
+  { cap = 100 })
 local menu2b = ML.BuildAwardMenu(
   { itemID = 1001, itemLink = "item:1001", id = 1 }, res2b)
 ok(menu2b.candidates[1] ~= nil, "candidates built")
@@ -870,7 +870,7 @@ ML.OnSystemRoll("Aaa", 90, 1, 100)
 ML.OnSystemRoll("Tmog", 15, 1, 98)
 table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
 local res4 = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
-  { cap = 100, requireSR = true })
+  { cap = 100 })
 local menu4 = ML.BuildAwardMenu(ML.session, res4)
 ML.pendingAwardMenu = { sess = ML.session, data = menu4 }
 ML.AwardChosen({ name = "Tmog", via = "tmog" })
@@ -885,7 +885,7 @@ ML.OnSystemRoll("Aaa", 90, 1, 100)   -- SR 90+10
 ML.OnSystemRoll("Bbb", 80, 1, 100)   -- SR 80
 ML.OnSystemRoll("Tmog", 97, 1, 98)   -- TMOG 97 (not on sheet -> miss)
 local res5 = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
-  { cap = 100, requireSR = true })
+  { cap = 100 })
 local menu = ML.BuildAwardMenu(ML.session, res5)
 eq(menu.winners[1].name, "Aaa", "menu top winner")
 eq(menu.winners[1].rollType, "SR", "menu winner roll type")
@@ -911,7 +911,7 @@ ML.session.rolls = {
 }
 table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
 local res5c = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.session.rolls,
-  { cap = 100, requireSR = true })
+  { cap = 100 })
 local menu5c = ML.BuildAwardMenu(ML.session, res5c)
 eq(menu5c.winners[1].name, "Bbb", "ms wins outright")
 eq(menu5c.perType.TMOG.entry.name, "Tmog", "tmog owns its kind")
@@ -947,7 +947,7 @@ for i = 1, #ML.session.rolls do
 end
 eq(meRoll.type, "TMOG", "won player TMOG kind kept")
 local resW4 = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
-  ML.session.rolls, { cap = 100, requireSR = true })
+  ML.session.rolls, { cap = 100 })
 eq(resW4.perType.TMOG.entry.name, "Me", "won player TMOG contestable")
 ML.Cancel()
 
@@ -970,7 +970,7 @@ eq(kinds["Offspec"], "OS", "1-99 = OS")
 eq(kinds["Tmog"], "TMOG", "1-98 = TMOG")
 -- The MS 95 is a valid contest (not a miss) losing by priority to SR.
 local resK = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
-  ML.session.rolls, { cap = 100, requireSR = true })
+  ML.session.rolls, { cap = 100 })
 eq(resK.winners[1].name, "Aaa", "sr wins by priority")
 eq(resK.perType.MS.entry.name, "Stranger", "stranger owns MS")
 eq(#resK.missrolls, 0, "no missrolls — kinds decided at feed")

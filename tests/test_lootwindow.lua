@@ -345,7 +345,7 @@ local menu6 = ML.BuildAwardMenu(
   ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
     { { name = "Aaa", roll = 90, type = "SR" },
       { name = "Bbb", roll = 80, type = "MS" } },
-    { cap = 100, requireSR = true }))
+    { cap = 100 }))
 ok(LW.DetailOnFinish(1001, menu6), "finish hands menu to detail")
 eq(LW.detail.phase, "award", "detail phase award")
 ok(LW.detail ~= nil, "same window awards (not a new one)")
@@ -475,7 +475,7 @@ local menuT = ML.BuildAwardMenu(
   ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
     { { name = "Aaa", roll = 58, type = "SR" },
       { name = "Tmog", roll = 15, type = "TMOG" } },
-    { cap = 100, requireSR = true }))
+    { cap = 100 }))
 eq(menuT.winners[1].name, "Aaa", "sr wins outright by priority")
 eq(menuT.perType.TMOG.entry.name, "Tmog", "tmog owns its kind")
 ok(LW.DetailOnFinish(1001, menuT), "tmog finish to detail")
