@@ -87,7 +87,7 @@ SRData.MarkWon(exclSheet, 77, "Prev")
 local exclRes = ZugLoot.Resolver.ResolveItem(exclSheet, 77, {
   { name = "Prev", roll = 99, type = "SR" },
   { name = "Next", roll = 10, type = "SR" },
-}, { cap = 100, requireSR = true })
+}, { cap = 100 })
 eq(exclRes.winners[1].name, "Next", "subsequent roll won by eligible")
 SRData.RecordRolls(exclSheet, 77, ZugLoot.Resolver.ToHistoryEntry(exclRes, "SR", 5))
 local exclCards = Cards.BuildCards(exclSheet)
@@ -107,7 +107,7 @@ local rangeSheet = SRData.NewSheet()
 rangeSheet.items[99] = { quality = 4, rollers = { { name = "Ranger", rolls = 1 } } }
 local rangeRes = ZugLoot.Resolver.ResolveItem(rangeSheet, 99, {
   { name = "Ranger", roll = 13, type = "OS" },
-}, { cap = 100, requireSR = false })
+}, { cap = 100 })
 SRData.RecordRolls(rangeSheet, 99, ZugLoot.Resolver.ToHistoryEntry(rangeRes, "RAID", 9))
 local rangeCards = Cards.BuildCards(rangeSheet)
 eq(rangeCards[1].rollSessions[1].lines[1].rollType, "OS", "card line keeps roll kind")

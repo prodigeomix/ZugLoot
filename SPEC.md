@@ -127,9 +127,9 @@ Sheet = {
   (one-win-per-item; excluded SR rolls stay visible with `[already won]`,
   never silently dropped). MS/OS/TMOG stay contestable after a win (e.g.
   rolling transmog after winning mainspec).
-- Open rolls (`arf`, off-sheet): every kind is a fair contest — highest
-  effective wins regardless of type letter (TMOG still excluded from the
-  overall slot).
+- Off-sheet rolls (no holders on the item): same single path — kind
+  priority SR > MS > OS, with an empty SR contest. An MS 33 beats an
+  OS 76 even with nobody holding SR; OS wins only with no MS contest.
 - Two-copies drops (`2x<link>`): winner + runner-up (same kind first, then
   other kinds in priority order).
 - TMOG is directly awardable: the award window offers `Award <name> (TMOG)`

@@ -193,9 +193,9 @@ function M.BuildEntry(sheet, itemID, link, fillers)
 end
 
 -- Resolve opts mirroring MasterLootUI.Finish for a sim session.
+-- Single path: the sheet is input, never a mode switch.
 local function finishOpts(sess, sheet)
-  local openRoll = sess.mode == "OPEN" or sess.mode == "RAID" or sess.mode == "SIM-OPEN"
-  return { cap = Z.Caps.SR, requireSR = (not openRoll and sheet ~= nil), itemCount = sess.itemCount or 1 }
+  return { cap = Z.Caps.SR, itemCount = sess.itemCount or 1 }
 end
 
 -- Called after a sim award completes: asks for the next roll.
