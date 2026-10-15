@@ -414,6 +414,7 @@ Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
 tipCalls = {};
 hoverIcon();
 assert(#tipCalls == 1 and tipCalls[1][1] == "hyper", "link hover shows item tooltip");
+assert(tipCalls[1][2] == "item:17063:0:0:0", "hover passes the bare item string, got: " .. tostring(tipCalls[1][2]));
 Z.RaiderLootUI.ShowItem("Nemesis Gloves", 15);
 tipCalls = {};
 hoverIcon();
@@ -423,6 +424,7 @@ Z.RaiderLootUI.ShowItem("item:17063:0:0:0", 15);
 tipCalls = {};
 hoverIcon();
 assert(#tipCalls == 1 and tipCalls[1][1] == "hyper", "bare-id hover resolves to item tooltip");
+assert(tipCalls[1][2] == "item:17063:0:0:0", "bare-id hover passes the item string, got: " .. tostring(tipCalls[1][2]));
 print("roll icon tooltip OK");
 -- Shift-click inserts a FULL link even when the window opened on a bare
 -- id (click-time cache resolve + upgrade).

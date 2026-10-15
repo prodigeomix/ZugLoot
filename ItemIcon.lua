@@ -3,9 +3,13 @@
 -- Five sites show item icons (sheet cards, item-log header, raider roll
 -- window, loot overview rows, loot detail header) and all five now run
 -- this same code, so they can never drift apart again:
---   hover       = full GameTooltip item details (SetHyperlink when the
---                 client knows the item, name + hint otherwise — never a
---                 dead tooltip; bare ids upgrade through the cache live)
+--   hover       = full GameTooltip item details via SetHyperlink with the
+--                 BARE item string (the form every working 1.12 addon uses:
+--                 Bagshui/Atlas/CFMQuest/pfLoot all pass "item:...", never
+--                 the full color link). The client itself queries the server
+--                 for uncached items, so details appear even with a cold
+--                 cache — never a dead tooltip. Only a bare NAME (no id at
+--                 all) falls back to name + hint text.
 --   ctrl-click  = try it on (DressUpItemLink, like normal item links)
 --   click/shift = full item link into an open chat box (printed when no
 --                 box is open); never a bare "item:NNNN" id
@@ -41,20 +45,37 @@ function M.UpgradeLink(itemID, link)
   return nil
 end
 
--- Hover: full item tooltip when the client knows the item, else the item
--- name (or item:id) + hint. onLink(full) fires when a bare id upgraded,
--- so the site can stash it (later hovers + clicks skip the lookup).
--- Returns "hyper", "text", or nil (no tooltip API).
+-- Bare item string for SetHyperlink: the inner "item:..." portion of a
+-- full color link (keeps real enchant/suffix data), a bare link as-is
+-- (even suffix-less "item:NNNN" — Atlas passes those), else synthesized
+-- from the id. Nil only when there is no id at all (bare names).
+function M.BareLink(itemID, link)
+  local s = tostring(link or "")
+  local inner = string.match(s, "|H(item:[^|]+)|h")
+  if inner and inner ~= "" then return inner end
+  if string.find(s, "^item:") then return s end
+  local id = tonumber(itemID) or tonumber(string.match(s, "item:(%d+)"))
+  if id then return "item:" .. tostring(id) .. ":0:0:0" end
+  return nil
+end
+
+-- Hover: item details via SetHyperlink with the bare item string. The
+-- client resolves it from cache or queries the server, so details show
+-- even for items the client hasn't seen yet. onLink(full) still fires
+-- when a bare id upgraded through the cache, so the site can stash the
+-- full link for later shift-clicks. Only a bare NAME (no id) falls back
+-- to name + hint text. Returns "hyper", "text", or nil (no tooltip).
 function M.Hover(owner, itemID, link, name, onLink)
   if not (GameTooltip and owner) then return nil end
+  local hyper = M.BareLink(itemID, link)
   local full = M.UpgradeLink(itemID, link)
   if full and full ~= link and onLink then pcall(onLink, full) end
   if GameTooltip.SetOwner then
     local ok = pcall(GameTooltip.SetOwner, GameTooltip, owner, "ANCHOR_RIGHT")
     if not ok then return nil end
   end
-  if full and GameTooltip.SetHyperlink then
-    pcall(GameTooltip.SetHyperlink, GameTooltip, full)
+  if hyper and GameTooltip.SetHyperlink then
+    pcall(GameTooltip.SetHyperlink, GameTooltip, hyper)
   else
     local title = name or ("item:" .. tostring(itemID))
     if GameTooltip.SetText then
@@ -65,7 +86,7 @@ function M.Hover(owner, itemID, link, name, onLink)
     end
   end
   if GameTooltip.Show then pcall(GameTooltip.Show, GameTooltip) end
-  if full then return "hyper" end
+  if hyper then return "hyper" end
   return "text"
 end
 

@@ -68,25 +68,36 @@ local function resetClient(opts)
 end
 resetClient()
 
--- 1. Hover, full link: real item tooltip.
+-- 1. Hover, full link: SetHyperlink gets the BARE item string (the form
+-- every working 1.12 addon uses — Bagshui/Atlas/CFMQuest/pfLoot). The
+-- client resolves it from cache or queries the server.
 eq(II.Hover({}, 17063, FULL), "hyper", "full link hover kind")
 eq(tips[1][1], "hyper", "full link hover calls SetHyperlink")
-eq(tips[1][2], FULL, "hover passes the full link through")
+eq(tips[1][2], "item:17063:0:0:0", "hover passes the bare item string")
 
--- 2. Hover, bare id of a SEEN item: upgrades through the cache.
+-- 1b. BareLink extraction: inner portion keeps real enchant/suffix data.
+eq(II.BareLink(17063, FULL), "item:17063:0:0:0", "bare link from full")
+eq(II.BareLink(17063, "item:17063:0:0:0"), "item:17063:0:0:0", "bare link kept")
+eq(II.BareLink(17063, nil), "item:17063:0:0:0", "bare link from id")
+eq(II.BareLink(nil, "Nemesis Gloves"), nil, "bare name has no link")
+
+-- 2. Hover, bare id of a SEEN item: bare string to the tooltip, full
+-- link stashed via onLink for later shift-clicks.
 tips = {}
 local upgraded = nil
 eq(II.Hover({}, 17063, "item:17063:0:0:0", nil,
   function(full) upgraded = full end), "hyper", "bare-id hover kind")
 eq(tips[1][1], "hyper", "bare-id hover shows the item tooltip")
-ok(string.find(tips[1][2], "|Hitem:", 1, true), "bare-id hover upgrades to a full link")
+eq(tips[1][2], "item:17063:0:0:0", "bare-id hover passes the item string")
 ok(upgraded and string.find(upgraded, "|Hitem:", 1, true), "onLink stashes the upgrade")
 
--- 3. Hover, bare id of an UNSEEN item: name + hint, never a dead tip.
+-- 3. Hover, bare id of an UNSEEN item: the item string STILL goes to
+-- SetHyperlink — the client queries the server, so details appear even
+-- with a cold cache (never a dead tooltip).
 tips = {}
-eq(II.Hover({}, 99999, "item:99999:0:0:0"), "text", "unseen hover kind")
-eq(tips[1][1], "text", "unseen hover shows fallback text")
-ok(#tips >= 2 and tips[2][1] == "line", "unseen hover adds the hint line")
+eq(II.Hover({}, 99999, "item:99999:0:0:0"), "hyper", "unseen hover kind")
+eq(tips[1][1], "hyper", "unseen hover still calls SetHyperlink")
+eq(tips[1][2], "item:99999:0:0:0", "unseen hover passes the item string")
 
 -- 4. Hover, bare NAME (Pysanka-style call, no id at all): name + hint.
 tips = {}
