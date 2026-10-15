@@ -22,7 +22,7 @@ end
 -- (items rolled but never SR'd) at the bottom.
 -- card = { itemID, quality, hardres=bool, unsr=bool,
 --          rollers = { {name, rolls, sr_plus, won} }, -- sheet order
---          rollSessions = { {t, mode, winners={names}, lines={ {name, base, sr_plus, effective, missroll, excludedWon} },
+--          rollSessions = { {t, mode, winners={names}, lines={ {name, base, rollType, sr_plus, effective, missroll, excludedWon} },
 --                             trades={ {from, to, t} }} },
 --          rolled = bool (any session this raid), winnerNames = {latest winners} }
 function M.BuildCards(sheet)
@@ -51,7 +51,7 @@ function M.BuildCards(sheet)
       for m = 1, Util.ArrayCount(h.entries or {}) do
         local e = h.entries[m]
         table.insert(lines, {
-          name = e.name, base = e.base, sr_plus = e.sr_plus or 0,
+          name = e.name, base = e.base, rollType = e.rollType, sr_plus = e.sr_plus or 0,
           effective = e.effective or e.base,
           missroll = e.missroll, excludedWon = e.excludedWon,
         })
@@ -80,8 +80,24 @@ function M.BuildCards(sheet)
   return cards
 end
 
+-- Roll caps per kind (mirrors Constants Caps / Resolver TYPE_CAPS).
+-- Used to render base/cap (e.g. 13/99 for an OS roll) in summaries.
+local CAPS_FALLBACK = { SR = 100, MS = 100, OS = 99, TMOG = 98 }
+local function RollCap(rtype)
+  local caps = (ZugLoot and ZugLoot.Caps) or CAPS_FALLBACK
+  return caps[rtype] or CAPS_FALLBACK[rtype] or 100
+end
+
+local function RollBase(e)
+  local s = tostring(e.base)
+  if e.rollType and CAPS_FALLBACK[e.rollType] then
+    s = s .. "/" .. tostring(RollCap(e.rollType))
+  end
+  return s
+end
+
 -- One-line summary per card for text render / chat fallback.
--- e.g. "item 17063 [SRx2] Blackfang x2 (+20), Carbon x1 (+130) | rolls#1: Carbon 95(+130=225), Blackfang 40(+20=60) => Carbon"
+-- e.g. "item 17063 [SRx2] Blackfang x2 (+20), Carbon x1 (+130) | rolls#1: Carbon 95/100(+130=225), Blackfang 40/100(+20=60) => Carbon"
 function M.CardSummary(card)
   local parts = {}
   table.insert(parts, "item " .. tostring(card.itemID))
@@ -101,7 +117,7 @@ function M.CardSummary(card)
     local lines = {}
     for m = 1, Util.ArrayCount(sess.lines) do
       local e = sess.lines[m]
-      local t = e.name .. " " .. tostring(e.base)
+      local t = e.name .. " " .. RollBase(e)
       if e.sr_plus and e.sr_plus > 0 then t = t .. "(+" .. e.sr_plus .. "=" .. e.effective .. ")" end
       if e.missroll then t = t .. " [miss]" end
       if e.excludedWon then t = t .. " [already won]" end

@@ -317,8 +317,24 @@ local function RollerLine(r)
   return s
 end
 
+-- Roll cap per kind for the "base/cap" suffix in roll lines
+-- (mirrors Constants Caps / Resolver TYPE_CAPS; fallback keeps
+-- headless tests working when Caps loads after MainWindow).
+local CAPS_FALLBACK = { SR = 100, MS = 100, OS = 99, TMOG = 98 }
+local function RollCap(rtype)
+  local caps = (Z and Z.Caps) or CAPS_FALLBACK
+  return caps[rtype] or CAPS_FALLBACK[rtype] or 100
+end
+local function RollBase(e)
+  local s = tostring(e.base)
+  if e.rollType and CAPS_FALLBACK[e.rollType] then
+    s = s .. "/" .. tostring(RollCap(e.rollType))
+  end
+  return s
+end
+
 local function RollLine(e, isWinner)
-  local s = PName(e.name) .. " " .. tostring(e.base)
+  local s = PName(e.name) .. " " .. RollBase(e)
   if e.sr_plus and e.sr_plus > 0 then
     s = s .. "(+" .. e.sr_plus .. "=" .. (e.effective or e.base) .. ")"
   end
