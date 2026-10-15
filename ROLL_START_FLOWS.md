@@ -10,7 +10,7 @@ between those points.
 | Color | Meaning |
 |---|---|
 | Green `#2e7d32` | Runs in **all 3 modes** (literally the same function) |
-| Blue `#1565c0` | **Sim + rehearse only** (silent pipeline: `playOne`, inline feeds, `finishSim`, `PresentAwardMenu` silent) |
+| Blue `#1565c0` | **Sim + rehearse only** (silent pipeline: `playOne`, scheduled echoes, `OnTie`, `PresentAwardMenu` silent) |
 | Orange `#ef6c00` | **Live only** |
 | Purple `#6a1b9a` | **Rehearse only** |
 | Teal `#00838f` | **Simboss only** |
@@ -88,8 +88,8 @@ flowchart TD
     L --> M["BeginSession silent=true"]
     M --> N["stamp sess: rehearse=true invented=roster"]
     N --> O["MarkRolling + OpenDetail rolling view"]
-    O --> P["feedRoll x N inline as chat echoes to IntakeChatRoll each"]
-    P --> Q["finishSim to MasterLootUI.Finish"]
+    O --> P["scheduleFeeds: echo x N across the shared window"]
+    P --> Q["shared clock auto-finish to MasterLootUI.Finish"]
     Q --> R2["PresentAwardMenu silent - menu pending"]
     R2 --> S["AwardChosen"]
     S --> T["DoAward source=raid - LootCorpseSlot REAL take"]
@@ -126,8 +126,8 @@ flowchart TD
     L3 --> M2["playOne entry"]
     M2 --> N2["BeginSession silent=true, no rehearse stamp"]
     N2 --> O2["MarkRolling + OpenDetail rolling view"]
-    O2 --> P2["feedRoll x N inline as chat echoes to IntakeChatRoll each"]
-    P2 --> Q2["finishSim: tie loop RangeFor re-rolls to MasterLootUI.Finish"]
+    O2 --> P2["scheduleFeeds: echo x N across the shared window"]
+    P2 --> Q2["shared clock auto-finish to MasterLootUI.Finish; tie = OnTie schedules fresh fakes"]
     Q2 --> R3["PresentAwardMenu silent to awaiting"]
     R3 --> S2["AwardChosen"]
     S2 --> T2["DoAward source=sim - no corpse take"]
@@ -143,5 +143,5 @@ flowchart TD
 Simboss-only parts: fake drop sourcing (`pfLoot` / `BossData`), `BuildEntry`
 with `FakeRolls`, `StartQueuedRoll` (sim queue guards), and the `source='sim'`
 award with no corpse take. The middle of the pipe — `playOne`,
-`BeginSession`, inline `feedRoll`, `Finish`, `AwardChosen` — is shared
+`BeginSession`, chat-intake `feedRoll`, `Finish`, `AwardChosen` — is shared
 with rehearsal (blue) and, for the green nodes, with live loot too.

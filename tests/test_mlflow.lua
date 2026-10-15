@@ -432,6 +432,31 @@ ok(ML.pendingAwardMenu ~= nil, "blocked award keeps the menu")
 ML.OnEvent("LOOT_OPENED") -- walk back, corpse open again
 ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Aaa"), "re-looted award lands")
+-- Live rolls run on the same shared clock: armed at start, auto-finish
+-- at timeout, disarmed by an early Finish (no late double-finish).
+resetHarness()
+ML.BeginSession(1001, "item:1001", "SR", false)
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+ok(ML.session ~= nil and ML.session.rollTimer ~= nil, "live roll arms the shared clock")
+ok(ML.pendingAwardMenu == nil, "live roll not finished yet")
+ok(drain(), "drain the live clock")
+ok(ML.ParkedSession(1001) ~= nil, "live roll auto-finished at timeout")
+ok(ML.pendingAwardMenu ~= nil, "live award menu pends")
+ok(ZugLoot.Timer.Pending() == 0, "finished roll leaves no live handles")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain live award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "live auto-finished roll awards")
+-- Early Finish disarms: nothing fires late.
+resetHarness()
+ML.BeginSession(1001, "item:1001", "SR", false)
+ML.ApplySystemRoll(ML.session, "Aaa", 90, 1, 100)
+ML.Finish(true, 1001)
+ok(ML.ParkedSession(1001) ~= nil, "early Finish parks")
+ok(ZugLoot.Timer.Pending() == 0, "early Finish disarms the clock")
+ok(drain(), "drain after early finish")
+ok(ML.pendingAwardMenu ~= nil, "menu still pends, no double finish")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain early-finish award")
 -- Grouped: the same row opens the roll detail instead.
 LootSlotIsCoin = nil -- slot 1 is an item again, not coin
 lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }

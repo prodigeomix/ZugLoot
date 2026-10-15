@@ -98,6 +98,10 @@ function M.BeginSession(itemID, itemLink, mode, silent)
   if not silent and Z.AutoRoll and Z.AutoRoll.AllGreenAndAuto() then
     Z.Print("All SR rollers on auto — will auto-resolve on ROLL_ANS.")
   end
+  -- Every roll runs on the shared master-loot timer (live, sim,
+  -- rehearsal alike): the ML — and in sims, the ML's own /roll — gets
+  -- the full window before auto-finish.
+  M.BeginRollTimer(sess)
   return sess
 end
 
@@ -118,9 +122,13 @@ function M.SessionFor(itemID, corpse)
 end
 
 -- Drop a session once its item is handed out. Active alias follows the
--- remaining sessions (or nil when none are left).
+-- remaining sessions (or nil when none are left). Disarms the roll
+-- clock: every award/cancel path funnels through here, so a dead roll
+-- can never auto-finish late. (Parked finish sessions keep no timer —
+-- Finish disarms before parking; ties re-arm explicitly.)
 function M.DropSession(sess)
   if not sess then return end
+  M.CancelRollTimer(sess)
   local k = sessKey(sess)
   if M.parkedSessions and k
       and M.parkedSessions[k] == sess then
@@ -284,18 +292,20 @@ function M.IntakeChatRoll(line)
   if player then M.OnSystemRoll(player, roll, minR, maxR) end
 end
 
--- Simulated roll echo: "<name> rolls <r> (<min>-<max>)" on the ML's OWN
--- chat frame only (Z.Print = local echo, never SendChatMessage — the
--- group never sees fakes), then registered through the normal chat
--- intake, exactly like a real /roll. sess pins the expected session: a
--- dead/parked session's echo is dropped (never printed, never routed).
+-- Simulated roll echo: "<name> rolls <r> (<min>-<max>)" through the
+-- SHARED chat fan-out, marked echo (ML-local ZugLoot log even in a
+-- group — the group never sees fakes), then registered through the
+-- normal chat intake, exactly like a real /roll. sess pins the expected
+-- session: a dead/parked session's echo is dropped (never printed,
+-- never routed).
 function M.EchoSimRoll(sess, player, roll, minR, maxR)
   if not sess then return end
   if M.session ~= sess then return end
-  Z.Print(tostring(player) .. " rolls " .. tostring(roll)
-    .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")")
-  M.IntakeChatRoll(tostring(player) .. " rolls " .. tostring(roll)
-    .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")")
+  local line = tostring(player) .. " rolls " .. tostring(roll)
+    .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")"
+  if Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false, true)
+  else Z.Print(line) end
+  M.IntakeChatRoll(line)
 end
 
 -- Rolls land on the ACTIVE corpse's session. Parked corpses keep their
@@ -336,7 +346,9 @@ function M.OnRaidRollNumber(player, roll, minR, maxR)
   -- path (menu with the single raid-roll winner).
   -- The raid-roll range is 1-N, not a roll KIND range: echo as 1-100 so
   -- the intake reads it as a plain MS roll (never SR/OS/TMOG).
-  Z.Print(tostring(winner) .. " rolls " .. tostring(roll) .. " (1-100)")
+  local line = tostring(winner) .. " rolls " .. tostring(roll) .. " (1-100)"
+  if Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false, true)
+  else Z.Print(line) end
   M.ApplySystemRoll(sess, winner, roll, 1, Z.Caps.SR)
   M.Finish(true, sess.itemID)
 end
@@ -432,6 +444,8 @@ function M.Cancel(itemID)
   local ck = M.RollKey(itemID)
   if M.pendingAwardMenus then M.pendingAwardMenus[ck] = nil end
   if not M.pendingAwardMenus then M.pendingAwardMenu = nil end
+  -- Cancelling kills the clock (a dead roll must never auto-finish).
+  M.CancelRollTimer(sess)
   M.DropSession(sess)
   Z.Print("Roll cancelled.")
   if Z.LootWindow and itemID then Z.LootWindow.MarkOpen(itemID) end
@@ -461,6 +475,72 @@ function M.Cancel(itemID)
   if wasSilent and Z.Sim and Z.Sim.Requeue then
     local isReh = Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID)
     if not isReh then Z.Sim.Requeue(itemID) end
+  end
+end
+
+-- SHARED roll timer: every roll (live master loot, sim, rehearsal)
+-- runs on the same clock. BeginSession arms it; when time runs out the
+-- roll auto-finishes (ties re-arm for the re-roll round, Continue
+-- re-arms for the continued roll). The ML can always Finish early, and
+-- Cancel/Award/Drop disarm. Handles live on the session table (one per
+-- item, so multi-roll items never cross-fire). Headless-safe: without
+-- the Timer module there is no auto-finish (tests + the ML drive
+-- Finish by hand).
+function M.RollDuration()
+  return (Z.DB and tonumber(Z.DB.rollTime)) or 15
+end
+function M.BeginRollTimer(sess)
+  if not sess then return end
+  M.CancelRollTimer(sess)
+  if not (Z.Timer and Z.Timer.After) then return end
+  local dur = M.RollDuration()
+  sess.rollLeft = dur
+  local function autoFinish()
+    sess.rollTimer = nil
+    -- Strictly the live table: parked/awarded/cancelled/shelved
+    -- sessions never auto-finish late.
+    local live = M.sessions and sess.key ~= nil
+      and M.sessions[sess.key] == sess
+    if not live and M.session == sess then live = true end
+    if not live then return end
+    -- Scheduled echoes still in flight (same-tick tie with the last
+    -- feed under coarse OnUpdate steps): defer a beat, don't cut the
+    -- roll off before its last fake lands.
+    if (sess.feedsPending or 0) > 0 and Z.Timer and Z.Timer.After then
+      sess.rollTimer = Z.Timer.After(0.5, autoFinish)
+      return
+    end
+    M.Finish(true, sess.itemID)
+  end
+  sess.rollTimer = Z.Timer.After(dur, autoFinish)
+  -- 1s ticker: the open ML detail shows the live countdown.
+  local function tick()
+    sess.clockTick = nil
+    local live = M.sessions and sess.key ~= nil
+      and M.sessions[sess.key] == sess
+    if not live and M.session == sess then live = true end
+    if not live then return end
+    sess.rollLeft = (sess.rollLeft or dur) - 1
+    if sess.rollLeft < 0 then sess.rollLeft = 0 end
+    local d = Z.LootWindow and Z.LootWindow.detail or nil
+    if d and d.itemID == sess.itemID and (d.phase or "pick") == "rolling" then
+      d.countdown = sess.rollLeft
+      if Z.LootWindow.RefreshDetail then Z.LootWindow.RefreshDetail() end
+    end
+    if sess.rollLeft > 0 and Z.Timer and Z.Timer.After then
+      sess.clockTick = Z.Timer.After(1, tick)
+    end
+  end
+  sess.clockTick = Z.Timer.After(1, tick)
+end
+function M.CancelRollTimer(sess)
+  if sess and sess.rollTimer then
+    if Z.Timer and Z.Timer.Cancel then Z.Timer.Cancel(sess.rollTimer) end
+    sess.rollTimer = nil
+  end
+  if sess and sess.clockTick then
+    if Z.Timer and Z.Timer.Cancel then Z.Timer.Cancel(sess.clockTick) end
+    sess.clockTick = nil
   end
 end
 
@@ -508,6 +588,8 @@ function M.UnparkSession(sess)
   M.sessions = M.sessions or {}
   M.sessions[k] = sess
   M.session = sess
+  -- Continued roll, continued clock: more rolls get a full window.
+  M.BeginRollTimer(sess)
 end
 
 -- A parked session by item (nil once awarded/cancelled).
@@ -548,11 +630,18 @@ function M.Finish(manual, itemID)
   M.AnnounceResult(sess, res)
   if Z.Util.ArrayCount(res.tied) > 0 then
     Z.Print("Tie at top — tied players re-roll.")
+    -- Tie round: the clock restarts so the re-roll gets a full window.
+    -- Silent (sim/rehearsal) ties auto-schedule fresh fakes for the
+    -- tied subset; live ties wait for real re-rolls by hand.
+    M.BeginRollTimer(sess)
+    if sess.silent and Z.Sim and Z.Sim.OnTie then Z.Sim.OnTie(sess) end
     return "tie" -- keep session open for tie re-rolls (extra rolls ignored for others)
   end
   local data = M.BuildAwardMenu(sess, res)
-  -- Park the finished session: award stays pending, but the roll is
-  -- closed for new rolls (Continue re-attaches it explicitly).
+  -- Finished: disarm the clock, then park the session (award stays
+  -- pending, but the roll is closed for new rolls — Continue
+  -- re-attaches it explicitly).
+  M.CancelRollTimer(sess)
   M.ParkSession(sess)
   -- The open row detail becomes the award window (RollFor: rolling view
   -- flips to winners). Falls back to the standalone menu when the roll
@@ -1281,6 +1370,10 @@ function M.PresentAwardMenu(sess, data, silent)
   if Z.Util.ArrayCount(winners) == 0 then
     -- Nobody eligible: the item stays open for the ML to award anyone
     -- or re-roll (/zl cr). Session stays parked on the award menu.
+    -- A no-winner finish never auto-skips, in any mode.
+    if data.none then
+      Z.Print("SIM: no eligible winner — award anyone (/zl award <name>) or /zl cr to re-roll. The item stays in the loot window.")
+    end
     return
   end
   if silent and not (StaticPopupDialogs and StaticPopup_Show) then

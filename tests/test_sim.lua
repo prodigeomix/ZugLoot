@@ -1,7 +1,8 @@
 -- tests/test_sim.lua
 -- Sim replays the live pipeline (MasterLootUI session + routed chat
--- + windows) with precomputed fake rolls. Feeds + finish run inline;
--- chat and windows are stubbed and asserted. Every test drives the real
+-- + windows) with precomputed fake rolls spread across the shared roll
+-- window (drain() pumps the Timer to quiescence). Chat and windows are
+-- stubbed and asserted. Every test drives the real
 -- pipeline (BeginSession/Finish/AwardChosen) — no parallel sync core.
 local T = { pass = 0, fail = 0, errors = {} }
 
@@ -118,11 +119,16 @@ local function resetHarness(rollTime)
   ZugLoot.DB = { sheet = makeSheet(), rollTime = rollTime or 2 }
 end
 
--- Quiescence helper: sim feeds + finish run inline now (no timers), so
--- there is never anything to pump — kept as a trivially-true call so the
--- flow reads unchanged ("run to quiescence", now instant).
+-- Quiescence helper: pump the shared Timer until quiet (fake echoes
+-- spread across the roll window, then the shared clock auto-finishes).
+-- Same shape as test_mlflow's drain: run to quiescence, bounded.
 local function drain(step)
-  return true
+  local guard = 0
+  while ZugLoot.Timer.Pending() > 0 and guard < 500 do
+    ZugLoot.Timer.Update(step or 0.5)
+    guard = guard + 1
+  end
+  return guard < 500
 end
 
 -- Regression: cancelling with the roll window open must not leave a
@@ -216,14 +222,17 @@ ok(string.find(printed[#printed], "requires a loaded sheet"), "simboss without s
 resetHarness()
 math.random = rigged({ 90, 80 }) -- holder SR rolls, no kind draws -- Aaa 90(+10=100) beats Bbb 80
 Sim.SimItem("1001")
--- Inline finish parks the session with the menu pending (no live session
--- left behind to observe — the roll already resolved).
-ok(ML.SessionAny(1001) ~= nil, "session parked for ML award decision")
-ok(ML.pendingAwardMenu ~= nil, "award menu pending")
+-- The roll stays LIVE on the shared clock (feeds spread across the
+-- window — the ML rolls alongside); drain pumps echoes + auto-finish,
+-- then the menu pends for the ML pick.
+ok(ML.session ~= nil and ML.session.itemID == 1001, "roll live on the shared clock")
+ok(ML.pendingAwardMenu == nil, "no menu before the clock runs out")
 eq(#shownItems, 1, "raider window shown once")
 ok(string.find(shownItems[1], "1001"), "raider window shows the item")
 math.random = realRandom
-ok(drain(), "feeds + finish inline")
+ok(drain(), "echoes land, clock auto-finishes")
+ok(ML.SessionAny(1001) ~= nil, "session parked for ML award decision")
+ok(ML.pendingAwardMenu ~= nil, "award menu pending")
 ML.AwardChosen({ name = "Aaa", via = "winner" })
 ok(drain(), "drain award")
 ok(ML.SessionAny(1001) == nil, "session closed after ML award")
@@ -240,6 +249,51 @@ local names = {}
 for i = 1, #hist.entries do names[hist.entries[i].name] = true end
 ok(names["Aaa"] and names["Bbb"] and names["Filler1"] == nil and names["Missroller1"] == nil,
   "only sheet players rolled")
+
+-- 2b. The ML participates mid-roll: the sim window stays live on the
+-- shared clock (no instant finish), the ML's own chat roll registers
+-- alongside the fakes, and the clock auto-finishes into the award.
+resetHarness()
+math.random = rigged({ 90, 80 }) -- holder SR rolls, no kind draws
+Sim.SimItem("1001")
+math.random = realRandom
+ok(ML.session ~= nil and ML.session.itemID == 1001, "sim roll live after start")
+ok(ML.session.rollTimer ~= nil, "shared clock armed on the session")
+eq(#(ML.session.rolls or {}), 0, "no fakes landed yet (spread across the window)")
+-- ML rolls themselves mid-window, like any live roll.
+ML.IntakeChatRoll("Me rolls 42 (1-100)")
+eq(#ML.session.rolls, 1, "ML's own roll registers mid-window")
+eq(ML.session.rolls[1].name, "Me", "ML named on their roll")
+ok(drain(), "drain echoes + auto-finish")
+ok(ML.ParkedSession(1001) ~= nil, "clock auto-finished into parked award")
+ok(ML.pendingAwardMenu ~= nil, "menu pends after auto-finish")
+local allNames = {}
+for i = 1, #(ML.ParkedSession(1001).rolls or {}) do
+  allNames[ML.ParkedSession(1001).rolls[i].name] = true
+end
+ok(allNames["Me"] and allNames["Aaa"] and allNames["Bbb"],
+  "fakes + ML roll all counted")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(drain(), "drain participation award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "participated roll awards")
+
+-- 2c. Shared chat fan-out: echo stays ML-local even grouped.
+resetHarness()
+grouping = "raid"
+local chatBefore = #chatSent
+ZugLoot.Comm.Say("Aaa rolls 90 (1-100)", false, true) -- echo
+local sawEchoLocal = false
+for i = 1, #printed do
+  if string.find(printed[i], "Aaa rolls 90 (1-100)", 1, true) then sawEchoLocal = true end
+end
+ok(sawEchoLocal, "echo prints on the ML frame in raid")
+eq(#chatSent, chatBefore, "echo never touches SendChatMessage")
+ZugLoot.Comm.Say("hello raid", false, false) -- real traffic
+eq(#chatSent, chatBefore + 1, "real traffic goes to the group")
+eq(chatSent[#chatSent].channel, "RAID", "raid traffic on RAID")
+ZugLoot.Comm.Say("watch out", true, false) -- warning traffic
+eq(chatSent[#chatSent].channel, "RAID_WARNING", "warnings on RAID_WARNING")
+grouping = "solo"
 
 -- 3-5. Chat routing per grouping: solo prints locally, raid splits
 -- RAID/RAID_WARNING, party stays on PARTY. One table-driven run.
@@ -315,16 +369,20 @@ math.random = realRandom
 ok(ML.session == nil, "simboss starts nothing by itself")
 eq(#ZugLoot.LootWindow.items, 2, "loot window lists both drops")
 eq(ZugLoot.LootWindow.items[1].status, "open", "first drop open")
--- Roll the first item; a SECOND roll while its award pends is refused.
+-- Roll the first item: it stays LIVE on the shared clock (the ML rolls
+-- alongside); drain pumps echoes + auto-finish, then the award pends.
 Sim.RequestRoll(1001)
-ok(ML.SessionAny(1001) ~= nil, "first session resolved (parked)")
+ok(ML.session ~= nil and ML.session.itemID == 1001, "first roll live on the clock")
+ok(ML.pendingAwardMenu == nil, "no menu before the clock runs out")
+ok(drain(), "drain first item")
+ok(ML.ParkedSession(1001) ~= nil, "first session parked after auto-finish")
 ok(ML.pendingAwardMenu ~= nil, "first award pending")
 -- Multi-roll: the second item rolls while the first award pends
 -- (roll A, park, roll B, award B, award A).
 Sim.RequestRoll(1002)
-ok(ML.SessionAny(1002) ~= nil, "second session runs while first parked")
+ok(ML.session ~= nil and ML.session.itemID == 1002, "second session runs while first parked")
 ok(drain(), "drain second item")
--- The first already parked at its inline finish (award rows in the list,
+-- The first parked at its auto-finish (award rows in the list,
 -- session out of the live table); the menu pends for the ML.
 ok(ML.SessionAny(1001) == nil or ML.ParkedSession(1001) ~= nil
   or ML.pendingAwardMenus ~= nil, "first resolved")
@@ -374,8 +432,8 @@ for i = 1, #sess7d.rolls do
 end
 ok(sawNew, "7d newcomer rolled on Continue")
 math.random = realRandom
--- Finish again re-resolves the COMBINED list (no double finish —
--- feeds ran inline, nothing lingers); award closes it out.
+-- Finish again re-resolves the COMBINED list (continued feeds already
+-- landed via the drain); award closes it out.
 ML.Finish(true, 1001)
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 ok(drain(), "drain 7d award")
@@ -406,11 +464,15 @@ eq(h1001.excluded[1].name, "Aaa", "sim history excluded name")
 resetHarness()
 printed, dropAdds = {}, {}
 -- Aaa 50(+10=60) ties Bbb 60: tie-breaks 70 vs 71 settle it.
+-- (rng stays rigged through the drain: tie-break draws happen when the
+-- shared clock auto-finishes the tied round, not at queue time.)
 math.random = rigged({ 50, 60, 70, 71 })
 Sim.SimItem("1001")
+ok(ML.session ~= nil, "tied roll starts live")
+ok(drain(), "drain tie rounds")
 math.random = realRandom
--- finishSim already tie-looped inline (same path as §10): the parked
--- menu holds the resolved winner, history written once per round.
+-- Auto-finish tied, OnTie scheduled fresh fakes, re-armed clock
+-- finished the break: the parked menu holds the resolved winner.
 ok(ML.pendingAwardMenu ~= nil, "tie winner parked for the ML")
 ok(SRData.RollCount(ZugLoot.DB.sheet, 1001) >= 1, "tie rounds recorded")
 local tieW = ML.pendingAwardMenu.data.winners
@@ -452,8 +514,8 @@ Sim.SimBoss("TestBoss")
 ok(string.find(printed[#printed], "already running"), "second sim refused while running")
 Sim.Stop()
 eq(#Sim.pending, 0, "simstop clears queue")
--- Hard stop: session dead, menu cleared, windows closed (no timers exist
--- to kill anymore — feeds ran inline).
+-- Hard stop: session dead, menu cleared, windows closed (ResetFresh
+-- disarms the shared clock, so nothing fires after the stop).
 ok(ML.SessionAny(1001) == nil, "simstop kills the live session")
 ok(ML.pendingAwardMenu == nil, "simstop clears the award menu")
 ok(ZugLoot.LootWindow.detail == nil, "simstop closes the detail")
@@ -691,13 +753,12 @@ ok(ML.session == nil, "manual default: no auto-start")
 eq(ZugLoot.DB.sheet, realSheet, "real sheet stays loaded (no swap)")
 -- ML picks the head item's Roll button: queued entry plays with fakes.
 eq(LW.doAction(1001, "roll"), "rolling", "Roll button plays queued entry")
--- Regression: the doAction flip must NOT wipe the rolls playOne just
--- landed (sim/rehearse starters own the rolling flip; the router's
--- re-flip cleared d.rolls -> "0 fake rolls" in the ML window, and
--- dragged the finished award view back to a sessionless rolling view
--- -> "waiting for rolls..." on a finished roll).
--- (playOne finishes inline, so the window is already at the award
--- phase with the menu — and the fed rolls must still be listed.)
+-- The roll window stays LIVE on the shared clock: echoes spread
+-- across the window, and the ML rolls alongside before auto-finish.
+eq(LW.detail and LW.detail.phase, "rolling", "ML window rolling, not finished")
+ok(ML.session ~= nil and ML.session.itemID == 1001, "session live, not parked")
+ok(drain(), "drain rehearsal head")
+-- After the clock: award view with all 4 fed rolls + the menu.
 eq(#(LW.detail and LW.detail.rolls or {}), 4, "ML window keeps the 4 fed rolls")
 ok(LW.detail and LW.detail.menu ~= nil, "ML window holds the award menu")
 eq(LW.detail and LW.detail.phase, "award", "ML window shows the award view")
@@ -721,8 +782,8 @@ ok(invented, "rollers invented, none from the real sheet")
 ok(not SRData.HasWon(realSheet, 1001, "Aldric"), "real sheet untouched")
 -- Fence: invented names never read as SR even when the real sheet knows
 -- a same-named roller (fake 1-100 stays MS, no bonus, no won flag).
--- (playOne finishes inline now, so the session is parked: fetch it via
--- SessionAny, which covers parked sessions too.)
+-- (the session is live until the shared clock auto-finishes: fetch it
+-- via SessionAny, which covers live sessions too.)
 local fenceSess = ML.SessionAny(1001)
 ok(fenceSess ~= nil and fenceSess.invented ~= nil, "session carries invented roster")
 ML.ApplySystemRoll(fenceSess, "Aldric", 99, 1, 100)
@@ -736,10 +797,7 @@ for i = #fenceSess.rolls, 1, -1 do
     break
   end
 end
--- NOTE: playOne finishes inline now, so the head entry already resolved
--- into the parked award menu below (no live session, no pending timers).
--- Head plays: drain feeds + finish timer, menu pends for the ML.
-ok(drain(), "drain rehearsal head")
+-- Head already drained above: the parked award menu pends for the ML.
 ok(ML.pendingAwardMenu ~= nil, "award menu pending for ML pick")
 -- Award it: corpse take fires for real (solo LootSlot + force flag).
 local beforeLoot = #lootedSlots
@@ -777,6 +835,8 @@ math.random = rigged({ 3, 1, 90, 1, 80, 1, 70 })
 ML.OnLootOpened()
 math.random = realRandom
 ok(Sim.rehearseRun, "auto run started")
+ok(ML.session ~= nil, "auto-start: head rolling on the clock")
+ok(drain(), "drain auto-started head")
 ok(ML.pendingAwardMenu ~= nil, "auto-start: head resolved, menu pending")
 Sim.StopRehearsal()
 ok(not Sim.rehearseRun, "auto run stopped")

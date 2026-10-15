@@ -476,13 +476,14 @@ the sheet; there are no fake Filler/Missroller names unless you pass N > 0.
 
 Sim **replays the real live pipeline** (`MasterLootUI` session +
 routed chat + both windows), one item at a time — it is a rehearsal of the
-actual roll flow, not a separate code path. Feeds + finish run inline
-(no timers: every fake roll is a direct call, ties re-roll in a loop):
+actual roll flow, not a separate code path. Fake echoes spread across
+the SHARED roll window (same clock as live rolls — the ML rolls
+alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
 
 - `/zl sim <itemLink> [N]` — one-shot: the ML chose it by typing, so it
   auto-plays immediately (still through the real pipeline: silent session,
-  both windows, group-routed chat, fake rolls fed inline, finish at once,
-  ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
+  both windows, group-routed chat, fake echoes across the shared window,
+  clock auto-finish, ties re-roll up to 3 rounds). On-sheet item: mode `SIM`, all its SR
   rollers roll (plus N optional MS fillers, flagged as miss-rolls). Off-sheet
   item: mode `SIM-OPEN`, every player on the sheet rolls (plus N fillers).
 - `/zl simboss <boss>` — rolls the boss's OWN drops: with pfQuest loaded,

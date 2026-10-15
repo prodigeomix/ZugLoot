@@ -139,30 +139,36 @@ local function localLoot()
   return false
 end
 
--- Group-aware chat for roll traffic. Master loot in raid -> RAID /
--- RAID_WARNING, master loot in party -> PARTY, everything else (solo,
--- group/need/greed etc.) -> local chat frame (Z.Print).
-function M.SayGroup(msg)
-  if localLoot() then Z.Print(msg) return end
+-- Shared chat fan-out for ALL roll traffic (live, sim, rehearsal):
+-- master loot in raid -> RAID (RAID_WARNING when warn=true), master
+-- loot in party -> PARTY, everything else (solo, group/need/greed,
+-- sim echoes) -> local chat frame only (the ZugLoot log). Callers never
+-- touch SendChatMessage directly: one router, one channel policy.
+-- echo=true marks ML-local fake traffic (sim/rehearsal rolls print on
+-- the ML's own frame even in a group — the group never sees fakes).
+function M.Say(msg, warn, echo)
+  if echo or localLoot() then Z.Print(msg) return end
   if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
-    if SendChatMessage then SendChatMessage(tostring(msg), "RAID") end
-  elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
-    if SendChatMessage then SendChatMessage(tostring(msg), "PARTY") end
-  else
-    Z.Print(msg)
-  end
-end
-
-function M.WarnGroup(msg)
-  if localLoot() then Z.Print(msg) return end
-  if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
-    if SendChatMessage then SendChatMessage(tostring(msg), "RAID_WARNING") end
+    if SendChatMessage then
+      SendChatMessage(tostring(msg), warn and "RAID_WARNING" or "RAID")
+    end
   elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
     -- No raid warnings in a party: plain party message instead.
     if SendChatMessage then SendChatMessage(tostring(msg), "PARTY") end
   else
     Z.Print(msg)
   end
+end
+
+-- Group-aware chat for roll traffic. Master loot in raid -> RAID /
+-- RAID_WARNING, master loot in party -> PARTY, everything else (solo,
+-- group/need/greed etc.) -> local chat frame (Z.Print).
+function M.SayGroup(msg)
+  M.Say(msg, false, false)
+end
+
+function M.WarnGroup(msg)
+  M.Say(msg, true, false)
 end
 
 function M.OnEvent(event, a1, a2, a3, a4)

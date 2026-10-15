@@ -9,13 +9,11 @@
 -- time. Fake rolls are precomputed, then ECHOED as chat lines ("Name
 -- rolls 42 (1-100)", ML-local only — the group never sees fakes) and
 -- registered through the shared chat intake (IntakeChatRoll, the same
--- parser + router live /rolls travel), so the raider list fills live
--- exactly like a master-loot roll; the session finishes at once;
--- afterwards the ML picks the award from the menu and the queue advances
--- (/zl sim one-shots auto-play; simboss waits for the ML's Roll per
--- item). No timers: feeds + finish run inline (the old staggered-feed
--- timers are gone — every feed is a direct call, so no stale-feed
--- guards, timer bookkeeping, or drain pumps are needed).
+-- parser + router live /rolls travel), spread across the SHARED roll
+-- window — the ML rolls alongside the fakes, and the shared clock
+-- auto-finishes (ties auto-schedule fresh fakes via OnTie); afterwards
+-- the ML picks the award from the menu and the queue advances (/zl sim
+-- one-shots auto-play; simboss waits for the ML's Roll per item).
 -- Uses the same Resolver pure module as real sessions and as tests/.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
@@ -92,6 +90,16 @@ function M.ResetFresh()
   M.auto = false
   M.running = false
   if Z.MasterLootUI then
+    -- Disarm every live roll clock before wiping the tables (a
+    -- scheduled auto-finish must never fire into the next run).
+    if Z.MasterLootUI.sessions then
+      for _, s in pairs(Z.MasterLootUI.sessions) do
+        if s then Z.MasterLootUI.CancelRollTimer(s) end
+      end
+    end
+    if Z.MasterLootUI.session then
+      Z.MasterLootUI.CancelRollTimer(Z.MasterLootUI.session)
+    end
     Z.MasterLootUI.session = nil
     Z.MasterLootUI.sessions = {}
     Z.MasterLootUI.parkedSessions = nil
@@ -180,8 +188,8 @@ local function finishOpts(sess, sheet)
 end
 
 -- Called after a sim award completes: asks for the next roll.
--- Direct call (no timer): feeds + finish already ran inline, so nothing
--- is in flight and the next item can start at once.
+-- Direct call (the finished session is already parked + dropped, so
+-- nothing is in flight and the next item can start at once).
 function M.afterAwards()
   M.RequestNextRoll()
 end
@@ -244,95 +252,94 @@ local function feedRoll(sess, rv)
   end
 end
 
--- Finish wrapper: resolves, re-rolls ties (up to TIE_ROUNDS fresh rounds
--- for the tied subset), then the ML decides the award from the menu.
--- Fully inline: feeds ran inline, so the finish resolves at once and tie
--- re-rolls feed + re-resolve in the same call (loop, not chain).
-local function finishSim(entry, round)
-  round = round or 1
+-- Spread fake echoes across the shared roll window: the i-th of n
+-- rolls lands at i/(n+1) of the window, so the ML always has time to
+-- /roll alongside the fakes and the last fake lands before auto-finish.
+-- Headless-safe: without the Timer module the echoes never schedule
+-- (tests + the ML drive Finish by hand).
+local function scheduleFeeds(sess, rolls)
+  if not sess or not (Z.Timer and Z.Timer.After) then return end
+  local n = Z.Util.ArrayCount(rolls)
+  if n == 0 then return end
   local ML = Z.MasterLootUI
-  -- Rehearsal entries advance the rehearsal queue, never the sim queue.
-  local nextFn = (entry and entry.rehearse) and M.afterRehearsal or M.RequestNextRoll
-  if not ML or not ML.session then nextFn() return end
-  while true do
-    local sheet = Z.DB and Z.DB.sheet
-    local names = {}
-    local tieKind = nil
-    -- Pre-resolve (same opts Finish uses): tie subset + its kind (ties only
-    -- ever happen WITHIN one kind, so re-rolls keep that kind's range).
-    -- Finish re-resolves deterministically on identical inputs.
-    local pre = nil
-    if sheet then
-      pre = Z.Resolver.ResolveItem(sheet, ML.session.itemID, ML.session.rolls, finishOpts(ML.session, sheet))
-      local tied = pre.tied or {}
-      for i = 1, Z.Util.ArrayCount(tied) do
-        table.insert(names, tied[i].name)
-        if tied[i].rollType then tieKind = tied[i].rollType end
-      end
-    end
-      local outcome = ML.Finish()
-    if outcome ~= "tie" then break end
-    if Z.Util.ArrayCount(names) == 0 or round > M.TIE_ROUNDS then
-      Z.Print("SIM tie left unresolved — re-roll manually or /zl cr.")
-      ML.Cancel()
-      nextFn()
-      return
-    end
-    Z.Print("SIM tie between " .. table.concat(names, ", ") .. " — re-rolling (round " .. round .. ").")
-    -- Clear the tied players' old rolls so the live first-roll-only rule
-    -- accepts their re-rolls (same as a real re-roll round).
-    local sess = ML.session
-    if sess then
-      local re = {}
-      for i = 1, Z.Util.ArrayCount(names) do re[names[i]] = true end
-      local kept = {}
-      for i = 1, Z.Util.ArrayCount(sess.rolls) do
-        if not re[sess.rolls[i].name] then table.insert(kept, sess.rolls[i]) end
-      end
-      sess.rolls = kept
-    end
-    local tmin, tmax = 1, Z.Caps.SR
-    if tieKind then tmin, tmax = M.RangeFor(tieKind) end
-    local cap = tmax
-    -- Same-session guard: a cancel/stop between rounds leaves ML.session
-    -- nil or a different session — stop instead of feeding the void.
-    local tieSess = ML.session
-    if not tieSess then nextFn() return end
-    for i = 1, Z.Util.ArrayCount(names) do
-      local nm = names[i]
-      if ML.session ~= tieSess then nextFn() return end
-      feedRoll(tieSess, { name = nm, type = tieKind or "SR", roll = math.random(tmin, cap) })
-    end
-    round = round + 1
+  local dur = (ML and ML.RollDuration and ML.RollDuration()) or 15
+  -- Outstanding echo count: the auto-finish defers while > 0, so a
+  -- same-tick tie with the last feed never cuts the roll off early.
+  sess.feedsPending = (sess.feedsPending or 0) + n
+  for i = 1, n do
+    local rv = rolls[i]
+    Z.Timer.After(dur * i / (n + 1), function()
+      feedRoll(sess, rv)
+      sess.feedsPending = (sess.feedsPending or 1) - 1
+      if sess.feedsPending < 0 then sess.feedsPending = 0 end
+    end)
   end
-  if outcome == "awaiting" then
-    -- The ML decides: in-client the menu frame is on screen and
-    -- AwardChosen/popup continuations own what follows; headless the menu
-    -- stays pending for the harness's AwardChosen. A no-winner finish
-    -- (nobody eligible) never auto-skips: the item stays in the loot
-    -- window until the ML awards it to someone else or re-rolls.
-    local pend = ML.pendingAwardMenu
-    if pend and pend.data and pend.data.none then
-      Z.Print("SIM: no eligible winner — award anyone (/zl award <name>) or /zl cr to re-roll. The item stays in the loot window.")
+end
+
+-- Tie-break hook: Finish calls this on a "tie" outcome for SILENT
+-- (sim/rehearsal) sessions. Schedules fresh fake rolls for the tied
+-- subset across the re-armed window (Finish already restarted the
+-- clock). Live rolls never come here — real players re-roll by hand.
+-- Gives up after TIE_ROUNDS: cancel + advance the queue, like before.
+function M.OnTie(sess)
+  local ML = Z.MasterLootUI
+  if not sess or not ML then return end
+  sess.tieRound = (sess.tieRound or 0) + 1
+  local function nextFn()
+    if sess.rehearse then M.afterRehearsal() else M.RequestNextRoll() end
+  end
+  local sheet = Z.DB and Z.DB.sheet
+  local names, tieKind = {}, nil
+  if sheet then
+    local pre = Z.Resolver.ResolveItem(sheet, sess.itemID, sess.rolls,
+      finishOpts(sess, sheet))
+    local tied = pre.tied or {}
+    for i = 1, Z.Util.ArrayCount(tied) do
+      table.insert(names, tied[i].name)
+      if tied[i].rollType then tieKind = tied[i].rollType end
     end
+  end
+  if Z.Util.ArrayCount(names) == 0 or sess.tieRound > M.TIE_ROUNDS then
+    Z.Print("SIM tie left unresolved — re-roll manually or /zl cr.")
+    ML.Cancel(sess.itemID)
+    nextFn()
     return
   end
-  -- "closed": nothing owns continuation (should not happen for sim).
+  Z.Print("SIM tie between " .. table.concat(names, ", ") .. " — re-rolling (round " .. sess.tieRound .. ").")
+  -- Clear the tied players' old rolls so the live first-roll-only rule
+  -- accepts their re-rolls (same as a real re-roll round).
+  local re = {}
+  for i = 1, Z.Util.ArrayCount(names) do re[names[i]] = true end
+  local kept = {}
+  for i = 1, Z.Util.ArrayCount(sess.rolls or {}) do
+    if sess.rolls[i] and not re[sess.rolls[i].name] then
+      table.insert(kept, sess.rolls[i])
+    end
+  end
+  sess.rolls = kept
+  local tmin, tmax = 1, (Z.Caps and Z.Caps.SR) or 100
+  if tieKind then tmin, tmax = M.RangeFor(tieKind) end
+  local fresh = {}
+  for i = 1, Z.Util.ArrayCount(names) do
+    table.insert(fresh, { name = names[i], type = tieKind or "SR",
+      roll = math.random(tmin, tmax) })
+  end
+  scheduleFeeds(sess, fresh)
 end
 
 -- Start one queued entry through the real pipeline: silent session (no
--- addon broadcast to other clients), both windows visible, rolls fed
--- inline, finish at once. Only the ML starts entries — playOne runs from
--- StartQueuedRoll (loot-window Roll button, auto mode, /zl sim one-shot).
+-- addon broadcast to other clients), both windows visible, fake echoes
+-- spread across the shared window, shared clock auto-finishes. Only the
+-- ML starts entries — playOne runs from StartQueuedRoll (loot-window
+-- Roll button, auto mode, /zl sim one-shot).
 function M.playOne(entry)
   local ML = Z.MasterLootUI
   ML.BeginSession(entry.itemID, entry.link, entry.mode, true)
   -- Stamp entry flags onto the fresh session at birth (synchronous:
   -- BeginSession just created it). Rehearsal sessions carry rehearse +
   -- the invented roster so the award path routes to the rehearsal queue
-  -- and sheet writes fence off invented names. Stamping here (not in the
-  -- caller) survives the inline finish — by the time RehearseRoll runs
-  -- its post-playOne stamp, the session is already parked.
+  -- and sheet writes fence off invented names. The session stays live
+  -- on the shared clock from here (no inline finish anymore).
   if entry and entry.rehearse and ML then
     local born = ML.SessionFor and ML.SessionFor(entry.itemID)
     if born and born.itemID == entry.itemID then
@@ -365,13 +372,19 @@ function M.playOne(entry)
       if Z.LootWindow.MarkRolling then Z.LootWindow.MarkRolling(entry.itemID) end
     end
   end
-  -- Inline feeds: every precomputed roll lands now, in order. No timers
-  -- means no stale-feed race — a cancel/stop simply finds no session and
-  -- the feed guard refuses (cur ~= sess).
-  for i = 1, Z.Util.ArrayCount(entry.rolls) do
-    feedRoll(playSess, entry.rolls[i])
+  -- Fake echoes spread across the shared window (scheduleFeeds): the
+  -- ML — and the ML's own /roll — gets the full window before the
+  -- shared clock auto-finishes. Ties auto-schedule fresh fakes via
+  -- OnTie; the award menu pends for the ML like any live roll.
+  -- Cancel/stop kills the clock, so scheduled echoes for a dead
+  -- session refuse at the feed guard (cur ~= sess).
+  scheduleFeeds(playSess, entry.rolls)
+  local n = Z.Util.ArrayCount(entry.rolls)
+  if n == 0 then
+    Z.Print("SIM: no fake rolls queued — roll yourself (/roll) or Finish to award.")
+  else
+    Z.Print("SIM: " .. n .. " roll(s) coming in — roll yourself (/roll) before the clock runs out.")
   end
-  finishSim(entry, 1)
 end
 
 -- Request the next roll: auto mode plays the queue head (the /zl sim
@@ -652,7 +665,8 @@ end
 
 -- Continuation after a rehearsal award: auto-start the next queued item
 -- only with the general rollAuto option on, else end the run when
--- the queue drains (ML in control). Direct call (feeds ran inline).
+-- the queue drains (ML in control). Direct call (the finished session
+-- is already parked + dropped when the award lands).
 function M.afterRehearsal()
   if Z.DB and Z.DB.rollAuto then
     for i = 1, Z.Util.ArrayCount(M.pending) do
@@ -928,15 +942,18 @@ function M.FeedFreshRolls(itemID)
     if sess.rolls[i] then seen[sess.rolls[i].name] = true end
   end
   local fresh = M.BuildEntry(sheet, itemID, sess.itemLink, 0)
-  local n = 0
+  local newRolls = {}
   for i = 1, Z.Util.ArrayCount(fresh.rolls or {}) do
     local rv = fresh.rolls[i]
     if rv and not seen[rv.name] then
-      n = n + 1
       seen[rv.name] = true
-      feedRoll(sess, rv)
+      table.insert(newRolls, rv)
     end
   end
+  -- Continued roll, continued clock (UnparkSession re-armed it): fresh
+  -- fakes spread across the new window like any other roll.
+  scheduleFeeds(sess, newRolls)
+  local n = Z.Util.ArrayCount(newRolls)
   if n > 0 then
     Z.Print("SIM: " .. n .. " more roll(s) coming in for "
       .. dispName(itemID, sess.itemLink) .. ".")
