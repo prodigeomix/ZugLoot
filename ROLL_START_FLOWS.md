@@ -152,8 +152,11 @@ with rehearsal (blue) and, for the green nodes, with live loot too.
 
 ## 4. Simraid (whole raid + trash, ML-driven, no corpse)
 
-`/zl simraid <raid>` runs the simboss pipe once per raid: `AtlasLoot.RaidDrops`
-rolls every boss's drops in table order with a FRESH trash batch between
-consecutive bosses (the raid's `*Trash` table), all flattened into ONE shared
-queue via the same `StartRun` starter (`Simulated raid: <name>` window).
-Unknown raids get the raid list; an all-miss run says so and queues nothing.
+`/zl simraid <raid>` stages a condensed full raid: `Sim.raid` holds the boss
+names in table order, and each stage — a 0–3 trash pack
+(`AtlasLoot.TrashPack`: weighted, almost always exactly 1) BEFORE the boss,
+then the boss's drops — queues through the SAME simboss starter
+(`Sim.QueueBossRun`, `Simulated loot: <boss>` window). When a stage drains,
+`Sim.NextRaidStage` fires from the normal queue-drain path (`RequestNextRoll`)
+and the next stage queues; after the last boss the run ends like any sim.
+Unknown raids get the raid list; `/zl simstop` stops the whole raid anywhere.

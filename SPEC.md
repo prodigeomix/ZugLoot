@@ -523,12 +523,16 @@ alongside), the clock auto-finishes, ties auto-schedule fresh fakes:
   loot window (+ detail) and raider window — a fresh `/zl sim` can start
   immediately. `/zl cr` mid-sim returns the item to the queue head for
   a re-roll.
-- `/zl simraid <raid>` — a whole raid in one window: every boss's drops in
-  table order with a FRESH trash batch between consecutive bosses (the
-  mobs cleared walking boss to boss, from the raid's `*Trash` table) —
-  the ML rolls each item from the shared list, rapidly covering a whole
-  raid's loot. Same Atlas-CFM sourcing + chance rolls as simboss; unknown
-  raids get the raid list, all-miss runs say so.
+- `/zl simraid <raid>` — a CONDENSED full raid for reliability testing:
+  ONE boss at a time, each through the SAME simboss starter
+  (`Sim.QueueBossRun` — no parallel implementation). A 0–3 trash pack
+  (weighted, almost always exactly 1) rolls BEFORE each boss — the mobs
+  cleared walking up to it — then the boss. When a boss's queue drains
+  (every drop awarded), the next stage queues automatically off the
+  normal queue-drain path (`Sim.NextRaidStage`, via `RequestNextRoll`);
+  after the last boss the run ends like any sim. Unknown raids get the
+  raid list; a raid with no lootable bosses refuses; `/zl simstop` stops
+  the whole raid anywhere.
 - Nothing auto-awards, ever: the sim replays the live menu too. After the ML
   picks, the confirm popup fires and the queue continues (in-client: as you
   accept; headless: the harness's `AwardChosen`).

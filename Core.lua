@@ -26,7 +26,7 @@ function Z.HelpLines()
     "    sheetreq ......... ask the group for the current sheet (ML/leader answers)",
     "    sync <name> ...... ask ONE player for their sheet (player link works)",
     "    simboss <boss> ... queue a boss's drops, you roll each",
-    "    simraid <raid> ... queue a whole raid's drops (+ trash), you roll each",
+    "    simraid <raid> ... condensed full raid: one boss at a time (+ trash), you roll each",
     "    simstop .......... stop the sim, reset everything",
     "    rehearse [on|off]  solo master-loot practice with invented rollers",
     "    help ............. this list",
