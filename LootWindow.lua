@@ -870,7 +870,7 @@ end
 -- Targets the OPEN detail when it tracks this item, else the PARKED one
 -- (multi-roll: timed rolls land on the closed item's saved state).
 -- Returns true when the roll landed on a detail.
-function M.DetailOnRoll(itemID, sessionID, player, roll, rollType, effective)
+function M.DetailOnRoll(itemID, sessionID, player, roll, rollType, effective, minR, maxR)
   -- Multi-roll: timed rolls land on the closed item's saved state when
   -- the open detail is tracking a different item. Parked lookup prefers
   -- the active corpse's snapshot (same item, two corpses), then any lone
@@ -887,7 +887,7 @@ function M.DetailOnRoll(itemID, sessionID, player, roll, rollType, effective)
     if d.rolls[i].name == player then return false end
   end
   table.insert(d.rolls, { name = player, roll = roll, rollType = rollType,
-    effective = effective })
+    effective = effective, min = minR, max = maxR })
   if d == M.detail then M.RefreshDetail() end
   return true
 end
@@ -919,7 +919,8 @@ function M.DetailOnFinish(itemID, menu)
       local r = sess.rolls[i]
       if r then
         table.insert(d.rolls, { name = r.name, roll = r.roll,
-          rollType = r.type, effective = r.roll })
+          rollType = r.type, effective = r.effective or r.roll,
+          min = r.min, max = r.max })
       end
     end
     if sess.id then d.sessionID = sess.id end
@@ -930,6 +931,24 @@ function M.DetailOnFinish(itemID, menu)
   d.countdownDur = nil
   if d == M.detail then M.RefreshDetail() end
   return true
+end
+
+-- "56/98" for a TMOG roll (max of the /roll command used), with
+-- " (=100)" when an SR bonus pushes the effective past it. The stored
+-- max (parsed off the system roll line) is authoritative; the kind cap
+-- covers old rows that predate it.
+function M.RollRangeText(r)
+  r = r or {}
+  local max = r.max
+  if max == nil and Z.MasterLootUI and Z.MasterLootUI.RollCap then
+    max = Z.MasterLootUI.RollCap(r.rollType)
+  end
+  local s = tostring(r.roll)
+  if max ~= nil then s = s .. "/" .. tostring(max) end
+  if r.effective ~= nil and r.effective ~= r.roll then
+    s = s .. " (=" .. tostring(r.effective) .. ")"
+  end
+  return s
 end
 
 -- Sorted roll rows for paint/text: SR > MS > OS > TMOG, best first.
@@ -972,7 +991,7 @@ local function snapshotDetail(d)
   for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
     local r = d.rolls[i]
     table.insert(rolls, { name = r.name, roll = r.roll,
-      rollType = r.rollType, effective = r.effective })
+      rollType = r.rollType, effective = r.effective, min = r.min, max = r.max })
   end
   return { itemID = d.itemID, link = d.link, name = d.name,
     tipLink = d.tipLink, badge = d.badge, status = d.status,
@@ -1265,19 +1284,16 @@ function M.DetailLines(d)
   end
   table.insert(lines, head)
   if d.phase == "rolling" then
-    -- Live roll list: every valid roll with its kind (RollFor roll view).
+    -- Live roll list: every valid roll with its kind and the max of the
+    -- /roll command used (56/98 for a TMOG roll). RollFor roll view.
     local rows = M.SortedDetailRolls(d)
     if Z.Util.ArrayCount(rows) == 0 then
       table.insert(lines, "  waiting for rolls...")
     else
       for i = 1, Z.Util.ArrayCount(rows) do
         local r = rows[i]
-        local eff = ""
-        if r.effective and r.effective ~= r.roll then
-          eff = " (=" .. tostring(r.effective) .. ")"
-        end
         table.insert(lines, "  " .. tostring(r.rollType) .. ": "
-          .. PName(r.name) .. " " .. tostring(r.roll) .. eff)
+          .. PName(r.name) .. " " .. M.RollRangeText(r))
       end
     end
   elseif (d.phase == "award" or d.phase == "preaward") and d.menu then
@@ -1889,19 +1905,15 @@ function M.PaintDetailFrame()
     end
   end
   -- Live roll list: two columns like the raider frame (names left,
-  -- "roll (min-max)" right). f.rolls mirrors the left column for
-  -- legacy readers/tests.
+  -- "roll/max" right, e.g. 56/98 for a TMOG roll). f.rolls mirrors
+  -- the left column for legacy readers/tests.
   local function paintRollColumns(rows, waiting)
     local left, right = {}, {}
     for i = 1, Z.Util.ArrayCount(rows) do
       local r = rows[i]
       local nm = string.sub(tostring(r.name or "?"), 1, 12)
       table.insert(left, PName(nm))
-      local eff = ""
-      if r.effective and r.effective ~= r.roll then
-        eff = " (=" .. tostring(r.effective) .. ")"
-      end
-      table.insert(right, tostring(r.roll) .. eff)
+      table.insert(right, M.RollRangeText(r))
     end
     if waiting then
       if f.rollsL and f.rollsL.SetText then f.rollsL:SetText("waiting for rolls...") end
@@ -2025,21 +2037,59 @@ function M.MoreChoices(d)
     table.insert(out, { id = "roll", label = "Roll" })
     table.insert(out, { id = "raidroll", label = "Raid-roll" })
   end
+  -- Landed rolls by name (their row carries roll + range for labels).
+  local rolled = {}
+  for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
+    local r = d.rolls[i]
+    if r and r.name and not rolled[r.name] then rolled[r.name] = r end
+  end
   local seen = {}
   local function addAward(nm)
     if nm and nm ~= "" and not seen[nm] then
       seen[nm] = true
-      table.insert(out, { id = "award-name", label = "Award " .. PName(nm), name = nm })
+      -- A roller shows once — WITH their roll ("Award Bbb (MS 80/100)"),
+      -- never again bare; non-rollers stay bare names.
+      local label = "Award " .. PName(nm)
+      local r = rolled[nm]
+      if r then
+        label = label .. " (" .. tostring(r.rollType or "?") .. " "
+          .. M.RollRangeText(r) .. ")"
+      end
+      table.insert(out, { id = "award-name", label = label, name = nm })
     end
   end
-  for i = 1, Z.Util.ArrayCount(d.rollers or {}) do addAward(d.rollers[i]) end
-  -- Award windows (open or parked): the ... covers everyone the primary
-  -- button does not — winner rows are primary, ... lists the rest of
-  -- the candidates.
-  if ((d.phase or "pick") == "award" or (d.phase or "pick") == "preaward") and d.menu then
-    local cands = d.menu.candidates or {}
-    for i = 1, Z.Util.ArrayCount(cands) do
-      if cands[i] then addAward(cands[i].name) end
+  local inAward = ((d.phase or "pick") == "award"
+    or (d.phase or "pick") == "preaward") and d.menu
+  if inAward then
+    -- ... covers everyone the primary buttons do not: landed rollers
+    -- first (labeled with their roll), then kind winners, then the
+    -- non-roller candidates (any raider, for when something is wrong
+    -- with the rolls).
+    for i = 1, Z.Util.ArrayCount(M.SortedDetailRolls(d)) do
+      local r = M.SortedDetailRolls(d)[i]
+      if r then addAward(r.name) end
+    end
+    for i = 1, Z.Util.ArrayCount((d.menu or {}).winners or {}) do
+      if d.menu.winners[i] then addAward(d.menu.winners[i].name) end
+    end
+    for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
+      local row = (d.menu.perType or {})[gt]
+      if row and row.entry then addAward(row.entry.name) end
+      for t = 1, Z.Util.ArrayCount((row or {}).tied or {}) do
+        if row.tied[t] then addAward(row.tied[t].name) end
+      end
+    end
+    local cds = d.menu.candidates or {}
+    for i = 1, Z.Util.ArrayCount(cds) do
+      if cds[i] then addAward(cds[i].name) end
+    end
+  else
+    -- Pre-roll (pick, or rolling): reserves + landed rollers — nobody
+    -- rolled on an award list yet, so labeled rollers dedupe the bare
+    -- reserve names instead of duplicating them.
+    for i = 1, Z.Util.ArrayCount(d.rollers or {}) do addAward(d.rollers[i]) end
+    for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
+      if d.rolls[i] then addAward(d.rolls[i].name) end
     end
   end
   return out

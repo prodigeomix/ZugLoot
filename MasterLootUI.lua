@@ -389,7 +389,18 @@ function M.ApplySystemRoll(sess, player, roll, minR, maxR)
       end
     end
   end
-  table.insert(sess.rolls, { name = player, roll = roll, type = rtype })
+  -- Record the /roll range used (56/98 for a TMOG roll) + the SR-bonus
+  -- effective: the ML roll window shows each roll with its max.
+  local bonus = 0
+  if Z.DB.sheet and rtype == "SR" and not M.IsInvented(sess, player)
+      and Z.SRData.GetRollers then
+    local rollers = Z.SRData.GetRollers(Z.DB.sheet, sess.itemID)
+    for i = 1, Z.Util.ArrayCount(rollers) do
+      if rollers[i].name == player then bonus = rollers[i].sr_plus or 0 break end
+    end
+  end
+  table.insert(sess.rolls, { name = player, roll = roll, type = rtype,
+    min = minR, max = maxR, effective = roll + bonus })
   -- Already-won flag is SR-only info (MS/OS/TMOG stay contestable); the
   -- live list shows it, the resolver enforces it per kind. Invented
   -- names never consult won marks.
@@ -414,7 +425,8 @@ function M.ApplySystemRoll(sess, player, roll, minR, maxR)
         end
       end
     end
-    Z.LootWindow.DetailOnRoll(sess.itemID, sess.id, player, roll, rtype, eff)
+    Z.LootWindow.DetailOnRoll(sess.itemID, sess.id, player, roll, rtype, eff,
+      minR, maxR)
   end
 end
 
@@ -918,6 +930,29 @@ local function entryRollType(e)
   return t
 end
 
+-- Max of the /roll command behind a kind (56/98 for a TMOG roll).
+-- M.RollCap so the loot window reaches it without duplicating caps.
+function M.RollCap(rtype)
+  if Z.Resolver and Z.Resolver.TypeCap then return Z.Resolver.TypeCap(rtype) end
+  if Z.Caps then
+    if rtype == "OS" then return Z.Caps.OS or 99 end
+    if rtype == "TMOG" then return Z.Caps.TMOG or 98 end
+    return Z.Caps.SR or 100
+  end
+  return 100
+end
+
+-- "90/100" for a roll, with " (=110)" when an SR bonus applies.
+-- Public so the loot window paints the same ranges as the menu lines.
+function M.RollRange(base, rtype, eff)
+  local cap = M.RollCap(rtype)
+  local s = tostring(base) .. "/" .. tostring(cap)
+  if eff ~= nil and eff ~= base then
+    s = s .. " (=" .. tostring(eff) .. ")"
+  end
+  return s
+end
+
 function M.BuildAwardMenu(sess, res)
   local data = { winners = {}, groups = { SR = {}, MS = {}, OS = {}, TMOG = {} },
     perType = {}, candidates = {}, res = res, none = false,
@@ -927,7 +962,8 @@ function M.BuildAwardMenu(sess, res)
     local e = entries[i]
     if not e.missroll and not e.excludedWon and not e.overCap then
       table.insert(data.groups[entryRollType(e)],
-        { name = e.name, rollType = entryRollType(e), effective = e.effective or e.base })
+        { name = e.name, rollType = entryRollType(e), base = e.base,
+          effective = e.effective or e.base })
     end
   end
   -- Rank groups best-first (ties by name).
@@ -943,10 +979,23 @@ function M.BuildAwardMenu(sess, res)
   for i = 1, Z.Util.ArrayCount(winners) do
     local w = winners[i]
     table.insert(data.winners, { name = w.name, rollType = w.rollType or "SR",
-      effective = w.effective })
+      base = w.base, effective = w.effective })
   end
     if Z.Util.ArrayCount(data.winners) == 0 then data.none = true end
-  data.candidates = M.BuildCandidates(Z.DB and Z.DB.sheet, sess.rolls)
+  -- Candidates are the awardable non-rollers (any raider, for when
+  -- something is wrong with the rolls): everyone already listed with
+  -- a roll shows only there, never again bare.
+  local rolled = {}
+  for i = 1, Z.Util.ArrayCount(entries) do
+    if entries[i] and entries[i].name then rolled[entries[i].name] = true end
+  end
+  local cands = M.BuildCandidates(Z.DB and Z.DB.sheet, sess.rolls)
+  data.candidates = {}
+  for i = 1, Z.Util.ArrayCount(cands) do
+    if cands[i] and cands[i].name and not rolled[cands[i].name] then
+      table.insert(data.candidates, cands[i])
+    end
+  end
   return data
 end
 
@@ -964,20 +1013,22 @@ function M.AwardMenuLines(data)
     local row = (data.perType or {})[gt]
     if row and row.entry then
       local e = row.entry
-      table.insert(lines, "  " .. gt .. " winner: " .. PName(e.name) .. " (" .. tostring(e.effective) .. ")")
+      table.insert(lines, "  " .. gt .. " winner: " .. PName(e.name) .. " (" .. M.RollRange(e.base, e.rollType or gt, e.effective) .. ")")
       for t = 1, Z.Util.ArrayCount(row.tied or {}) do
-        table.insert(lines, "    tied: " .. PName(row.tied[t].name) .. " (" .. tostring(row.tied[t].effective) .. ")")
+        local te = row.tied[t]
+        table.insert(lines, "    tied: " .. PName(te.name) .. " (" .. M.RollRange(te.base, te.rollType or gt, te.effective) .. ")")
       end
     end
   end
   for i = 1, Z.Util.ArrayCount(data.winners or {}) do
     local w = data.winners[i]
-    table.insert(lines, "  overall: " .. PName(w.name) .. " (" .. tostring(w.rollType) .. " " .. tostring(w.effective) .. ")")
+    local wr = M.RollRange(w.base, w.rollType, w.effective)
+    table.insert(lines, "  overall: " .. PName(w.name) .. " (" .. tostring(w.rollType) .. " " .. wr .. ")")
   end
   for _, gt in ipairs({ "SR", "MS", "OS", "TMOG" }) do
     local g = (data.groups or {})[gt] or {}
     for j = 1, Z.Util.ArrayCount(g) do
-      table.insert(lines, "  " .. gt .. ": " .. PName(g[j].name) .. " (" .. tostring(g[j].effective) .. ")")
+      table.insert(lines, "  " .. gt .. ": " .. PName(g[j].name) .. " (" .. M.RollRange(g[j].base, g[j].rollType or gt, g[j].effective) .. ")")
     end
   end
   if data.none then table.insert(lines, "  (no eligible rolls — pick anyone or cancel)") end

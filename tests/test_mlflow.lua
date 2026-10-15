@@ -162,10 +162,13 @@ local res2b = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
 local menu2b = ML.BuildAwardMenu(
   { itemID = 1001, itemLink = "item:1001", id = 1 }, res2b)
 ok(menu2b.candidates[1] ~= nil, "candidates built")
+-- Rollers show once — with their rolls in the group rows — never again
+-- bare in the candidate list (non-rollers only).
 local cclass = {}
 for i = 1, #menu2b.candidates do cclass[menu2b.candidates[i].name] = menu2b.candidates[i].class end
-eq(cclass["Aaa"], "Paladin", "sheet fallback class on candidate")
-eq(cclass["Bbb"], "Mage", "sheet fallback class on candidate")
+eq(cclass["Aaa"], nil, "rollers leave the candidate list")
+eq(cclass["Bbb"], nil, "rollers leave the candidate list")
+eq(cclass["Ccc"], "Druid", "sheet fallback class on non-roller candidate")
 local mlines = ML.AwardMenuLines(menu2b)
 local sawPink, sawMage = false, false
 for i = 1, #mlines do
@@ -888,10 +891,15 @@ eq(menu.winners[1].rollType, "SR", "menu winner roll type")
 eq(menu.groups.SR[1].name, "Aaa", "SR group ranked")
 -- TMOG has its own contest row even while SR wins outright.
 ok(menu.perType.TMOG ~= nil and menu.perType.TMOG.entry ~= nil, "tmog contest row present")
--- Over-cap rolls stay out of award groups but remain candidates.
+-- Over-cap rolls stay out of award groups (they still landed with a roll,
+-- so they show in the group rows, never again bare as candidates).
 local candNames = {}
 for i = 1, #menu.candidates do candNames[menu.candidates[i].name] = true end
-ok(candNames["Tmog"] and candNames["Aaa"] and candNames["Bbb"], "candidates cover rollers")
+ok(not candNames["Tmog"] and not candNames["Aaa"] and not candNames["Bbb"],
+  "rollers shown once, never again bare")
+-- Non-rollers stay awardable from the candidate list.
+local sheets = ZugLoot.SRData.AllPlayerNames(ZugLoot.DB.sheet)
+ok(#menu.candidates > 0 or #sheets <= 3, "non-rollers remain candidates")
 ML.Cancel()
 -- MS winner + TMOG kind side by side (priority covered in resolver tests).
 resetHarness()

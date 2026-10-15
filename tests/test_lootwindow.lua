@@ -249,6 +249,19 @@ for i = 1, #rl do
   if string.find(rl[i], "TMOG: Oz 97", 1, true) then sawTM = true end
 end
 ok(sawSR and sawMS and sawTM, "roll list shows every roll with its kind")
+-- Each roll shows the max of the /roll command used (56/98 TMOG style).
+local rlRange = LW.DetailLines()
+local sawR, sawT = false, false
+for i = 1, #rlRange do
+  if string.find(rlRange[i], "SR: Aaa 90/100", 1, true) then sawR = true end
+  if string.find(rlRange[i], "TMOG: Oz 97", 1, true)
+      and string.find(rlRange[i], "/98", 1, true) then sawT = true end
+end
+ok(sawR and sawT, "rolls show with max of command used")
+eq(LW.RollRangeText({ roll = 56, rollType = "TMOG", max = 98 }), "56/98", "tmog range")
+eq(LW.RollRangeText({ roll = 90, rollType = "SR", max = 100, effective = 100 }),
+  "90/100 (=100)", "sr bonus past base kept")
+eq(LW.RollRangeText({ roll = 90, rollType = "SR" }), "90/100", "kind cap fallback")
 -- Sorted SR > MS > OS > TMOG regardless of feed order.
 local sorted = LW.SortedDetailRolls()
 eq(sorted[1].rollType, "SR", "SR first")
@@ -319,6 +332,31 @@ ok(sawWinner, "award window names the winner with kind")
 local aacts = LW.DetailActions()
 eq(aacts[1].id, "award-name", "award offers winner rows")
 eq(aacts[1].name, "Aaa", "top winner first")
+-- Award ... lists each roller once (with their roll above): no bare
+-- duplicate of a name already shown with a roll.
+local seenNames, dupName = {}, nil
+for i = 1, #LW.MoreChoices() do
+  local c = LW.MoreChoices()[i]
+  if c.name then
+    if seenNames[c.name] then dupName = c.name end
+    seenNames[c.name] = true
+  end
+end
+eq(dupName, nil, "award ... shows nobody twice")
+local rolledNames = {}
+for i = 1, #LW.detail.rolls do rolledNames[LW.detail.rolls[i].name] = true end
+local bareDup = nil
+for i = 1, #LW.MoreChoices() do
+  local c = LW.MoreChoices()[i]
+  if c.name and rolledNames[c.name] then
+    local listed = false
+    for j = 1, #menu6.winners do
+      if menu6.winners[j].name == c.name then listed = true end
+    end
+    if not listed then bareDup = c.name end
+  end
+end
+eq(bareDup, nil, "rollers show with their roll, never again bare")
 -- 6d. Continue: reopen a parked roll for more rolls on the SAME list.
 -- Parked session re-attaches (same id), phase flips to rolling, the
 -- primary button offers Continue while parked for award.
