@@ -349,7 +349,11 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   SR (direct award on a single holder) / Roll / Close. Choosing **Roll keeps
   the window open** — it flips to the rolling view listing every valid roll
   with its kind (`SR: Aaa 90 (=100)`), SR > MS > OS > TMOG best-first, with
-  Finish / Cancel / Close. **Finish ends the roll and parks it for award**
+  Finish / Cancel / Close, plus the **countdown bar + seconds** (raider-
+  window parity: green→orange→red, pulsing under 5s) showing the shared
+  roll clock — seeded at the full window the moment the roll starts, ticking
+  every second, surviving row switches (the parked copy keeps ticking), and
+  clearing on finish/cancel. **Finish ends the roll and parks it for award**
   (the session leaves the live table with rolls + menu intact); the award
   rows show in the loot list, where the parked view is the same award
   window: **Award <winner> rows (kind winners), Award TMOG, ... for

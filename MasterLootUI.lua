@@ -457,6 +457,10 @@ function M.Cancel(itemID)
   if Z.LootWindow and Z.LootWindow.detail
       and Z.LootWindow.detail.itemID == itemID then
     if (Z.LootWindow.detail.phase or "pick") == "rolling" then
+      -- A dead roll paints no clock: clear it before CloseDetail parks
+      -- the snapshot (a bare /zl cr skips doAction's own cleanup).
+      Z.LootWindow.detail.countdown = nil
+      Z.LootWindow.detail.countdownDur = nil
       if Z.LootWindow.DropParked then Z.LootWindow.DropParked(itemID) end
       Z.LootWindow.CloseDetail()
     elseif Z.LootWindow.detail.sessionID == sessionID then
@@ -464,6 +468,8 @@ function M.Cancel(itemID)
       Z.LootWindow.detail.sessionID = nil
       Z.LootWindow.detail.rolls = {}
       Z.LootWindow.detail.menu = nil
+      Z.LootWindow.detail.countdown = nil
+      Z.LootWindow.detail.countdownDur = nil
       Z.LootWindow.detail.status = "open"
       Z.LootWindow.RefreshDetail()
     end
@@ -494,6 +500,7 @@ function M.BeginRollTimer(sess)
   M.CancelRollTimer(sess)
   if not (Z.Timer and Z.Timer.After) then return end
   local dur = M.RollDuration()
+  sess.rollDur = dur
   sess.rollLeft = dur
   local function autoFinish()
     sess.rollTimer = nil
@@ -513,7 +520,22 @@ function M.BeginRollTimer(sess)
     M.Finish(true, sess.itemID)
   end
   sess.rollTimer = Z.Timer.After(dur, autoFinish)
-  -- 1s ticker: the open ML detail shows the live countdown.
+  -- Seed the paint at once (full window, never one tick late): each
+  -- roll flip sets d.countdown itself, but the live BeginSession path
+  -- and tie re-arms route only through here — the phase guard makes
+  -- the pre-flip call a harmless no-op.
+  if Z.LootWindow then
+    local LW = Z.LootWindow
+    local d = LW.detail
+    if d and d.itemID == sess.itemID and (d.phase or "pick") == "rolling" then
+      d.countdown = dur
+      d.countdownDur = dur
+      if LW.RefreshDetail then LW.RefreshDetail() end
+    end
+  end
+  -- 1s ticker: ML details showing this roll paint the live countdown
+  -- (open or parked-rolling: multi-roll timed state lands on the
+  -- closed item's saved copy too, exactly like timed rolls do).
   local function tick()
     sess.clockTick = nil
     local live = M.sessions and sess.key ~= nil
@@ -522,10 +544,22 @@ function M.BeginRollTimer(sess)
     if not live then return end
     sess.rollLeft = (sess.rollLeft or dur) - 1
     if sess.rollLeft < 0 then sess.rollLeft = 0 end
-    local d = Z.LootWindow and Z.LootWindow.detail or nil
-    if d and d.itemID == sess.itemID and (d.phase or "pick") == "rolling" then
-      d.countdown = sess.rollLeft
-      if Z.LootWindow.RefreshDetail then Z.LootWindow.RefreshDetail() end
+    if Z.LootWindow then
+      local LW = Z.LootWindow
+      local function paintDetail(d)
+        if d and d.itemID == sess.itemID
+            and (d.phase or "pick") == "rolling" then
+          d.countdown = sess.rollLeft
+          d.countdownDur = dur
+        end
+      end
+      paintDetail(LW.detail)
+      if LW.parked then
+        local pk = M.RollKey(sess.itemID)
+        paintDetail(LW.parked[pk])
+        paintDetail(LW.parked[sess.itemID])
+      end
+      if LW.RefreshDetail then LW.RefreshDetail() end
     end
     if sess.rollLeft > 0 and Z.Timer and Z.Timer.After then
       sess.clockTick = Z.Timer.After(1, tick)

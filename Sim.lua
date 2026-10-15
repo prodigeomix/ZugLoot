@@ -368,6 +368,13 @@ function M.playOne(entry)
       d.menu = nil
       d.status = "rolling"
       d.sessionID = playSess and playSess.id or nil
+      -- Seed the countdown at once (full window, not one tick late):
+      -- the session clock repaints it every second from here.
+      d.countdown = playSess and playSess.rollLeft
+        or (ML.RollDuration and ML.RollDuration()) or nil
+      d.countdownDur = (playSess and playSess.rollDur)
+        or (ML.RollDuration and ML.RollDuration())
+        or d.countdown
       Z.LootWindow.RefreshDetail()
       if Z.LootWindow.MarkRolling then Z.LootWindow.MarkRolling(entry.itemID) end
     end

@@ -590,7 +590,81 @@ ML.session = nil
 LW.parked = {}
 LW.CloseDetail()
 
--- 8. Flow layout: one row when wide, wrap when narrow, justified.
+-- 8. Master countdown: the rolling detail seeds the full window at
+-- roll time (never one tick late), ticks down on the session clock,
+-- survives park/restore, and clears on finish/cancel. Headless asserts
+-- the data the client bar paints (paint itself is covered in mockrun).
+-- Earlier blocks stubbed the ML starters: reload the pristine module so
+-- this block drives the REAL timer path (BeginSession + BeginRollTimer).
+dofile("MasterLootUI.lua")
+ML = ZugLoot.MasterLootUI
+ML.lootOpen = true
+ZugLoot.DB = { sheet = makeSheet(), rollTime = 10 }
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+if ZugLoot.Timer then ZugLoot.Timer.CancelAll() end
+-- Real roll through the window: live session, full-window seed.
+local rr = LW.doAction(1001, "roll")
+eq(rr, "rolling", "roll starts")
+eq(LW.detail.countdown, 10, "countdown seeded at full window")
+eq(LW.detail.countdownDur, 10, "bar denominator seeded")
+local cdLines = LW.DetailLines()
+ok(string.find(cdLines[1], "(10s)", 1, true) ~= nil,
+  "headless head shows the clock, got: " .. tostring(cdLines[1]))
+-- Seconds tick the paint down on the shared clock.
+if ZugLoot.Timer then ZugLoot.Timer.Update(1) end
+eq(LW.detail.countdown, 9, "tick paints 9s")
+if ZugLoot.Timer then ZugLoot.Timer.Update(1) end
+eq(LW.detail.countdown, 8, "tick paints 8s")
+-- Park mid-roll, reopen: the saved clock restores.
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+  { itemID = 1002, link = "item:1002", badge = "SR" },
+}, "loot")
+LW.OpenDetail(1002) -- parks 1001's rolling state
+local psnap = LW.ParkedDetail(1001)
+ok(psnap ~= nil and psnap.phase == "rolling", "rolling state parked")
+eq(psnap.countdown, 8, "parked snapshot keeps the clock")
+eq(psnap.countdownDur, 10, "parked snapshot keeps the denominator")
+LW.OpenDetail(1001) -- restores the snapshot
+eq(LW.detail.countdown, 8, "reopen restores the clock")
+-- The clock keeps ticking behind the parked copy: switch away, advance,
+-- switch back. (Two ticks land: 8 -> 7 -> 6.)
+LW.OpenDetail(1002)
+if ZugLoot.Timer then ZugLoot.Timer.Update(1) end
+if ZugLoot.Timer then ZugLoot.Timer.Update(1) end
+LW.OpenDetail(1001)
+eq(LW.detail.countdown, 6, "parked clock still ticks")
+-- Cancel kills the clock: the rolling window closes, the parked copy
+-- drops back to pick with no clock left to paint.
+eq(LW.doAction(1001, "cancel"), "cancelled", "cancel from window")
+ok(LW.detail == nil, "cancel closes the rolling window")
+local cpark = LW.ParkedDetail(1001)
+ok(cpark == nil or cpark.phase == "pick", "cancel parks nothing rolling")
+ok(cpark == nil or cpark.countdown == nil, "cancel leaves no stale clock")
+-- Finish clears it too: re-roll, feed one roll, finish -> award, no clock.
+if ZugLoot.Timer then ZugLoot.Timer.CancelAll() end
+ML.sessions = {}
+ML.parkedSessions = nil
+ML.session = nil
+LW.parked = {}
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "roll"), "rolling", "re-roll starts")
+ok(LW.detail.countdown ~= nil, "re-roll seeds the clock")
+ok(LW.DetailOnRoll(1001, ML.session.id, "Aaa", 90, "SR", 100), "roll lands")
+ML.Finish(true, 1001)
+eq(LW.detail.phase, "award", "finished into award")
+eq(LW.detail.countdown, nil, "finish clears the clock")
+eq(LW.detail.countdownDur, nil, "finish clears the denominator")
+if ZugLoot.Timer then ZugLoot.Timer.CancelAll() end
+ML.sessions = {}
+ML.parkedSessions = nil
+ML.session = nil
+LW.parked = {}
+LW.CloseDetail()
+
+-- 9. Flow layout: one row when wide, wrap when narrow, justified.
 -- Wide bar: all four share one justified row (even side margins).
 local wide = LW.LayoutBarRows({
   { btn = "a", w = 80 }, { btn = "b", w = 80 },

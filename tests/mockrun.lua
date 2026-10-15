@@ -176,10 +176,23 @@ assert(Z.LootWindow.detailFrame.rolls ~= nil, "roll list widget built");
 Z.LootWindow.detail.phase = "rolling";
 Z.LootWindow.DetailOnRoll(19137, nil, "Blackfang", 95, "SR", 115);
 Z.LootWindow.detail.countdown = 12;
+Z.LootWindow.detail.countdownDur = 15;
 Z.LootWindow.RefreshDetail();
+-- Master countdown bar (raider parity): built once, visible while
+-- rolling with the painted value, hidden once the roll finishes.
+local dfBar = Z.LootWindow.detailFrame;
+assert(dfBar.timerBar ~= nil, "countdown bar built");
+assert(dfBar.timerBarText ~= nil, "countdown seconds built");
+assert(dfBar.timerBar.hidden ~= true, "bar visible while rolling");
+assert(dfBar.timerBar.sbval == 12 or dfBar.timerBar.val == 12,
+  "bar paints 12s, got: " .. tostring(dfBar.timerBar.sbval or dfBar.timerBar.val));
+assert(string.find(dfBar.timerBarText.txt or "", "12s", 1, true) ~= nil,
+  "bar seconds text paints, got: " .. tostring(dfBar.timerBarText.txt));
 Z.LootWindow.DetailOnFinish(19137, menu);
 assert(Z.LootWindow.detail.phase == "award", "detail flips to award");
 Z.LootWindow.RefreshDetail();
+assert(Z.LootWindow.detailFrame.timerBar.hidden == true,
+  "bar hides once the roll finishes");
 -- two award buttons: primary (SR winner) + Award TMOG (kind winner).
 Z.LootWindow.detail.menu.perType = Z.LootWindow.detail.menu.perType or {};
 Z.LootWindow.detail.menu.perType.TMOG = { entry = { name = "SoloPlayer",
