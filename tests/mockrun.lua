@@ -19,7 +19,7 @@ local function newObj(kind)
   function o:SetAlpha(a) self.alpha=a end
   function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
-  function o:CreateTexture(...) local t={scripts={}}; function t:SetTexture() end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight() end; function t:SetWidth() end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
+  function o:CreateTexture(...) local t={scripts={}, w=0, h=0}; function t:SetTexture(p) self.tex=p end; function t:GetTexture() return self.tex end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight(h) self.h=h end; function t:SetWidth(w) self.w=w end; function t:SetVertexColor() end; function t:SetTexCoord(l,r,tm,b) self.coord={l,r,tm,b} end; function t:GetTexCoord() return self.coord end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
   function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
   function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
   function o:SetStatusBarTexture() end
@@ -38,6 +38,10 @@ local function newObj(kind)
   function o:SetVerticalScroll() end
   function o:GetHeight() return self.h or 10 end
   function o:Raise() end
+  function o:SetFrameStrata(s) self.strata=s end
+  function o:GetFrameStrata() return self.strata end
+  function o:SetFrameLevel(l) self.flevel=l end
+  function o:GetFrameLevel() return self.flevel or 5 end
   return o;
 end
 CreateFrame = function(kind, name, parent, tmpl) return newObj(kind) end
@@ -72,6 +76,7 @@ dofile("ItemIcon.lua");
 dofile("RaidArchive.lua");
 dofile("SRSecurity.lua");
 dofile("Comm.lua");
+dofile("Pysanka.lua");
 ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
 ZugLoot.AutoRoll = { Set=function() end };
 ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, GridNames=function() return {{name="A",inGroup=true},{name="B",inGroup=true}} end, StatusFor=function() return "GREEN" end, ColorFor=function() return "GREEN" end, Request=function() end };
@@ -357,14 +362,108 @@ assert(gridCells[4].spec == nil, "unknown class shows no spec");
 print("member role icons OK");
 ZugLoot.DB.sheet = savedSheet;
 Z.MainWindow.Refresh();
-for _,tab in ipairs({"sheet","raids","versions","setup"}) do
+-- Pysanka tab: renders, invitation word defaults to invite, player
+-- fields + edits are present, writes land in the model, and the picker
+-- opens merged sheet + roster choices on click.
+Z.MainWindow.SelectTab("pysanka");
+local pyVals = Z.MainWindow.DebugPysankaValues();
+assert(pyVals and pyVals["invite"] == "invite", "invite defaults to invite, got: " .. tostring(pyVals and pyVals["invite"]));
+assert(Z.MainWindow.SetPysankaField("invite", "inv"), "invite field writable");
+assert(pyVals == nil or Z.MainWindow.DebugPysankaValues()["invite"] == "inv", "invite edit persists");
+Z.MainWindow.SetPysankaField("invite", "   ");
+assert(Z.MainWindow.DebugPysankaValues()["invite"] == "invite", "blank invite falls back");
+assert(Z.MainWindow.SetPysankaField("tank:1:tank", "Pysanka"), "tank field writable");
+assert(Z.MainWindow.DebugPysankaValues()["tank:1:tank"] == "Pysanka", "tank assignment persists");
+assert(Z.MainWindow.SetPysankaField("buff:1-2/MoTW", "Janetta"), "buff field writable");
+assert(Z.MainWindow.DebugPysankaValues()["buff:1-2/MoTW"] == "Janetta", "buff assignment persists");
+assert(Z.MainWindow.SetPysankaField("debuff:CoR", "Ahjinn"), "debuff field writable");
+assert(Z.MainWindow.SetPysankaField("puller", "Remorph"), "puller writable");
+assert(Z.MainWindow.SetPysankaField("coordinator", "Pysanka"), "coordinator writable");
+local pyWidgets = Z.MainWindow.DebugPysankaWidgets();
+local nEdit, nPlayer = 0, 0;
+for i = 1, Z.Util.ArrayCount(pyWidgets) do
+  if pyWidgets[i].kind == "edit" then nEdit = nEdit + 1 else nPlayer = nPlayer + 1 end
+end
+assert(nEdit == 1, "exactly one invite edit box, got " .. tostring(nEdit));
+-- 20 buffs + pally/coordinator + 24 tank rows + 2 raid-all + puller + 11 debuffs
+assert(nPlayer == 20 + 2 + 24 + 2 + 1 + 11, "all player fields clickable, got " .. tostring(nPlayer));
+-- Clicking a player field opens the picker with sheet+roster choices.
+-- reach into the tracked widgets via a second select (widgets rebuild)
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+assert(Z.MainWindow.DebugPysankaPicker() == nil, "no picker before click");
+-- find a tank button: re-render then click through its OnClick script
+local tankBtn = nil
+for _, w in ipairs(Z.MainWindow.zlPysPlayers or {}) do
+  if w.zlDesc == "tank:1:tank" then tankBtn = w break end
+end
+assert(tankBtn ~= nil and tankBtn.GetScript, "tank button tracked");
+local tankClick = tankBtn:GetScript("OnClick");
+assert(tankClick, "tank button click wired");
+tankClick();
+local pick = Z.MainWindow.DebugPysankaPicker();
+assert(pick ~= nil, "picker opened on tank click");
+assert(pick.open == true, "picker records open state");
+assert(Z.Util.ArrayCount(pick.names) >= 2, "picker merges sheet players, got " .. tostring(pick.names and Z.Util.ArrayCount(pick.names)));
+-- Picker paints ABOVE the main window (TOOLTIP strata + higher level),
+-- or it slides under the window and cannot be clicked.
+local drop = Z.MainWindow.DebugPysankaDrop();
+assert(drop ~= nil, "picker frame built");
+assert(drop.strata == "TOOLTIP", "picker strata above window, got: " .. tostring(drop.strata));
+assert((drop.flevel or 0) > 5, "picker level above window, got: " .. tostring(drop.flevel));
+-- Clicking the same field again toggles the picker shut.
+tankClick();
+assert(Z.MainWindow.DebugPysankaPicker().open == false, "second click closes picker");
+assert(Z.MainWindow.DebugPysankaDrop() == nil, "picker frame torn down");
+-- Kill order renders the 8 real raid-target icons in order.
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+local ko = Z.MainWindow.DebugPysankaKillOrder();
+assert(ko and Z.Util.ArrayCount(ko) == 8, "kill order holds 8 icons, got " .. tostring(ko and Z.Util.ArrayCount(ko)));
+assert(ko[1].mark == "Skull" and ko[1].icon == Z.Pysanka.MarkIcon("Skull"), "kill order starts at skull");
+for i = 1, 8 do
+  assert(ko[i].icon == "Interface\\TargetingFrame\\UI-RaidTargetingIcons",
+    "kill icon " .. i .. " uses the raid sheet, got: " .. tostring(ko[i].icon));
+  assert(ko[i].mark == Z.Pysanka.MARKS[i], "kill icon " .. i .. " order");
+end
+-- Without the client API the path is used; with it (stock 1.12
+-- SetRaidTargetIconTexture) the API paints the texture directly.
+SetRaidTargetIconTexture = function(tex, idx)
+  tex:SetTexture("API-ICON-" .. tostring(idx))
+end;
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+local koApi = Z.MainWindow.DebugPysankaKillOrder();
+assert(koApi and koApi[1].via == "api", "client raid-icon API used when present");
+SetRaidTargetIconTexture = nil;
+print("pysanka tab OK");
+-- Pysanka layout invariant: no widget row may start inside the one
+-- above — every header->field step must clear the widget heights
+-- (GameFontNormal ~14px, small ~12px, fields 20px). Catches the
+-- header/field overlap family (buff columns over row 1-2, tank heads
+-- over Skull, kill-order icons over their header).
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+local pyRows = Z.MainWindow.DebugPysankaRowYs and Z.MainWindow.DebugPysankaRowYs();
+if pyRows then
+  local function clear(aTop, aH, bTop, what)
+    assert(bTop <= aTop - (aH - 2), what .. ": gap violated (" .. tostring(aTop) .. "->" .. tostring(bTop) .. ")");
+  end
+  clear(pyRows.buffHead, 14, pyRows.buffRow1, "buff header clears row 1-2");
+  clear(pyRows.tankHead, 14, pyRows.tankRow1, "tank header clears skull");
+  clear(pyRows.dbHead1, 14, pyRows.dbRow1, "debuff header clears row 1");
+  clear(pyRows.dbHead2, 14, pyRows.dbRow2, "debuff header clears row 2");
+  clear(pyRows.koHead, 14, pyRows.koIcons, "kill-order header clears icons");
+  print("pysanka layout invariant OK");
+end
+for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end
 -- scrollbar invariant, checked on every tab: a visible slider may only belong
 -- to the active tab. Hidden tabs must never paint a thumb (the old bug left
 -- stale sliders from hidden tabs over the live list).
-for _,tab in ipairs({"sheet","raids","versions","setup"}) do
+for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   local sliderState = Z.MainWindow.DebugSliderState();
   for other, vis in pairs(sliderState) do
