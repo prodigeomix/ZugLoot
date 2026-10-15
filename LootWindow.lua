@@ -19,7 +19,8 @@
 --   source: "loot"|"sim"; index: 1-based row number (RollFor modern skin).
 -- Detail: BuildDetail fields + phase ("pick"|"rolling"|"award"),
 --   sessionID (roll it tracks), rolls ({name, roll, rollType, effective}),
---   menu (award data once finished), countdown (seconds left, client paint).
+--   menu (award data once finished), countdown (seconds left) +
+--   countdownDur (full window, bar paint denominator).
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
@@ -870,6 +871,7 @@ function M.BuildDetail(itemID)
     rolls = {},
     menu = nil,
     countdown = nil,
+    countdownDur = nil,
   }
 end
 
@@ -935,6 +937,7 @@ function M.DetailOnFinish(itemID, menu)
   d.menu = menu
   d.phase = "award"
   d.countdown = nil
+  d.countdownDur = nil
   if d == M.detail then M.RefreshDetail() end
   return true
 end
@@ -985,7 +988,8 @@ local function snapshotDetail(d)
     tipLink = d.tipLink, badge = d.badge, status = d.status,
     source = d.source, rollers = d.rollers, single = d.single,
     phase = d.phase, sessionID = d.sessionID, rolls = rolls,
-    menu = d.menu, countdown = d.countdown }
+    menu = d.menu, countdown = d.countdown,
+    countdownDur = d.countdownDur }
 end
 
 function M.ParkDetail()
@@ -1253,7 +1257,13 @@ function M.DetailLines(d)
   if not d then return lines end
   local head = tostring(d.name or d.link or ("item:" .. d.itemID))
   if d.badge and d.badge ~= "" then head = head .. " [" .. d.badge .. "]" end
-  if d.phase == "rolling" then head = head .. " [rolling]" end
+  if d.phase == "rolling" then
+    head = head .. " [rolling"
+    -- Headless mirror of the client countdown bar (bar + seconds): the
+    -- ML reads the clock off the same text the client paints.
+    if d.countdown then head = head .. " (" .. tostring(d.countdown) .. "s)" end
+    head = head .. "]"
+  end
   table.insert(lines, head)
   if d.phase == "rolling" then
     -- Live roll list: every valid roll with its kind (RollFor roll view).
@@ -1484,6 +1494,13 @@ function M.doAction(itemID, actionID, extra)
       d.rolls = {}
       d.menu = nil
       d.status = "rolling"
+      -- Seed the countdown at once (full window, not one tick late):
+      -- the session clock repaints it every second from here.
+      local seedDur = (sess and sess.rollDur)
+        or (Z.MasterLootUI and Z.MasterLootUI.RollDuration
+        and Z.MasterLootUI.RollDuration()) or nil
+      d.countdown = (sess and sess.rollLeft) or seedDur
+      d.countdownDur = seedDur or d.countdown
       M.RefreshDetail()
       return "rolling"
     end
@@ -1549,6 +1566,12 @@ function M.doAction(itemID, actionID, extra)
     d.phase = "rolling"
     d.sessionID = sess.id
     d.status = "rolling"
+    -- Continued roll, continued clock: full window again (UnparkSession
+    -- re-armed the session timer), painted at once like a fresh roll.
+    d.countdown = sess.rollLeft
+    d.countdownDur = sess.rollDur
+      or (MLUI and MLUI.RollDuration and MLUI.RollDuration())
+      or sess.rollLeft
     if Z.LootWindow and Z.LootWindow.MarkRolling then
       Z.LootWindow.MarkRolling(itemID)
     end
@@ -1566,6 +1589,8 @@ function M.doAction(itemID, actionID, extra)
         dd.sessionID = nil
         dd.rolls = {}
         dd.menu = nil
+        dd.countdown = nil
+        dd.countdownDur = nil
         dd.status = "open"
         M.RefreshDetail()
       end
@@ -1575,6 +1600,8 @@ function M.doAction(itemID, actionID, extra)
         parked.sessionID = nil
         parked.rolls = {}
         parked.menu = nil
+        parked.countdown = nil
+        parked.countdownDur = nil
         parked.status = "open"
       end
       return "cancelled"
@@ -1679,6 +1706,20 @@ function M.BuildDetailFrame()
   sub:SetPoint("TOP", title, "BOTTOM", 0, -4)
   sub:SetWidth(200) sub:SetJustifyH("CENTER")
   f.sub = sub
+  -- Countdown bar floating above the frame (raider-window parity:
+  -- green->orange->red, seconds text, pulses under 5s). Shown only
+  -- while rolling; d.countdown/d.countdownDur own the values.
+  local timerBar = CreateFrame("StatusBar", nil, f)
+  timerBar:SetWidth(200) timerBar:SetHeight(14)
+  timerBar:SetPoint("TOP", f, "TOP", 0, 18)
+  timerBar:SetStatusBarTexture("Interface\\TargetingFrame\\UI-StatusBar")
+  timerBar:SetStatusBarColor(0.2, 0.7, 0.2, 1)
+  timerBar:Hide()
+  local timerBarText = timerBar:CreateFontString(nil, "OVERLAY",
+    "GameFontHighlightSmall")
+  timerBarText:SetPoint("CENTER", timerBar, "CENTER", 0, 0)
+  f.timerBar = timerBar
+  f.timerBarText = timerBarText
   -- Live roll list: two columns like the raider frame (names left,
   -- "roll (min-max)" right, grouped SR > MS > OS > TMOG). Hidden in
   -- pick phase, shown while rolling / awarding.
@@ -1814,6 +1855,38 @@ function M.PaintDetailFrame()
       f.sub:SetText("Reserved by: " .. table.concat(rn, ", "))
     else
       f.sub:SetText("No reserves — open roll")
+    end
+  end
+  -- Countdown bar: raider-window parity (green->orange->red, seconds
+  -- text, pulse under 5s). Rolling only; every other phase hides it.
+  if f.timerBar then
+    if phase == "rolling" and d.countdown then
+      local left = tonumber(d.countdown) or 0
+      if left < 0 then left = 0 end
+      local dur = tonumber(d.countdownDur) or left
+      if dur <= 0 then dur = left end
+      if f.timerBar.SetMinMaxValues then f.timerBar:SetMinMaxValues(0, dur) end
+      if f.timerBar.SetValue then f.timerBar:SetValue(left) end
+      if f.timerBarText and f.timerBarText.SetText then
+        f.timerBarText:SetText(string.format("%.0fs", left))
+      end
+      local pct = (dur > 0) and (left / dur) or 0
+      if f.timerBar.SetStatusBarColor then
+        if pct < 0.25 then f.timerBar:SetStatusBarColor(1, 0.1, 0.1)
+        elseif pct < 0.5 then f.timerBar:SetStatusBarColor(1, 0.6, 0)
+        else f.timerBar:SetStatusBarColor(0.2, 0.7, 0.2, 1) end
+      end
+      if f.timerBar.SetAlpha then
+        if left <= 5 and left > 0 and GetTime then
+          f.timerBar:SetAlpha(0.5 + 0.5 * math.sin(GetTime() * 15))
+        else
+          f.timerBar:SetAlpha(1)
+        end
+      end
+      if f.timerBar.Show then f.timerBar:Show() end
+    else
+      if f.timerBar.Hide then f.timerBar:Hide() end
+      if f.timerBar.SetAlpha then f.timerBar:SetAlpha(1) end
     end
   end
   -- Live roll list: two columns like the raider frame (names left,
