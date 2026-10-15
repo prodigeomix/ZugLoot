@@ -147,6 +147,35 @@ function M.DropSession(sess)
   end
 end
 
+-- Discard a FINISHED roll's parked state so a fresh roll starts clean:
+-- the parked session (a later Continue must re-attach the NEW roll,
+-- never resurrect the old one) and its pending award menu (awarding
+-- off stale winners must be impossible). Live sessions are untouched —
+-- callers refuse those before starting anything fresh.
+function M.DiscardParkedRoll(itemID)
+  if not itemID then return end
+  local psess = M.ParkedSession and M.ParkedSession(itemID) or nil
+  if psess then M.DropSession(psess) end
+  local ck = M.RollKey(itemID)
+  local deadAlias = false
+  if M.pendingAwardMenus and M.pendingAwardMenus[ck] then
+    if M.pendingAwardMenu == M.pendingAwardMenus[ck] then
+      deadAlias = true
+    end
+    M.pendingAwardMenus[ck] = nil
+  end
+  if deadAlias then
+    -- The alias died with this item's menu: re-point it at any
+    -- surviving menu (AwardChosen's legacy fallback), else clear it.
+    M.pendingAwardMenu = nil
+    if M.pendingAwardMenus then
+      for _, other in pairs(M.pendingAwardMenus) do
+        if other then M.pendingAwardMenu = other break end
+      end
+    end
+  end
+end
+
 -- Raid roster for raid-roll numbering: ordered raid member names
 -- (RollFor parity: [1]:Name, [2]:Name, ...). Solo falls back to self.
 function M.RaidRoster()
