@@ -22,6 +22,7 @@ end
 
 -- Tests dofile() sibling pure modules, so run them with cwd = addon root.
 run("test_util.lua")
+run("test_pysanka.lua")
 run("test_srdata.lua")
 run("test_resolver.lua")
 run("test_security.lua")
@@ -58,7 +59,7 @@ end
 
 -- 5.0-syntax sanity: all shipped lua files must parse (loadfile without running).
 local files = { "Constants.lua", "Util.lua", "Timer.lua", "ClassColors.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "ItemIcon.lua", "SRView.lua",
-  "SRSecurity.lua", "SRImport.lua", "MainWindow.lua", "Sim.lua", "MasterLootUI.lua",
+  "SRSecurity.lua", "SRImport.lua", "Pysanka.lua", "MainWindow.lua", "Sim.lua", "MasterLootUI.lua",
   "RaidArchive.lua", "Comm.lua", "Core.lua", "LootWindow.lua", "AtlasLoot.lua", "RaiderLootUI.lua", "DropLog.lua", "VersionGrid.lua", "Minimap.lua" }
 for _, f in ipairs(files) do
   local c, e = loadfile(f)

@@ -72,6 +72,7 @@ dofile("ItemIcon.lua");
 dofile("RaidArchive.lua");
 dofile("SRSecurity.lua");
 dofile("Comm.lua");
+dofile("Pysanka.lua");
 ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
 ZugLoot.AutoRoll = { Set=function() end };
 ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, GridNames=function() return {{name="A",inGroup=true},{name="B",inGroup=true}} end, StatusFor=function() return "GREEN" end, ColorFor=function() return "GREEN" end, Request=function() end };
@@ -317,14 +318,57 @@ assert(gridCells[4].spec == nil, "unknown class shows no spec");
 print("member role icons OK");
 ZugLoot.DB.sheet = savedSheet;
 Z.MainWindow.Refresh();
-for _,tab in ipairs({"sheet","raids","versions","setup"}) do
+-- Pysanka tab: renders, invitation word defaults to invite, player
+-- fields + edits are present, writes land in the model, and the picker
+-- opens merged sheet + roster choices on click.
+Z.MainWindow.SelectTab("pysanka");
+local pyVals = Z.MainWindow.DebugPysankaValues();
+assert(pyVals and pyVals["invite"] == "invite", "invite defaults to invite, got: " .. tostring(pyVals and pyVals["invite"]));
+assert(Z.MainWindow.SetPysankaField("invite", "inv"), "invite field writable");
+assert(pyVals == nil or Z.MainWindow.DebugPysankaValues()["invite"] == "inv", "invite edit persists");
+Z.MainWindow.SetPysankaField("invite", "   ");
+assert(Z.MainWindow.DebugPysankaValues()["invite"] == "invite", "blank invite falls back");
+assert(Z.MainWindow.SetPysankaField("tank:1:tank", "Pysanka"), "tank field writable");
+assert(Z.MainWindow.DebugPysankaValues()["tank:1:tank"] == "Pysanka", "tank assignment persists");
+assert(Z.MainWindow.SetPysankaField("buff:1-2/MoTW", "Janetta"), "buff field writable");
+assert(Z.MainWindow.DebugPysankaValues()["buff:1-2/MoTW"] == "Janetta", "buff assignment persists");
+assert(Z.MainWindow.SetPysankaField("debuff:CoR", "Ahjinn"), "debuff field writable");
+assert(Z.MainWindow.SetPysankaField("puller", "Remorph"), "puller writable");
+assert(Z.MainWindow.SetPysankaField("coordinator", "Pysanka"), "coordinator writable");
+local pyWidgets = Z.MainWindow.DebugPysankaWidgets();
+local nEdit, nPlayer = 0, 0;
+for i = 1, Z.Util.ArrayCount(pyWidgets) do
+  if pyWidgets[i].kind == "edit" then nEdit = nEdit + 1 else nPlayer = nPlayer + 1 end
+end
+assert(nEdit == 1, "exactly one invite edit box, got " .. tostring(nEdit));
+-- 20 buffs + pally/coordinator + 24 tank rows + 2 raid-all + puller + 11 debuffs
+assert(nPlayer == 20 + 2 + 24 + 2 + 1 + 11, "all player fields clickable, got " .. tostring(nPlayer));
+-- Clicking a player field opens the picker with sheet+roster choices.
+-- reach into the tracked widgets via a second select (widgets rebuild)
+Z.MainWindow.SelectTab("sheet");
+Z.MainWindow.SelectTab("pysanka");
+assert(Z.MainWindow.DebugPysankaPicker() == nil, "no picker before click");
+-- find a tank button: re-render then click through its OnClick script
+local tankBtn = nil
+for _, w in ipairs(Z.MainWindow.zlPysPlayers or {}) do
+  if w.zlDesc == "tank:1:tank" then tankBtn = w break end
+end
+assert(tankBtn ~= nil and tankBtn.GetScript, "tank button tracked");
+local tankClick = tankBtn:GetScript("OnClick");
+assert(tankClick, "tank button click wired");
+tankClick();
+local pick = Z.MainWindow.DebugPysankaPicker();
+assert(pick ~= nil, "picker opened on tank click");
+assert(Z.Util.ArrayCount(pick.names) >= 2, "picker merges sheet players, got " .. tostring(pick.names and Z.Util.ArrayCount(pick.names)));
+print("pysanka tab OK");
+for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end
 -- scrollbar invariant, checked on every tab: a visible slider may only belong
 -- to the active tab. Hidden tabs must never paint a thumb (the old bug left
 -- stale sliders from hidden tabs over the live list).
-for _,tab in ipairs({"sheet","raids","versions","setup"}) do
+for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   local sliderState = Z.MainWindow.DebugSliderState();
   for other, vis in pairs(sliderState) do

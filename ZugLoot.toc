@@ -27,6 +27,7 @@ LootWindow.lua
 RaiderLootUI.lua
 AutoRoll.lua
 VersionGrid.lua
+Pysanka.lua
 MainWindow.lua
 AtlasLoot.lua
 Sim.lua

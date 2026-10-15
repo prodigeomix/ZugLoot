@@ -1,7 +1,7 @@
 -- ZugLoot/MainWindow.lua
 -- Big tabbed window, Aegis-SBR-inspired skin (flat dark palette, 1px hairlines,
 -- tab rail with gold underline, scroll body). In-game only.
--- Tabs: Sheet (default) | Raids | Rolls | Versions | Setup.
+-- Tabs: Sheet (default) | Raids | Pysanka | Members | Setup.
 --
 -- Sheet tab: one card per item (sorted by itemID). Each card has:
 --   - icon button (hover = full GameTooltip item details, click = link in chat)
@@ -123,6 +123,7 @@ local QUALITY_RGB = {
 local TABS = {
   { key = "sheet",    label = "SHEET" },
   { key = "raids",    label = "RAIDS" },
+  { key = "pysanka",  label = "PYSANKA" },
   { key = "versions", label = "MEMBERS" },
   { key = "setup",    label = "SETUP" },
 }
@@ -705,8 +706,426 @@ end
 
 -------------------------------------------------------------------------------
 -- (ROLLS tab removed: DropLog.Show() prints to chat. Kept out of the
--- tab rail so the window stays Sheet | Raids | Members | Setup.)
+-- tab rail so the window stays Sheet | Raids | Pysanka | Members | Setup.)
 -------------------------------------------------------------------------------
+-- Pysanka tab: raid-setup sheet (invitation word + buff / tank-healer /
+-- debuff / puller / kill-order assignments). Player fields are clickable
+-- (SR-sheet + roster picker); the invitation word is an editable box.
+-- All widgets record into M.zlPys so tests can assert the layout + writes
+-- under the mock frame API.
+-------------------------------------------------------------------------------
+-- Field geometry: names are short (raiders) but cells must hold a fixed
+-- grid — every widget clips to its cell so columns never overlap.
+local PY_FIELD_H = 20
+
+-- FontString clipped to one cell (nil-safe on mocks).
+local function PYLabel(parent, text, w, justify)
+  local fs = FS(parent, "GameFontHighlightSmall", text or "")
+  if fs.SetWidth then fs:SetWidth(w or 100) end
+  if fs.SetJustifyH then fs:SetJustifyH(justify or "LEFT") end
+  return fs
+end
+
+local function PYHead(parent, text, w)
+  local fs = FS(parent, "GameFontNormal", text or "")
+  if fs.SetTextColor then fs:SetTextColor(PAL.gold[1], PAL.gold[2], PAL.gold[3]) end
+  if fs.SetWidth then fs:SetWidth(w or 100) end
+  if fs.SetJustifyH then fs:SetJustifyH("LEFT") end
+  return fs
+end
+
+-- Editable text: a real EditBox in-game (InputBoxTemplate, Enter/Esc to
+-- confirm/cancel, focus loss saves); headless (mock frames carry no font
+-- object) a button-backed label stands in so writes stay testable.
+-- get/set/desc identify the field for Debug hooks.
+local function PYEdit(parent, w, h, get, set, desc)
+  local box = nil
+  if CreateFrame then
+    local okEB, eb = pcall(CreateFrame, "EditBox", nil, parent, "InputBoxTemplate")
+    if okEB and type(eb) == "table" and eb.SetText then box = eb end
+  end
+  if not box then box = CreateFrame("Button", nil, parent) end
+  box:SetWidth(w) box:SetHeight(h or PY_FIELD_H)
+  local real = box.SetFontObject ~= nil
+  local label = nil
+  if real then
+    if box.SetFontObject then pcall(box.SetFontObject, box, "GameFontHighlightSmall") end
+    if box.SetAutoFocus then pcall(box.SetAutoFocus, box, false) end
+    if box.SetMaxLetters then pcall(box.SetMaxLetters, box, 24) end
+    if box.SetTextInsets then pcall(box.SetTextInsets, box, 4, 4, 0, 0) end
+  else
+    label = PYLabel(box, get and get() or "", w - 8, "LEFT")
+    if label.SetPoint then label:SetPoint("LEFT", box, "LEFT", 4, 0) end
+    local hl = nil
+    if box.CreateTexture then
+      hl = box:CreateTexture(nil, "BACKGROUND")
+      if hl.SetTexture then hl:SetTexture(0.12, 0.13, 0.16, 1) end
+      if hl.SetAllPoints then hl:SetAllPoints(box) end
+    end
+  end
+  local function current()
+    local v = get and get() or ""
+    return tostring(v)
+  end
+  local function refresh()
+    local v = current()
+    if real then
+      if box.SetText then pcall(box.SetText, box, v) end
+    elseif label and label.SetText then
+      label:SetText(v)
+    end
+  end
+  local function commit()
+    local v = nil
+    if real and box.GetText then
+      local okG, gv = pcall(box.GetText, box)
+      if okG then v = gv end
+    end
+    if v == nil then v = current() end
+    if set then set(v) end
+    refresh()
+  end
+  box.zlIsEdit = true
+  box.zlDesc = desc
+  box.zlGet = get
+  box.zlSet = set
+  box.zlLabel = label
+  box.zlRefresh = refresh
+  refresh()
+  if real and box.SetScript then
+    box:SetScript("OnEnterPressed", function()
+      commit()
+      if box.ClearFocus then pcall(box.ClearFocus, box) end
+    end)
+    box:SetScript("OnEscapePressed", function()
+      refresh()
+      if box.ClearFocus then pcall(box.ClearFocus, box) end
+    end)
+    box:SetScript("OnEditFocusLost", function() commit() end)
+  end
+  M.zlPysEdits = M.zlPysEdits or {}
+  table.insert(M.zlPysEdits, box)
+  return box
+end
+
+-- Clickable player field: a button showing the assigned name (class
+-- colored). Click cycles a picker dropdown (sheet + roster merged); the
+-- picker also offers (clear) to empty the field. get/set/desc identify
+-- the field for Debug hooks.
+local function PYPlayer(parent, w, get, set, desc)
+  local b = CreateFrame("Button", nil, parent)
+  b:SetWidth(w) b:SetHeight(PY_FIELD_H)
+  local label = PYLabel(b, "", w - 8, "LEFT")
+  if label.SetPoint then label:SetPoint("LEFT", b, "LEFT", 4, 0) end
+  local bg = nil
+  if b.CreateTexture then
+    bg = b:CreateTexture(nil, "BACKGROUND")
+    if bg.SetTexture then bg:SetTexture(0.14, 0.15, 0.18, 1) end
+    if bg.SetAllPoints then bg:SetAllPoints(b) end
+  end
+  local function refresh()
+    local v = get and get() or ""
+    if label.SetText then label:SetText(PName(v ~= "" and v or "—")) end
+  end
+  b.zlIsPlayer = true
+  b.zlDesc = desc
+  b.zlGet = get
+  b.zlSet = set
+  b.zlLabel = label
+  b.zlRefresh = refresh
+  b:SetScript("OnClick", function() M.PysankaPick(b) end)
+  Tip(b, desc or "Player", "Click to pick from the SR sheet / group.")
+  refresh()
+  M.zlPysPlayers = M.zlPysPlayers or {}
+  table.insert(M.zlPysPlayers, b)
+  return b
+end
+
+function M.PysankaSheet()
+  local db = (Z and Z.DB) or {}
+  if Z.Pysanka and Z.Pysanka.Ensure then return Z.Pysanka.Ensure(db) end
+  return nil
+end
+
+-- Test hook: last-opened pysanka picker ({ anchor, names }) or nil.
+function M.DebugPysankaPicker()
+  return M.zlPysPicker
+end
+
+-- Test hook: pysanka widget inventory ({ {desc, kind}... }).
+function M.DebugPysankaWidgets()
+  local out = {}
+  for i = 1, Z.Util.ArrayCount(M.zlPysEdits or {}) do
+    table.insert(out, { desc = M.zlPysEdits[i].zlDesc, kind = "edit" })
+  end
+  for i = 1, Z.Util.ArrayCount(M.zlPysPlayers or {}) do
+    table.insert(out, { desc = M.zlPysPlayers[i].zlDesc, kind = "player" })
+  end
+  return out
+end
+
+-- Test hook: current pysanka model values ({ desc -> value }).
+function M.DebugPysankaValues()
+  local out = {}
+  local function grab(list)
+    for i = 1, Z.Util.ArrayCount(list or {}) do
+      local w = list[i]
+      if w and w.zlDesc and w.zlGet then out[w.zlDesc] = w.zlGet() end
+    end
+  end
+  grab(M.zlPysEdits)
+  grab(M.zlPysPlayers)
+  return out
+end
+
+-- Simulate typing into a pysanka field by desc (headless-testable write).
+function M.SetPysankaField(desc, value)
+  local function poke(list)
+    for i = 1, Z.Util.ArrayCount(list or {}) do
+      local w = list[i]
+      if w and w.zlDesc == desc and w.zlSet then
+        w.zlSet(value)
+        if w.zlRefresh then w.zlRefresh() end
+        return true
+      end
+    end
+    return false
+  end
+  if poke(M.zlPysEdits) then return true end
+  if poke(M.zlPysPlayers) then return true end
+  return false
+end
+
+-- Picker for a player field: merged sheet + roster choice list
+-- (headless-testable data via PysankaChoices + anchor set).
+function M.PysankaPick(anchor)
+  local names = {}
+  if Z.Pysanka and Z.Pysanka.PlayerChoices then
+    local okC, list = pcall(Z.Pysanka.PlayerChoices)
+    if okC and type(list) == "table" then names = list end
+  end
+  if not CreateFrame then -- headless without frames: still record it
+    M.zlPysPicker = { anchor = anchor, names = names }
+    return
+  end
+  if M.pysDrop then
+    if M.pysDrop.Hide then M.pysDrop:Hide() end
+    M.pysDrop = nil
+  end
+  local dd = CreateFrame("Frame", "ZugLootPysPicker", UIParent)
+  if type(dd) ~= "table" or type(dd.SetWidth) ~= "function" then
+    -- minimal stubs: data layer already built above
+    M.zlPysPicker = { anchor = anchor, names = names }
+    return
+  end
+  dd:SetWidth(150)
+  dd:SetHeight(18 + Z.Util.ArrayCount(names) * 16 + 18)
+  if dd.SetBackdrop then
+    dd:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+      edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+      tile = true, tileSize = 16, edgeSize = 16,
+      insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+  end
+  if dd.SetBackdropColor then dd:SetBackdropColor(0, 0, 0, 0.95) end
+  if dd.SetPoint and anchor and anchor.GetPoint then
+    dd:SetPoint("TOPLEFT", anchor, "BOTTOMLEFT", 0, -2)
+  elseif dd.SetPoint and anchor then
+    dd:SetPoint("TOPLEFT", anchor, "TOPLEFT", 0, -PY_FIELD_H - 2)
+  end
+  local y = -6
+  local function choose(v)
+    if anchor and anchor.zlSet then anchor.zlSet(v) end
+    if anchor and anchor.zlRefresh then anchor.zlRefresh() end
+    if dd.Hide then dd:Hide() end
+    M.pysDrop = nil
+  end
+  local function choiceRow(text, value, first)
+    local b = CreateFrame("Button", nil, dd)
+    if b.SetWidth then b:SetWidth(134) end
+    if b.SetHeight then b:SetHeight(16) end
+    if b.SetPoint then b:SetPoint("TOPLEFT", dd, "TOPLEFT", 8, y) end
+    local fs = FS(b, "GameFontHighlightSmall", PName(text))
+    if fs.SetPoint then fs:SetPoint("LEFT", b, "LEFT", 2, 0) end
+    if b.SetScript then b:SetScript("OnClick", function() choose(value) end) end
+    y = y - 16
+    return b
+  end
+  -- (clear) first so an occupied slot empties in one click.
+  choiceRow("(clear)", "")
+  for i = 1, Z.Util.ArrayCount(names) do
+    choiceRow(names[i], names[i])
+  end
+  if dd.Show then dd:Show() end
+  M.pysDrop = dd
+  M.zlPysPicker = { anchor = anchor, names = names }
+end
+
+function M.ClosePysankaPicker()
+  if M.pysDrop then
+    if M.pysDrop.Hide then M.pysDrop:Hide() end
+    M.pysDrop = nil
+  end
+end
+
+function M.RenderPysanka()
+  local key = "pysanka"
+  ClearBody(key)
+  local b = bodies[key]
+  M.ClosePysankaPicker()
+  M.zlPysEdits = {}
+  M.zlPysPlayers = {}
+  M.zlPysPicker = nil
+  local pys = M.PysankaSheet()
+  local getI = function() return Z.Pysanka.GetInvite(pys) end
+  local setI = function(v) Z.Pysanka.SetInvite(pys, v) end
+  local function getB(r, c) return function() return Z.Pysanka.GetBuff(pys, r, c) end end
+  local function setB(r, c) return function(v) Z.Pysanka.SetBuff(pys, r, c, v) end end
+  local function getT(i, f)
+    return function()
+      if pys and pys.tanks and pys.tanks[i] then return tostring(pys.tanks[i][f] or "") end
+      return ""
+    end
+  end
+  local function setT(i, f)
+    return function(v) Z.Pysanka.SetTank(pys, i, f, v) end
+  end
+  local function getD(n) return function() return Z.Pysanka.GetDebuff(pys, n) end end
+  local function setD(n) return function(v) Z.Pysanka.SetDebuff(pys, n, v) end end
+  local row = CreateFrame("Frame", nil, b.child)
+  row:SetWidth(BODY_WIDTH)
+  local y = -6
+  -- Invitation bar: green label + editable whisper word (default invite).
+  local invT = PYHead(row, "INVITATION whisper", 200)
+  invT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
+  if invT.SetTextColor then invT:SetTextColor(0.3, 1.0, 0.3) end
+  local invBox = PYEdit(row, 150, PY_FIELD_H, getI, setI, "invite")
+  invBox:SetPoint("TOPLEFT", row, "TOPLEFT", 210, y + 2)
+  Tip(invBox, "Invitation whisper", "The word raiders whisper to get invited.",
+    "Defaults to \"invite\". Press Enter to save.")
+  y = y - 26
+  -- Buffs grid: columns + 1-2/3-4/5-6/7-8 group rows.
+  local buffT = PYHead(row, "Buffs", 200)
+  buffT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
+  y = y - 18
+  local NCOL = Z.Util.ArrayCount(Z.Pysanka.BUFF_COLS)
+  local cellW = math.floor((BODY_WIDTH - 60 - 8) / (NCOL + 1))
+  local headX = 60
+  for c = 1, NCOL do
+    local h = PYHead(row, Z.Pysanka.BUFF_COLS[c], cellW)
+    h:SetPoint("TOPLEFT", row, "TOPLEFT", headX + (c - 1) * cellW, y)
+  end
+  y = y - 16
+  for r = 1, Z.Util.ArrayCount(Z.Pysanka.BUFF_ROWS) do
+    local rl = PYLabel(row, Z.Pysanka.BUFF_ROWS[r], 56, "LEFT")
+    rl:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
+    for c = 1, NCOL do
+      local cell = PYPlayer(row, cellW - 4, getB(r, c), setB(r, c),
+        "buff:" .. Z.Pysanka.BUFF_ROWS[r] .. "/" .. Z.Pysanka.BUFF_COLS[c])
+      cell:SetPoint("TOPLEFT", row, "TOPLEFT", headX + (c - 1) * cellW, y + 2)
+    end
+    y = y - (PY_FIELD_H + 2)
+  end
+  y = y - 4
+  -- Pally Power + Coordinator line.
+  local palT = PYHead(row, "Pally Power Blessings", 180)
+  palT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
+  local coT = PYHead(row, "Coordinator:", 110)
+  coT:SetPoint("TOPLEFT", row, "TOPLEFT", 190, y)
+  local coBox = PYPlayer(row, 140, function() return pys.coordinator or "" end,
+    function(v) Z.Pysanka.SetCoordinator(pys, v) end, "coordinator")
+  coBox:SetPoint("TOPLEFT", row, "TOPLEFT", 300, y + 2)
+  local palBox = PYPlayer(row, 170,
+    function() return pys.pallyPower or "" end,
+    function(v) Z.Pysanka.SetPally(pys, v) end, "pallyPower")
+  palBox:SetPoint("TOPLEFT", row, "TOPLEFT", 14, y - 18)
+  y = y - (PY_FIELD_H + 24)
+  y = y - 4
+  -- Tank & Healer Assignments + Puller side by side.
+  local thT = PYHead(row, "Tank & Healer Assignments", 260)
+  thT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, y)
+  local pullT = PYHead(row, "Puller", 120)
+  pullT:SetPoint("TOPLEFT", row, "TOPLEFT", BODY_WIDTH / 2 + 20, y)
+  y = y - 18
+  local markW, tw, hw = 60, 120, 120
+  local subY = y
+  local heads = { "Mark", "Tank", "Healer", "Healer#2" }
+  local headXX = { 4, 70, 196, 322 }
+  for i = 1, Z.Util.ArrayCount(heads) do
+    local h = PYHead(row, heads[i], 110)
+    h:SetPoint("TOPLEFT", row, "TOPLEFT", headXX[i], subY)
+  end
+  subY = subY - 16
+  for i = 1, Z.Pysanka.N_TANKS do
+    local ml = PYLabel(row, Z.Pysanka.MARKS[i], markW, "LEFT")
+    ml:SetPoint("TOPLEFT", row, "TOPLEFT", 4, subY)
+    local tb = PYPlayer(row, tw, getT(i, "tank"), setT(i, "tank"), "tank:" .. i .. ":tank")
+    tb:SetPoint("TOPLEFT", row, "TOPLEFT", 70, subY + 2)
+    local h1 = PYPlayer(row, hw, getT(i, "healer"), setT(i, "healer"), "tank:" .. i .. ":healer")
+    h1:SetPoint("TOPLEFT", row, "TOPLEFT", 196, subY + 2)
+    local h2 = PYPlayer(row, hw, getT(i, "healer2"), setT(i, "healer2"), "tank:" .. i .. ":healer2")
+    h2:SetPoint("TOPLEFT", row, "TOPLEFT", 322, subY + 2)
+    subY = subY - (PY_FIELD_H + 2)
+  end
+  -- RAID/ALL footer row.
+  local raL = PYLabel(row, "RAID/ALL", markW, "LEFT")
+  raL:SetPoint("TOPLEFT", row, "TOPLEFT", 4, subY)
+  local raT = PYPlayer(row, tw, function() return (pys.raidAll and pys.raidAll.tank) or "" end,
+    function(v) Z.Pysanka.SetRaidAll(pys, "tank", v) end, "raidAll:tank")
+  raT:SetPoint("TOPLEFT", row, "TOPLEFT", 70, subY + 2)
+  local raH = PYPlayer(row, hw, function() return (pys.raidAll and pys.raidAll.healer) or "" end,
+    function(v) Z.Pysanka.SetRaidAll(pys, "healer", v) end, "raidAll:healer")
+  raH:SetPoint("TOPLEFT", row, "TOPLEFT", 196, subY + 2)
+  subY = subY - (PY_FIELD_H + 2)
+  -- Puller box (right column).
+  local pullBox = PYPlayer(row, 140, function() return pys.puller or "" end,
+    function(v) Z.Pysanka.SetPuller(pys, v) end, "puller")
+  pullBox:SetPoint("TOPLEFT", row, "TOPLEFT", BODY_WIDTH / 2 + 20, y - 2)
+  local endTankY = subY
+  -- Debuffs (below tanks, full width): two rows 7 + 4.
+  local dbT = PYHead(row, "Debuffs", 200)
+  dbT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, endTankY - 8)
+  local dbY = endTankY - 26
+  local dCellW = math.floor((BODY_WIDTH - 16) / 7)
+  for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW1) do
+    local nm = Z.Pysanka.DEBUFF_ROW1[c]
+    local h = PYHead(row, nm, dCellW)
+    h:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * dCellW, dbY)
+  end
+  dbY = dbY - 16
+  for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW1) do
+    local nm = Z.Pysanka.DEBUFF_ROW1[c]
+    local cell = PYPlayer(row, dCellW - 4, getD(nm), setD(nm), "debuff:" .. nm)
+    cell:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * dCellW, dbY + 2)
+  end
+  dbY = dbY - (PY_FIELD_H + 6)
+  local d2CellW = math.floor((BODY_WIDTH - 16) / 4)
+  for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW2) do
+    local nm = Z.Pysanka.DEBUFF_ROW2[c]
+    local h = PYHead(row, nm, d2CellW)
+    h:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * d2CellW, dbY)
+  end
+  dbY = dbY - 16
+  for c = 1, Z.Util.ArrayCount(Z.Pysanka.DEBUFF_ROW2) do
+    local nm = Z.Pysanka.DEBUFF_ROW2[c]
+    local cell = PYPlayer(row, d2CellW - 4, getD(nm), setD(nm), "debuff:" .. nm)
+    cell:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (c - 1) * d2CellW, dbY + 2)
+  end
+  dbY = dbY - (PY_FIELD_H + 10)
+  -- Default Kill Order footer.
+  local koT = PYHead(row, "Default Kill Order", 260)
+  koT:SetPoint("TOPLEFT", row, "TOPLEFT", 4, dbY)
+  dbY = dbY - 16
+  local koW = math.floor((BODY_WIDTH - 16) / 8)
+  for i = 1, Z.Util.ArrayCount(Z.Pysanka.MARKS) do
+    local ml = PYLabel(row, Z.Pysanka.MARKS[i], koW, "CENTER")
+    ml:SetPoint("TOPLEFT", row, "TOPLEFT", 4 + (i - 1) * koW, dbY)
+  end
+  dbY = dbY - 18
+  local totalH = (-dbY) + 12
+  if totalH < 200 then totalH = 200 end
+  row:SetHeight(totalH)
+  TrackRow(key, row, totalH)
+end
 -- Members tab (key "versions"): grid of group + SR sheet, one rectangle per player
 -------------------------------------------------------------------------------
 -- Status fills: comfortable, muted. GREEN = soft sage (SR'd + here),
@@ -919,6 +1338,7 @@ end
 local RENDER = {
   sheet = M.RenderSheet,
   raids = M.RenderRaids,
+  pysanka = M.RenderPysanka,
   versions = M.RenderVersions,
   setup = M.RenderSetup,
 }

@@ -61,6 +61,8 @@ function Z.InitDB()
   -- (a broken loot path won't fix itself on relog); re-arm via Setup tab
   -- or /zl lootframe. Never nil-guarded away: false is a valid state.
   if ZugLootDB.lootTakeover == nil then ZugLootDB.lootTakeover = true end
+  -- Pysanka raid-setup sheet (invitation word, buff/tank/debuff tables).
+  if Z.Pysanka and Z.Pysanka.Ensure then Z.Pysanka.Ensure(ZugLootDB) end
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
   ZugLootCharDB.autoRoll = ZugLootCharDB.autoRoll or false
   ZugLootCharDB.verSeen = ZugLootCharDB.verSeen or {}
