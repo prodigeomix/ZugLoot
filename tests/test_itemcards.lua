@@ -98,8 +98,21 @@ for i = 1, #exclLines do
 end
 ok(exclShown, "excluded roller shown in card session lines")
 local exclSum = Cards.CardSummary(exclCards[1])
-ok(string.find(exclSum, "Prev 99") ~= nil, "summary shows excluded roll")
+ok(string.find(exclSum, "Prev 99/100") ~= nil, "summary shows excluded roll with range")
 ok(string.find(exclSum, "already won") ~= nil, "summary tags already won")
+
+-- 5c. Roll kinds render their range: OS rolls show base/cap (13/99).
+-- rollType flows through ToHistoryEntry -> card lines -> summary.
+local rangeSheet = SRData.NewSheet()
+rangeSheet.items[99] = { quality = 4, rollers = { { name = "Ranger", rolls = 1 } } }
+local rangeRes = ZugLoot.Resolver.ResolveItem(rangeSheet, 99, {
+  { name = "Ranger", roll = 13, type = "OS" },
+}, { cap = 100, requireSR = false })
+SRData.RecordRolls(rangeSheet, 99, ZugLoot.Resolver.ToHistoryEntry(rangeRes, "RAID", 9))
+local rangeCards = Cards.BuildCards(rangeSheet)
+eq(rangeCards[1].rollSessions[1].lines[1].rollType, "OS", "card line keeps roll kind")
+local rangeSum = Cards.CardSummary(rangeCards[1])
+ok(string.find(rangeSum, "Ranger 13/99", 1, true) ~= nil, "summary shows OS range 13/99, got: " .. rangeSum)
 
 -- 6. Empty sheet -> no cards; nil sheet -> no cards.
 eq(#Cards.BuildCards(SRData.NewSheet()), 0, "empty sheet, no cards")
