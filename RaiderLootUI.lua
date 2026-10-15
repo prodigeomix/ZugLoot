@@ -250,72 +250,16 @@ function M.Build()
   iconButton = CreateFrame("Button", nil, frame)
   iconButton:SetWidth(40) iconButton:SetHeight(40)
   iconButton:SetPoint("TOP", frame, "TOP", 0, -10)
-  iconButton:SetScript("OnEnter", function()
-    if GameTooltip then
-      GameTooltip:SetOwner(iconButton, "ANCHOR_RIGHT")
-      local link = M.itemLink
-      -- Full item link: real item tooltip. Bare id ("item:12345"):
-      -- resolve through the cache first (seen items get the full
-      -- tooltip), else fall through to the name + hint below.
-      local shown = false
-      if link and GameTooltip.SetHyperlink then
-        if string.find(tostring(link), "|Hitem:", 1, true) then
-          GameTooltip:SetHyperlink(link)
-          shown = true
-        elseif GetItemInfo then
-          local id = string.match(tostring(link), "item:(%d+)")
-          if id then
-            local ok, _, fullLink = pcall(GetItemInfo, tonumber(id))
-            if ok and fullLink and string.find(tostring(fullLink), "|Hitem:", 1, true) then
-              M.itemLink = fullLink -- upgrade: later hovers skip lookup
-              GameTooltip:SetHyperlink(fullLink)
-              shown = true
-            end
-          end
-        end
-      end
-      if not shown then
-        -- Bare name (Pysanka-style roll call, client hasn't seen the
-        -- item): name + hint instead of a dead tooltip.
-        GameTooltip:SetText(M.itemNameText or tostring(link or "?"), 1, 1, 1)
-        if GameTooltip.AddLine then
-          GameTooltip:AddLine("Details load when the client has seen this item.", 0.7, 0.7, 0.7, 1)
-        end
-      end
-      GameTooltip:Show()
-    end
-  end)
-  iconButton:SetScript("OnLeave", function() if GameTooltip then GameTooltip:Hide() end end)
-  iconButton:SetScript("OnClick", function()
-    if IsControlKeyDown and IsControlKeyDown() and DressUpItemLink then
-      DressUpItemLink(M.itemLink)
-    elseif IsShiftKeyDown and IsShiftKeyDown() and ChatFrameEditBox
-        and ChatFrameEditBox:IsVisible() and M.itemLink then
-      -- Resolve at click time (cache warms as you play): prefer a full
-      -- color link, never insert a bare "item:NNNN" id.
-      local insert = M.itemLink
-      if not string.find(tostring(insert), "|Hitem:", 1, true)
-          and Z.LootWindow and Z.LootWindow.ResolveItemInfo then
-        local id = string.match(tostring(insert), "item:(%d+)")
-        local _, fullLink = Z.LootWindow.ResolveItemInfo(
-          id and tonumber(id), insert, nil, nil, nil)
-        if fullLink and string.find(tostring(fullLink), "|Hitem:", 1, true) then
-          insert = fullLink
-          M.itemLink = fullLink -- upgrade for hover + next clicks
-        end
-      end
-      if insert and string.find(tostring(insert), "|Hitem:", 1, true) then
-        ChatFrameEditBox:Insert(insert)
-      elseif GetItemInfo then
-        -- Last resort: direct cache read (may still be bare if unseen).
-        local n, link = GetItemInfo(M.itemLink)
-        if n and link and string.find(tostring(link), "|Hitem:", 1, true) then
-          M.itemLink = link
-          ChatFrameEditBox:Insert(link)
-        end
-      end
-    end
-  end)
+  -- Item icon: shared handlers (ItemIcon.lua) — same hover/ctrl/shift
+  -- as every other icon in the addon. Live state at event time (the
+  -- detail flips items under this button while rolling).
+  if Z.ItemIcon and Z.ItemIcon.Wire and iconButton then
+    Z.ItemIcon.Wire(iconButton, function()
+      return { itemID = Z.Util and Z.Util.ItemID(M.itemLink),
+        link = M.itemLink, name = M.itemNameText,
+        onLink = function(full) M.itemLink = full end }
+    end)
+  end
 
   timerText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   timerText:SetPoint("CENTER", frame, "TOPLEFT", 30, -32)

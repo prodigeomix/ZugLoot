@@ -195,7 +195,11 @@ Sheet = {
   - icon button (texture via `GetItemInfo(tonumber(id))` numeric-ID trick, cf.
     LootBlare fix #8; quality-color bottom border). **Hover = full GameTooltip
     item details** (`SetHyperlink` when the client knows the item, fallback
-    text otherwise). Click inserts the link into an open chat box.
+    text otherwise). Click inserts the link into an open chat box,
+    ctrl-click tries it on (DressUp). All five item icons in the addon
+    (sheet cards, log header, raider window, loot rows, loot detail) run
+    the ONE shared implementation (`ItemIcon.lua`), so hover/ctrl/shift
+    behave identically everywhere.
   - title: quality-colored name + `[HR]` tag + green `[rolled xN]` badge +
     grey `[not SR'd]` badge for unreserved items.
   - SR list: `Name xN (+SR+)` (SR+ in gold), `[WON]` marks for already-won.
@@ -332,8 +336,10 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   same source the sheet list uses: `GetItemInfo(row link)`, then
   `GetItemInfo(itemID)`, then the slot texture/name captured at scan time,
   then `[Name]` parsed out of the link; rows never show bare `item:<id>` while
-  the client cache knows the item; tooltip on hover, shift-click links /
-  ctrl-click dress-up). The raider roll window resolves its icon + name
+  the client cache knows the item; the row icon and the row-detail header
+  icon run the same shared handlers as every other icon (hover details,
+  ctrl dress-up, click/shift link — a plain row click still opens the
+  detail / loots the slot). The raider roll window resolves its icon + name
   through the same link-first chain (`RaiderLootUI.SetItemInfo` →
   `LootWindow.ResolveItemInfo`), so it matches the loot list instead of
   degrading to a `?` icon and raw-link text when the bare-ID cache key
@@ -392,7 +398,8 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   identical to master loot from the raider's side (per requirement).
 - Contents (LootBlare layout, 220×250): green countdown **status bar floating
   above the frame** with seconds text (green→orange→red, pulsing under 5s),
-  big 40px item icon (hover = item tooltip, click = chat-link/dress-up) +
+  big 40px item icon (shared handlers: hover = item tooltip, click =
+  chat-link, ctrl-click = dress-up — identical on all five icons) +
   quality-colored truncated name, quality-colored frame border, big countdown
   digits, **two-column roll list** — class-colored names left, `roll (min-max)`
   in roll-type color right, grouped **SR > MS > OS > TMOG**, best-first, max 8
@@ -572,6 +579,8 @@ ZugLoot/
   SRImport.lua       paste frame + "Load from File" (CustomData/ZugLoot_SR.txt)
   SRView.lua         fancy sheet window (sorted by item, xN, +SR+, WON)
   MasterLootUI.lua   ML console + session control + award menu + confirm
+  ItemIcon.lua       ONE shared item-icon implementation (hover/ctrl/shift
+                     for all five icons: sheet, log header, raider, rows, detail)
   LootWindow.lua     ML loot list (numbered icon/name/SR-HR rows + row detail)
   RaiderLootUI.lua   LootBlare-like frame incl. group-loot display
   AutoRoll.lua       auto-roll + auto-resolve eligibility

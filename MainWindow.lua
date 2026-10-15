@@ -168,6 +168,9 @@ end
 -- iconLink is ALWAYS a full color link when the client knows the item
 -- (shift-click inserts a real link, never "item:NNNN"): resolved via
 -- the shared link-first chain, which upgrades bare ids.
+-- ALL behavior (hover/ctrl/shift) runs the ONE shared ItemIcon module
+-- (ItemIcon.lua): sheet cards, the log header, the raider window and
+-- the loot window all call the same handlers, so they can never drift.
 local function ItemIcon(parent, itemID, size)
   local b = CreateFrame("Button", nil, parent)
   b:SetWidth(size or 36) b:SetHeight(size or 36)
@@ -194,42 +197,12 @@ local function ItemIcon(parent, itemID, size)
   local bd = b:CreateTexture(nil, "OVERLAY")
   bd:SetTexture(q[1], q[2], q[3], 0.9)
   bd:SetHeight(1) bd:SetPoint("BOTTOMLEFT", b, "BOTTOMLEFT", 0, 0) bd:SetPoint("BOTTOMRIGHT", b, "BOTTOMRIGHT", 0, 0)
-  b:SetScript("OnEnter", function()
-    GameTooltip:SetOwner(b, "ANCHOR_RIGHT")
-    if b.iconLink then
-      GameTooltip:SetHyperlink(b.iconLink)
-    else
-      GameTooltip:SetText("item:" .. tostring(b.itemID), 1, 1, 1)
-      GameTooltip:AddLine("Details load when the client has seen this item.", 0.7, 0.7, 0.7, 1)
-    end
-    GameTooltip:Show()
-  end)
-  b:SetScript("OnLeave", function() GameTooltip:Hide() end)
-  b:SetScript("OnClick", function()
-    -- Ctrl-click: try it on (DressUp), like normal item links. Checked
-    -- first, same order as the raider window.
-    if IsControlKeyDown and IsControlKeyDown() and DressUpItemLink and b.itemID then
-      DressUpItemLink("item:" .. tostring(b.itemID))
-      return
-    end
-    -- Resolve AGAIN at click time: the cache warms as you play (loot the
-    -- item, see it linked), so a shift-click later must give the full
-    -- link even if the icon was built while the item was unknown.
-    local clickLink = b.iconLink
-    if (not clickLink or not string.find(tostring(clickLink), "|Hitem:", 1, true))
-        and Z.LootWindow and Z.LootWindow.ResolveItemInfo then
-      local _, fullLink = Z.LootWindow.ResolveItemInfo(b.itemID, b.iconLink, nil, nil, nil)
-      if fullLink and string.find(tostring(fullLink), "|Hitem:", 1, true) then
-        clickLink = fullLink
-        b.iconLink = fullLink -- upgrade: hover + next clicks skip lookup
-      end
-    end
-    if clickLink and ChatFrameEditBox and ChatFrameEditBox:IsVisible() then
-      ChatFrameEditBox:Insert(clickLink)
-    elseif clickLink then
-      Z.Print(clickLink)
-    end
-  end)
+  if Z.ItemIcon and Z.ItemIcon.Wire then
+    Z.ItemIcon.Wire(b, function()
+      return { itemID = b.itemID, link = b.iconLink,
+        onLink = function(full) b.iconLink = full end }
+    end)
+  end
   return b
 end
 

@@ -564,10 +564,17 @@ function M.EnsureResolved(it)
   return it
 end
 
--- Shared tooltip show/hide (RollFor row OnEnter parity). Guarded for the
--- mock frame API (pcall: the mock's SetOwner is a noop).
+-- Shared tooltip show/hide: every item hover in the addon runs the ONE
+-- shared ItemIcon module (ItemIcon.lua). Kept as thin wrappers so the
+-- existing call sites (row, icon, detail title) keep working.
 function M.ShowTip(owner, tipLink)
   if not tipLink then return end
+  local ZL = ZugLoot.ItemIcon
+  if ZL and ZL.Hover then
+    local id = Z.Util and Z.Util.ItemID(tipLink)
+    ZL.Hover(owner, id, tipLink)
+    return
+  end
   if GameTooltip and GameTooltip.SetOwner and GameTooltip.SetHyperlink then
     local ok = pcall(GameTooltip.SetOwner, GameTooltip, owner, "ANCHOR_RIGHT")
     if ok then
@@ -578,6 +585,8 @@ function M.ShowTip(owner, tipLink)
 end
 
 function M.HideTip()
+  local ZL = ZugLoot.ItemIcon
+  if ZL and ZL.Hide then ZL.Hide() return end
   if GameTooltip and GameTooltip.Hide then GameTooltip:Hide() end
 end
 
@@ -755,14 +764,70 @@ function M.Refresh()
         M.HideTip()
       end)
     end
-    -- Icon shift/ctrl modifiers: link in chat / dress-up (RollFor parity).
+    -- Icon hover + modifiers: the SAME shared handlers as every other
+    -- icon (ItemIcon.lua: hover details, ctrl dress-up, click/shift link).
+    -- Live row state at event time (slots shift after each loot, rows
+    -- re-resolve under the texture). A plain click stays the row action
+    -- (open detail / loot slot); only modifiers divert to icon behavior.
     if icon and icon.SetScript then
-      icon:SetScript("OnEnter", function()
-        M.ShowTip(icon, it._tipLink)
-      end)
-      icon:SetScript("OnLeave", function()
-        M.HideTip()
-      end)
+      local ZL = Z.ItemIcon
+      if ZL and ZL.Hover then
+        local thisRow = it
+        local iconBtn = nil
+        icon:SetScript("OnEnter", function()
+          ZL.Hover(icon, thisRow.itemID, thisRow.link, M.DisplayName(thisRow),
+            function(full) thisRow.link = full end)
+        end)
+        icon:SetScript("OnLeave", function() ZL.Hide() end)
+        -- Textures take no clicks, so an invisible Button overlay sits
+        -- exactly over the icon and carries the FULL shared handling
+        -- (hover + ctrl/shift via Wire — the overlay is on top, so the
+        -- texture's own hover never fires client-side; it stays as the
+        -- no-overlay fallback). Plain clicks fall through to the row.
+        -- In mock frames CreateFrame may exist while the overlay
+        -- fails; then clicks just hit the row (nil-safe).
+        if CreateFrame and row then
+          local okBtn, btn = pcall(CreateFrame, "Button", nil, row)
+          if okBtn and btn and btn.SetWidth then
+            btn:SetWidth(M.ICON_SIZE)
+            if btn.SetHeight then btn:SetHeight(M.ICON_SIZE) end
+            if btn.SetPoint then btn:SetPoint("LEFT", row, "LEFT", 2, 0) end
+            if btn.SetScript and ZL.Wire then
+              ZL.Wire(btn, function()
+                return { itemID = thisRow.itemID, link = thisRow.link,
+                  name = M.DisplayName(thisRow),
+                  onLink = function(full) thisRow.link = full end }
+              end)
+              -- Click: modifiers run the shared icon action (ctrl
+              -- dress-up, shift-link into chat); a PLAIN click is the
+              -- row action (open detail / loot slot) — the overlay must
+              -- never swallow it into a print.
+              btn:SetScript("OnClick", function()
+                local ctrl = IsControlKeyDown and IsControlKeyDown()
+                local chatOpen = ChatFrameEditBox
+                  and ChatFrameEditBox.IsVisible
+                  and ChatFrameEditBox:IsVisible()
+                if ctrl or chatOpen then
+                  local r = ZL.HandleClick(thisRow.itemID, thisRow.link,
+                    M.DisplayName(thisRow),
+                    function(full) thisRow.link = full end)
+                  if r then return end
+                end
+                M.OnRowClick(id, clickSlot)
+              end)
+            end
+            iconBtn = btn
+          end
+        end
+        it._iconBtn = iconBtn
+      else
+        icon:SetScript("OnEnter", function()
+          M.ShowTip(icon, it._tipLink)
+        end)
+        icon:SetScript("OnLeave", function()
+          M.HideTip()
+        end)
+      end
     end
     table.insert(M.rows, row)
     y = y - (M.ROW_HEIGHT + 2)
@@ -1572,11 +1637,40 @@ function M.BuildDetailFrame()
   f:SetScript("OnDragStart", function() f:StartMoving() end)
   f:SetScript("OnDragStop", function() f:StopMovingOrSizing() end)
   f:SetClampedToScreen(true)
-  -- Icon top-center (mirrors the raider frame header).
+  -- Icon top-center (mirrors the raider frame header). Its own Button
+  -- overlay carries the SAME shared handlers as every other icon
+  -- (ItemIcon.lua: hover details, ctrl dress-up, click/shift link).
+  -- Live detail state at event time (the detail flips items under it).
   local dicon = f:CreateTexture(nil, "ARTWORK")
   dicon:SetWidth(40) dicon:SetHeight(40)
   dicon:SetPoint("TOP", f, "TOP", 0, -10)
   f.dicon = dicon
+  if Z.ItemIcon and Z.ItemIcon.Wire and CreateFrame then
+    local okBtn, dib = pcall(CreateFrame, "Button", nil, f)
+    if okBtn and dib and dib.SetWidth then
+      dib:SetWidth(40)
+      if dib.SetHeight then dib:SetHeight(40) end
+      if dib.SetPoint then dib:SetPoint("TOP", f, "TOP", 0, -10) end
+      if dib.SetScript then
+        Z.ItemIcon.Wire(dib, function()
+          local d = M.detail
+          if not d then return nil end
+          local it = M.Find(d.itemID)
+          return { itemID = d.itemID,
+            link = (it and it.link) or d.link or d.tipLink,
+            name = (it and M.DisplayName(it)) or d.name,
+            onLink = function(full)
+              if it then it.link = full end
+              if M.detail and M.detail.itemID == d.itemID then
+                if M.detail.link then M.detail.link = full end
+                M.detail.tipLink = full
+              end
+            end }
+        end)
+        f.diconBtn = dib
+      end
+    end
+  end
   local title = f:CreateFontString(nil, "OVERLAY", "GameFontNormal")
   title:SetPoint("TOP", dicon, "BOTTOM", 0, -6)
   title:SetWidth(200) title:SetJustifyH("CENTER")

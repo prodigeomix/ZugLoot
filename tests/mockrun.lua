@@ -19,7 +19,7 @@ local function newObj(kind)
   function o:SetAlpha(a) self.alpha=a end
   function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
-  function o:CreateTexture(...) local t={}; function t:SetTexture() end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight() end; function t:SetWidth() end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; return t end
+  function o:CreateTexture(...) local t={scripts={}}; function t:SetTexture() end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight() end; function t:SetWidth() end; function t:SetVertexColor() end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
   function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
   function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
   function o:SetStatusBarTexture() end
@@ -68,6 +68,7 @@ ZugLoot.Print = function() end
 ZugLoot.DB = { sheet=nil, drops={}, rollTime=15 };
 ZugLoot.CharDB = { autoRoll=false };
 dofile("SRData.lua"); dofile("Resolver.lua"); dofile("ItemCards.lua");
+dofile("ItemIcon.lua");
 dofile("RaidArchive.lua");
 dofile("SRSecurity.lua");
 dofile("Comm.lua");
@@ -437,6 +438,50 @@ assert(#inserted == 1 and string.find(inserted[1], "|Hitem:", 1, true), "shift-c
 IsShiftKeyDown = function() return false end;
 ChatFrameEditBox = { IsVisible = function() return false end };
 print("roll icon shift-click OK");
+-- Shared icon parity: EVERY icon runs the same handlers (ItemIcon.lua),
+-- so hover/ctrl/shift behave identically on all five. The loot row icon
+-- (overlay button) and the detail header icon had no assertions before.
+local sheetEnter = Z.MainWindow.DebugCardIcons()[17063]:GetScript("OnEnter");
+assert(sheetEnter, "sheet icon hover wired");
+local raiderScripts = Z.RaiderLootUI.DebugIconScripts();
+assert(raiderScripts and raiderScripts.OnEnter and raiderScripts.OnClick, "raider icon wired");
+-- Loot row icon overlay: same hover (full tooltip) as the sheet card.
+local lootRowBtn = Z.LootWindow.Find(19137) and Z.LootWindow.Find(19137)._iconBtn;
+assert(lootRowBtn and lootRowBtn:GetScript("OnEnter"), "loot row icon hover wired");
+assert(lootRowBtn:GetScript("OnClick"), "loot row icon click wired");
+tipCalls = {};
+lootRowBtn:GetScript("OnEnter")();
+assert(#tipCalls == 1 and tipCalls[1][1] == "hyper", "loot row hover shows item tooltip");
+-- Plain click (no modifier, no chat box): falls through to the row action.
+-- Plain click (no modifier, no chat box): falls through to the row action
+-- (whatever the row itself would do — detail, loot call, or passthrough).
+Z.LootWindow.CloseDetail();
+local wantRow = Z.LootWindow.OnRowClick(19137, nil);
+Z.LootWindow.CloseDetail();
+lootRowBtn:GetScript("OnClick")();
+local gotRow = (Z.LootWindow.detail ~= nil and Z.LootWindow.detail.itemID == 19137)
+  and "detail" or wantRow;
+assert(gotRow == wantRow, "loot row plain click matches the row action, want " .. tostring(wantRow));
+-- Loot detail header icon: hover shows the same item tooltip, ctrl-click
+-- tries it on — like every other icon. (Opened directly: row clicks are
+-- passthrough while the takeover is off in this harness.)
+Z.LootWindow.OpenDetail(19137);
+assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
+local diconBtn = Z.LootWindow.detailFrame and Z.LootWindow.detailFrame.diconBtn;
+assert(diconBtn and diconBtn:GetScript("OnEnter"), "detail icon hover wired");
+assert(diconBtn:GetScript("OnClick"), "detail icon click wired");
+tipCalls = {};
+diconBtn:GetScript("OnEnter")();
+assert(#tipCalls == 1 and tipCalls[1][1] == "hyper", "detail hover shows item tooltip");
+local triedDetail = {};
+DressUpItemLink = function(link) table.insert(triedDetail, link) end;
+IsControlKeyDown = function() return true end;
+diconBtn:GetScript("OnClick")();
+IsControlKeyDown = function() return false end;
+DressUpItemLink = nil;
+assert(#triedDetail == 1 and string.find(triedDetail[1], "19137", 1, true),
+  "detail ctrl-click tries on, got: " .. tostring(triedDetail[1]));
+print("shared icon parity OK");
 -- START_LOOT_ROLL mirrors a group roll in OUR dice frame; the dice vote
 -- through RollOnLoot (Need 1 / Greed 2 / Pass 0), never RandomRoll chat
 -- spam (which would forfeit the roll). CANCEL hides the frame.

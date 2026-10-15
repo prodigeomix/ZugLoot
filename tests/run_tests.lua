@@ -26,6 +26,7 @@ run("test_srdata.lua")
 run("test_resolver.lua")
 run("test_security.lua")
 run("test_itemcards.lua")
+run("test_itemicon.lua")
 run("test_sim.lua")
 run("test_reset.lua")
 run("test_raids.lua")
@@ -56,7 +57,7 @@ else
 end
 
 -- 5.0-syntax sanity: all shipped lua files must parse (loadfile without running).
-local files = { "Constants.lua", "Util.lua", "Timer.lua", "ClassColors.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "SRView.lua",
+local files = { "Constants.lua", "Util.lua", "Timer.lua", "ClassColors.lua", "SRData.lua", "Resolver.lua", "ItemCards.lua", "ItemIcon.lua", "SRView.lua",
   "SRSecurity.lua", "SRImport.lua", "BossData.lua", "MainWindow.lua", "Sim.lua", "MasterLootUI.lua",
   "RaidArchive.lua", "Comm.lua", "Core.lua", "LootWindow.lua", "pfLoot.lua", "RaiderLootUI.lua", "DropLog.lua", "VersionGrid.lua", "Minimap.lua" }
 for _, f in ipairs(files) do
