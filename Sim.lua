@@ -6,15 +6,16 @@
 --
 -- The async path (/zl sim, /zl simboss) replays the REAL live pipeline:
 -- MasterLootUI session + group-routed chat + both windows, one item at a
--- time. Fake rolls are precomputed, then fed through
--- MasterLootUI.OnSystemRoll so the raider list fills live; the session
--- finishes at once; afterwards the ML picks the award from the menu and
--- the queue advances (/zl sim one-shots auto-play; simboss waits for the
--- ML's Roll per item). No timers: feeds + finish run inline (the old
--- staggered-feed timers are gone — every feed is a direct call, so no
--- stale-feed guards, timer bookkeeping, or drain pumps are needed).
--- RunSimSession() stays behind as the synchronous core (tests, instant
--- resolve).
+-- time. Fake rolls are precomputed, then ECHOED as chat lines ("Name
+-- rolls 42 (1-100)", ML-local only — the group never sees fakes) and
+-- registered through the shared chat intake (IntakeChatRoll, the same
+-- parser + router live /rolls travel), so the raider list fills live
+-- exactly like a master-loot roll; the session finishes at once;
+-- afterwards the ML picks the award from the menu and the queue advances
+-- (/zl sim one-shots auto-play; simboss waits for the ML's Roll per
+-- item). No timers: feeds + finish run inline (the old staggered-feed
+-- timers are gone — every feed is a direct call, so no stale-feed
+-- guards, timer bookkeeping, or drain pumps are needed).
 -- Uses the same Resolver pure module as real sessions and as tests/.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
@@ -39,10 +40,6 @@ function M.RequireSheet()
     return nil
   end
   return sheet
-end
-
-local function now()
-  return (time and time()) or 0
 end
 
 function M.Busy()
@@ -92,7 +89,6 @@ function M.ResetFresh()
   M.live = nil
   M.lives = {}
   M.lastEntries = {}
-  M.pendingAward = nil
   M.auto = false
   M.running = false
   if Z.MasterLootUI then
@@ -138,59 +134,6 @@ function M.Stop()
   else
     Z.Print("No sim running.")
   end
-end
-
--- Print one simulated session (same lines the Sheet tab shows per player).
--- Already-won rollers appear with their roll shown but marked excluded.
--- Used by the synchronous RunSimSession core.
-local function printSession(itemID, res, sheet)
-  local i = 1
-  while res.entries and res.entries[i] ~= nil do
-    local e = res.entries[i]
-    local tag = e.missroll and " MISSRROLL(ignored)" or ""
-    local excluded = e.excludedWon or (sheet.won[itemID] and sheet.won[itemID][e.name])
-    local won = excluded and " [already won]" or ""
-    Z.Print("  roll " .. e.name .. " " .. e.base .. " + " .. (e.sr_plus or 0) .. " = " .. e.effective .. tag .. won)
-    i = i + 1
-  end
-  if Z.Util.ArrayCount(res.winners or {}) > 0 then
-    Z.Print("  => winner: " .. res.winners[1].name .. " (" .. res.winners[1].effective .. ")")
-  else
-    Z.Print("  => no winner")
-  end
-  if Z.Util.ArrayCount(res.tied or {}) > 0 then
-    local t = {}
-    for k = 1, Z.Util.ArrayCount(res.tied) do table.insert(t, res.tied[k].name) end
-    Z.Print("  => tie: " .. table.concat(t, ", ") .. " (re-roll)")
-  end
-end
-
--- Resolve a fake session and write it back: roll history, won marks (skipped
--- on ties — ties need a re-roll, like live), drop log, window refresh.
--- Synchronous core: instant resolve, no timers, no windows, no chat.
-function M.RunSimSession(sheet, itemID, mode, rolls, itemLink)
-  local res = Z.Resolver.ResolveItem(sheet, itemID, rolls,
-    { cap = Z.Caps.SR, requireSR = (mode == "SIM"), itemCount = 1 })
-  printSession(itemID, res, sheet)
-  if Z.Util.ArrayCount(res.entries or {}) > 0 then
-    -- Simulated off-sheet item: same unreserved stub as live rolls.
-    if Z.SRData.EnsureUnreserved then
-      Z.SRData.EnsureUnreserved(sheet, itemID, nil)
-    end
-    Z.SRData.RecordRolls(sheet, itemID, Z.Resolver.ToHistoryEntry(res, mode, now()))
-  end
-  local tied = Z.Util.ArrayCount(res.tied or {})
-  local winners = res.winners or {}
-  if tied == 0 and Z.Util.ArrayCount(winners) > 0 then
-    for i = 1, Z.Util.ArrayCount(winners) do
-      local name = winners[i].name
-      Z.SRData.MarkWon(sheet, itemID, name)
-      if Z.DropLog then Z.DropLog.Add(itemID, itemLink, "sim", "award", name) end
-    end
-  end
-  if Z.MainWindow then Z.MainWindow.Refresh() end
-  if Z.SRView then Z.SRView.Refresh() end
-  return res
 end
 
 -- Open-roll fakes: thin wrapper over Resolver.FakeRolls (shared code).
@@ -253,17 +196,22 @@ function M.RangeFor(rtype)
   return 1, caps.SR or 100
 end
 
--- Feed one roll into the live sim session (timer callback). The 1.12
--- client derives the roll KIND from the /roll range, so each fake feeds
--- through its own kind's range (MS 1-100, OS 1-99, TMOG 1-98) — the live
--- ApplySystemRoll re-derives the kind from the range, and the precomputed
--- entry's type stamps the intent after (belt and suspenders: a fake
--- 1-100 from a non-holder must read MS, never SR).
+-- Feed one fake roll into the live sim session: ECHO it as a chat line
+-- ("Name rolls 42 (1-100)", ML-local only — the group never sees fakes)
+-- and register it through the shared chat intake, exactly like a real
+-- /roll. The 1.12 client derives the roll KIND from the /roll range, so
+-- each fake echoes through its own kind's range (MS 1-100, OS 1-99,
+-- TMOG 1-98) — the live ApplySystemRoll re-derives the kind from the
+-- range, and the precomputed entry's type stamps the intent after (belt
+-- and suspenders: a fake 1-100 from a non-holder must read MS, never
+-- SR). The stamp runs against sess.rolls (the entry's own tables),
+-- while the routing guard stays live-vs-dead only (EchoSimRoll refuses
+-- parked/cancelled sessions).
 local function feedRoll(sess, rv)
-  -- A nil sess (re-read ML session after a cancel/stop) is never the live
-  -- session — and the nil==nil guard below would otherwise let it through
-  -- to sess.itemID. No session, no feed. Matched per-item: another item's
-  -- session must never accept this feed, even after the ML switches rows.
+  -- A nil sess (re-read ML session after a cancel/stop) is never the
+  -- live session. No session, no feed. The ML roll window mirrors the
+  -- corrected kind (EchoSimRoll -> ApplySystemRoll -> DetailOnRoll
+  -- already painted it; this only fixes the range-blind kind stamp).
   if not sess then return end
   if not Z.MasterLootUI then return end
   local MLUI = Z.MasterLootUI
@@ -276,7 +224,7 @@ local function feedRoll(sess, rv)
   if cur == nil then cur = MLUI.session end
   if cur ~= sess then return end
   local minR, maxR = M.RangeFor(rv.type)
-  Z.MasterLootUI.OnItemSystemRoll(sess.itemID, rv.name, rv.roll, minR, maxR, sess.id)
+  MLUI.EchoSimRoll(sess, rv.name, rv.roll, minR, maxR)
   if rv.type and sess and sess.rolls then
     for i = 1, Z.Util.ArrayCount(sess.rolls) do
       if sess.rolls[i].name == rv.name then
@@ -285,7 +233,6 @@ local function feedRoll(sess, rv)
       end
     end
   end
-  -- The ML roll window mirrors the corrected kind.
   if Z.LootWindow and Z.LootWindow.detail
       and Z.LootWindow.detail.itemID == sess.itemID
       and Z.LootWindow.detail.phase == "rolling" then
@@ -323,8 +270,7 @@ local function finishSim(entry, round)
         if tied[i].rollType then tieKind = tied[i].rollType end
       end
     end
-    M.pendingAward = nil
-    local outcome = ML.Finish()
+      local outcome = ML.Finish()
     if outcome ~= "tie" then break end
     if Z.Util.ArrayCount(names) == 0 or round > M.TIE_ROUNDS then
       Z.Print("SIM tie left unresolved — re-roll manually or /zl cr.")
@@ -377,8 +323,7 @@ end
 -- Start one queued entry through the real pipeline: silent session (no
 -- addon broadcast to other clients), both windows visible, rolls fed
 -- inline, finish at once. Only the ML starts entries — playOne runs from
--- RequestRoll (loot-window Roll button), RequestNextRoll (auto mode), or
--- the /zl sim one-shot.
+-- StartQueuedRoll (loot-window Roll button, auto mode, /zl sim one-shot).
 function M.playOne(entry)
   local ML = Z.MasterLootUI
   ML.BeginSession(entry.itemID, entry.link, entry.mode, true)
@@ -463,16 +408,20 @@ function M.RequestNextRoll()
   end
 end
 
--- The ML initiates one queued item (loot-window Roll button).
--- Sequential holds: one roll runs at a time. A parked (finished) item may
--- start rolling again only via Continue (same session); a FRESH roll of an
--- item that already has a live session is refused.
-function M.RequestRoll(itemID)
+-- The ML initiates one queued item (loot-window Roll button, auto mode,
+-- /zl sim one-shot, rehearsal auto-start). Sim + rehearsal share it:
+-- both dequeue a precomputed entry and hand it to playOne. Sequential
+-- holds: one roll runs at a time (a parked/finished item re-rolls only
+-- via Continue, same session). Returns true when the entry started.
+-- A parked (finished) item may start rolling again only via Continue
+-- (same session); a FRESH roll of an item that already has a live
+-- session is refused.
+function M.StartQueuedRoll(itemID)
   local MLUI = Z.MasterLootUI
   local liveS = MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
   if liveS and liveS.itemID == itemID then
     Z.Print("Already rolling " .. dispName(itemID, nil) .. " — finish or /zl cr first.")
-    return
+    return false
   end
   -- Sequential holds: a LIVE roll anywhere refuses (finish, /zl cr, or
   -- close it first). Parked award menus do NOT block: the ML works
@@ -484,43 +433,71 @@ function M.RequestRoll(itemID)
     for k, pend in pairs(MLUI.pendingAwardMenus) do
       if pend and pend.sess and pend.sess.itemID == itemID then
         Z.Print("Already rolling " .. dispName(itemID, nil) .. " — finish or /zl cr first.")
-        return
+        return false
       end
     end
   end
   if MLUI and MLUI.session then
     Z.Print("A roll is already running — finish, /zl cr, or close it first.")
-    return
+    return false
   end
-  local MLUI2 = Z.MasterLootUI
-  local lkey = (MLUI2 and MLUI2.RollKey(itemID)) or itemID
+  local lkey = (MLUI and MLUI.RollKey(itemID)) or itemID
   if M.lives and M.lives[lkey] then
     Z.Print("Already rolling " .. dispName(itemID, nil) .. " — finish or /zl cr first.")
-    return
+    return false
   end
-  local queued = false
+  local entry, at = nil, nil
   for i = 1, Z.Util.ArrayCount(M.pending) do
-    if M.pending[i].itemID == itemID then queued = true break end
-  end
-  if not queued then
-    Z.Print("SIM: item " .. tostring(itemID) .. " is not in the loot queue.")
-    return
-  end
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    if M.pending[i].itemID == itemID then
-      local entry = table.remove(M.pending, i)
-      M.lives = M.lives or {}
-      M.lives[entryKey(entry, entry.itemID)] = entry -- stays listed until the ML awards it
-      M.live = entry -- active alias
-      M.running = true
-      M.SyncLootWindow()
-      Z.Print("SIM: rolling " .. dispName(entry.itemID, entry.link) .. " (ML pick).")
-      M.playOne(entry)
-      return
+    if M.pending[i] and M.pending[i].itemID == itemID then
+      entry, at = M.pending[i], i
+      break
     end
   end
-  Z.Print("SIM: item " .. tostring(itemID) .. " is not in the loot queue.")
+  if not entry then
+    Z.Print("SIM: item " .. tostring(itemID) .. " is not in the loot queue.")
+    return false
+  end
+  -- Rehearsal entries are corpse-backed: a row that already left the
+  -- corpse (pre-roll award etc.) drops instead of rolling a ghost.
+  if entry.rehearse then
+    local W = Z.LootWindow
+    local row = W and W.Find and W.Find(itemID)
+    if not row then
+      table.remove(M.pending, at) -- row gone: drop, advance
+      M.afterRehearsal()
+      return false
+    end
+  end
+  table.remove(M.pending, at)
+  M.lives = M.lives or {}
+  M.lives[entryKey(entry, entry.itemID)] = entry -- stays listed until the ML awards it
+  M.live = entry -- active alias
+  M.running = true
+  M.SyncLootWindow()
+  if entry.rehearse then
+    Z.Print("Rehearsal: rolling " .. dispName(itemID, entry.link) .. ".")
+  else
+    Z.Print("SIM: rolling " .. dispName(entry.itemID, entry.link) .. " (ML pick).")
+  end
+  -- Rolling view + MarkRolling owned by playOne (shared starter).
+  M.playOne(entry)
+  -- playOne BeginSession'd synchronously: a rehearsal session stamps
+  -- here too so the award path routes to the rehearsal continuation
+  -- and fences the invented roster off sheet writes (SR typing, won,
+  -- history skip these names — the real sheet stays pristine).
+  if entry.rehearse then
+    local sess = MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
+    if sess and sess.itemID == itemID then
+      sess.rehearse = true
+      sess.invented = entry.roster
+    end
+  end
+  return true
 end
+
+-- Backwards-compatible names (tests, loot-window router, auto mode).
+function M.RequestRoll(itemID) return M.StartQueuedRoll(itemID) end
+function M.RehearseRoll(itemID) return M.StartQueuedRoll(itemID) end
 
 -- Flag flip for /zl rehearse [on|off] and the Setup toggle (nil = flip).
 -- Turning off mid-run stops the run but keeps already-looted items.
@@ -538,8 +515,8 @@ function M.SetRehearse(arg)
     .. " (corpse items roll with invented raiders, awards loot for real).")
 end
 
--- Backwards-compatible alias (tests + loot rows call RequestRoll).
-function M.RollNow(itemID) M.RequestRoll(itemID) end
+-- Backwards-compatible aliases (tests + loot-window router).
+function M.RollNow(itemID) return M.StartQueuedRoll(itemID) end
 
 -- Solo master-loot rehearsal (see /zl rehearse): each corpse item (never
 -- coin) gets a roll window with 3-5 fake rolls from invented raiders,
@@ -650,46 +627,6 @@ function M.StartRehearsal()
     Z.Print("Rehearsal: pick an item's Roll button to start its roll.")
   end
   return n
-end
-
--- Auto-play one queued rehearsal entry: same shape as RequestRoll, but
--- the detail flips to its rolling view (like the loot-window Roll
--- button does) so the ML watches the fake rolls land live. Entries
--- whose row already left the corpse are dropped (pre-roll award etc.).
-function M.RehearseRoll(itemID)
-  local MLUI = Z.MasterLootUI
-  if MLUI and MLUI.session then return false end -- sequential holds
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    local entry = M.pending[i]
-    if entry and entry.itemID == itemID and entry.rehearse then
-      local W = Z.LootWindow
-      local row = W and W.Find(itemID)
-      if not row then
-        table.remove(M.pending, i) -- row gone: drop, advance
-        M.afterRehearsal()
-        return
-      end
-      table.remove(M.pending, i)
-      M.lives = M.lives or {}
-      M.lives[entryKey(entry, entry.itemID)] = entry
-      M.live = entry
-      M.running = true
-      -- Rolling view + MarkRolling owned by playOne (shared starter).
-      M.playOne(entry)
-      -- playOne BeginSession'd synchronously: stamp the session so the
-      -- award path routes to the rehearsal continuation, and fence the
-      -- invented roster off sheet writes (SR typing, won, history skip
-      -- these names — the real sheet stays pristine).
-      local sess = MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID)
-      if sess and sess.itemID == itemID then
-        sess.rehearse = true
-        sess.invented = entry.roster
-      end
-      Z.Print("Rehearsal: rolling " .. dispName(itemID, entry.link) .. ".")
-      return true
-    end
-  end
-  return false
 end
 
 -- Drop a queued rehearsal entry (pre-roll award / cancel paths).
@@ -972,16 +909,20 @@ end
 -- A cancelled sim item goes back to the queue head so the ML can re-roll
 -- it from the loot window (Cancel during a sim = "not this one, again").
 --
--- Continue a parked sim roll: schedule FRESH fake rolls for the still-
--- unrolled sheet members, appended to the same session by feedRoll's
+-- Continue a parked SILENT roll: feed FRESH fake rolls for the still-
+-- unrolled members, appended to the same session by feedRoll's
 -- first-roll-only rule (already-rolled names are skipped, never doubled).
--- The continued chain is tracked so an early Finish kills it too.
-function M.ContinueRoll(itemID)
-  local sheet = Z.DB and Z.DB.sheet
-  if not sheet then return end
+-- Live (non-silent) sessions never feed fakes — the ML waits for real
+-- /roll chat instead; the window is already rolling again. Mode-agnostic
+-- entry: doAction "continue" calls FeedFreshRolls for every continued
+-- roll, and the silent gate decides.
+function M.FeedFreshRolls(itemID)
   local MLUI = Z.MasterLootUI
   local sess = MLUI and MLUI.SessionFor and MLUI.SessionFor(itemID) or nil
   if not sess or sess.itemID ~= itemID then return end
+  if not sess.silent then return end -- live: real rolls land via chat
+  local sheet = Z.DB and Z.DB.sheet
+  if not sheet then return end
   local seen = {}
   for i = 1, Z.Util.ArrayCount(sess.rolls or {}) do
     if sess.rolls[i] then seen[sess.rolls[i].name] = true end
@@ -1003,6 +944,9 @@ function M.ContinueRoll(itemID)
     Z.Print("SIM: everyone already rolled — Finish to award.")
   end
 end
+
+-- Backwards-compatible alias (tests + old callers).
+function M.ContinueRoll(itemID) return M.FeedFreshRolls(itemID) end
 
 -- A sim award landed: the live row becomes a done record (snapshotted by
 -- the award path) and stops being live. Only clears the matching item.

@@ -109,7 +109,6 @@ local function resetHarness(rollTime)
   Sim.auto = false
   Sim.lastEntries = {}
   Sim.lives = {}
-  Sim.pendingAward = nil
   Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
   ML.sessions = {}
@@ -1026,6 +1025,20 @@ eq(rrWinners[1].name, "Tenshiy", "number maps to the roster")
 -- Second number ignored (first number only).
 ML.OnSystemRoll("Pysanka", 3, 1, 3)
 eq(ML.pendingAwardMenu.data.winners[1].name, "Tenshiy", "second number ignored")
+-- The winner number travels the chat intake (echo line + session roll),
+-- never a hidden list insert: it reads as a plain MS roll on 1-100.
+local sawRrEcho = false
+for i = 1, #printed do
+  if string.find(printed[i], "Tenshiy rolls 2 (1-100)", 1, true) then sawRrEcho = true end
+end
+ok(sawRrEcho, "raid-roll number echoed as a chat line")
+local rrSessRolls = (ML.ParkedSession(1001) or {}).rolls or {}
+local rrFound = nil
+for i = 1, #rrSessRolls do
+  if rrSessRolls[i].name == "Tenshiy" then rrFound = rrSessRolls[i] end
+end
+ok(rrFound ~= nil, "raid-roll winner on the session rolls")
+eq(rrFound and rrFound.type, "MS", "raid-roll winner reads MS")
 -- Award reuses the normal path (Pysanka-style line + won mark).
 local rrPrinted = #printed
 ML.AwardChosen({ name = "Tenshiy", via = "winner" })

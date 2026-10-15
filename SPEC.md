@@ -532,16 +532,15 @@ actual roll flow, not a separate code path. Feeds + finish run inline
   master-loot practice, no sheet needed. While on, every solo corpse's
   non-coin rows queue with 3–5 invented rollers (Aldric, Bryn, Cora, ...) 
   and wait for the ML: each item's Roll button starts its roll through the
-  same pipeline (roll window, inline feeds, award menu; the ML's own
-  dice work too). `/zl rollauto [on|off]` (Setup `Auto-start`
+  same pipeline (roll window, chat-echoed fake rolls, award menu; the
+  ML's own dice work too). `/zl rollauto [on|off]` (Setup `Auto-start`
   checkbox, default OFF) auto-starts rolls instead. Awarding is a REAL
   live award — the item leaves the solo corpse via the normal
   `LootSlot(slot, 1)` take — which is the point: the full distribute flow
   rehearsed end to end. Runs against a scratch sheet (real sheet parked
   and restored after; invented marks never touch it). `/zl simstop` and
   flag-off both end the run, keeping already-looted items.
-- `RunSimSession()` remains as the synchronous core (instant resolve, no
-  timers/windows/chat) for tests. `Timer.lua` stays for the
+- `Timer.lua` stays for the
   click-to-loot watchdog (`LootWindow.WatchClick`) and the delayed
   sheet-reply (`SRSecurity`) — sim chains no longer use it.
 - Uses the **same** `Resolver` pure module as real sessions and as `tests/`, so

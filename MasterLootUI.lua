@@ -63,7 +63,7 @@ end
 -- addon-message broadcast (sim must not pop other clients' roller windows
 -- or trigger their auto-rolls); the local raider window still shows.
 -- One live roll at a time (sequential holds): starting a new roll while
--- another runs is refused by StartItemRoll/Sim.RequestRoll — a roll must
+-- another runs is refused by StartItemRoll/Sim.StartQueuedRoll — a roll must
 -- be finished, cancelled or stopped before the next starts. A finished
 -- roll parks its session for award/continue; the parked session (never
 -- the live table) is what survives across items.
@@ -263,36 +263,39 @@ function M.OnRollAns(msg, sender)
   if M.session and sid == M.session.id then return end
 end
 
--- Route an incoming sim roll to its item's session: each roll feeds only
--- its own item. `itemID` pins the target; exact session-id matching
--- preferred. A finished (parked) session id is dead: never fall through
--- to another item — Continue re-attaches it explicitly.
-function M.OnItemSystemRoll(itemID, player, roll, minR, maxR, sessionID)
-  if not M.sessions then return end
-  local sess = nil
-  if sessionID then
-    for _, s2 in pairs(M.sessions) do
-      if s2 and s2.id == sessionID then sess = s2 break end
-    end
-    if sess == nil then return end
-  end
-  if not sess and itemID and M.sessions then
-    -- Prefer the exact key (same item on two corpses: the feed carries
-    -- its session id, so ambiguous item-only feeds must NOT spray both
-    -- -- nil sessionID + two live same-item sessions = refuse to guess).
-    local k = M.RollKey(itemID)
-    if M.sessions[k] then
-      sess = M.sessions[k]
-    else
-      for _, s2 in pairs(M.sessions) do
-        if s2 and s2.key == nil and s2.itemID == itemID then
-          sess = s2 break
-        end
-      end
-    end
-  end
+-- Parse one system roll line, live or echoed: "Name rolls 42 (1-100)"
+-- -> player, roll, minR, maxR (nil when the line is not a roll).
+-- Pure helper (headless-testable): the single parser behind the live
+-- CHAT_MSG_SYSTEM intake and the sim chat echoes — one format, one
+-- reader, so fakes register exactly like real /rolls.
+function M.ParseSystemRoll(text)
+  local player, roll, minR, maxR =
+    string.match(tostring(text or ""), "(.+) rolls (%d+) %((%d+)%-(%d+)%)")
+  if not player then return nil end
+  return player, tonumber(roll), tonumber(minR), tonumber(maxR)
+end
+
+-- One intake for every roll line: parse, then route (raid-roll number
+-- vs normal roll). Live chat arrives via OnEvent; sim fakes arrive via
+-- EchoSimRoll with identical text. No live session = no intake.
+function M.IntakeChatRoll(line)
+  if not M.session then return end
+  local player, roll, minR, maxR = M.ParseSystemRoll(line)
+  if player then M.OnSystemRoll(player, roll, minR, maxR) end
+end
+
+-- Simulated roll echo: "<name> rolls <r> (<min>-<max>)" on the ML's OWN
+-- chat frame only (Z.Print = local echo, never SendChatMessage — the
+-- group never sees fakes), then registered through the normal chat
+-- intake, exactly like a real /roll. sess pins the expected session: a
+-- dead/parked session's echo is dropped (never printed, never routed).
+function M.EchoSimRoll(sess, player, roll, minR, maxR)
   if not sess then return end
-  M.ApplySystemRoll(sess, player, roll, minR, maxR)
+  if M.session ~= sess then return end
+  Z.Print(tostring(player) .. " rolls " .. tostring(roll)
+    .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")")
+  M.IntakeChatRoll(tostring(player) .. " rolls " .. tostring(roll)
+    .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")")
 end
 
 -- Rolls land on the ACTIVE corpse's session. Parked corpses keep their
@@ -326,12 +329,15 @@ function M.OnRaidRollNumber(player, roll, minR, maxR)
   if not sess.roster or not sess.roster[roll] then return end
   sess.raidRolled = true
   local winner = sess.roster[roll]
-  -- Feed the winner through the normal roll list so finish/award reuse
-  -- the standard path (menu with the single raid-roll winner).
-  table.insert(sess.rolls, { name = winner, roll = roll, type = "MS" })
-  if Z.LootWindow and Z.LootWindow.DetailOnRoll then
-    Z.LootWindow.DetailOnRoll(sess.itemID, sess.id, winner, roll, "MS", roll)
-  end
+  -- Detect the winner number through the CHAT intake (never a hidden
+  -- list insert): echo the ML's number line on the local frame, then
+  -- register it like any roll — the number lands on sess.rolls via
+  -- ApplySystemRoll + DetailOnRoll, and finish/award reuse the standard
+  -- path (menu with the single raid-roll winner).
+  -- The raid-roll range is 1-N, not a roll KIND range: echo as 1-100 so
+  -- the intake reads it as a plain MS roll (never SR/OS/TMOG).
+  Z.Print(tostring(winner) .. " rolls " .. tostring(roll) .. " (1-100)")
+  M.ApplySystemRoll(sess, winner, roll, 1, Z.Caps.SR)
   M.Finish(true, sess.itemID)
 end
 
@@ -557,12 +563,12 @@ function M.Finish(manual, itemID)
   if sess.silent then
     -- Sim: hand the menu to the ML (headless: the harness plays the ML
     -- via AwardChosen); the award flow owns continuation. Inline finish
-    -- (no timers): the menu MUST be pending on return — HandleSimAward
+    -- (no timers): the menu MUST be pending on return — PresentAwardMenu
     -- never defers, it only stores (popup confirm happens at award).
-    M.HandleSimAward(sess, data)
+    M.PresentAwardMenu(sess, data, true)
     return "awaiting"
   end
-  M.ShowAwardMenu(sess, data)
+  M.PresentAwardMenu(sess, data, false)
   -- Menu stays pending: the ML awards, continues, or cancels. Callers
   -- must check M.session / the pending menus.
   return "awaiting"
@@ -867,14 +873,10 @@ end
 -- Show the award menu (RollFor finish-popup equivalent). Client builds the
 -- frame with winner buttons + roll-type rows + candidate grid; headless and
 -- text clients (tests, /zl text UIs) get the same rows printed so the ML
--- can answer with /zl award <name>. Stores the pending menu for AwardChosen
--- PER ITEM (multi-roll: each finished item keeps its own decision point).
--- M.pendingAwardMenu stays as the legacy alias of the active item's menu.
+-- can answer with /zl award <name>. Pending-menu bookkeeping is the
+-- caller's job (PresentAwardMenu owns it); ShowAwardMenu only renders —
+-- so PresentAwardMenu can call it without recursing.
 function M.ShowAwardMenu(sess, data)
-  M.pendingAwardMenus = M.pendingAwardMenus or {}
-  local sk = sess.key or M.RollKey(sess.itemID)
-  M.pendingAwardMenus[sk] = { sess = sess, data = data }
-  M.pendingAwardMenu = M.pendingAwardMenus[sk]
   if Z.AwardMenuUI and Z.AwardMenuUI.Show then
     Z.AwardMenuUI.Show(sess, data)
     return
@@ -1257,14 +1259,20 @@ function M.DoAward(itemID, itemLink, winnerName, source, invented)
   if Z.SRView then Z.SRView.Refresh() end
 end
 
--- Sim award flow: the ML picks one row of the award menu for each winner
--- slot. Headless (tests): the menu stays pending and the harness plays
--- the ML via AwardChosen. A no-winner finish is NOT auto-closed: the ML
--- awards the item to anyone (or re-rolls); the row stays until awarded.
+-- Award-menu bookkeeping, shared by live and sim: one pending menu per
+-- item (multi-roll: each finished item keeps its own decision point),
+-- legacy alias on the active item's menu. A no-winner finish is NOT
+-- auto-closed: the ML awards the item to anyone (or re-rolls); the row
+-- stays until awarded.
 M.pendingAwardMenu = nil -- legacy alias: active item's { sess, data }
 M.pendingAwardMenus = nil -- per-item { [itemID] = { sess, data } } while the ML decides
 
-function M.HandleSimAward(sess, data)
+-- Present the finished roll's award menu: store it pending (headless /
+-- sim: the harness plays the ML via AwardChosen) and, when a menu frame
+-- exists, show it. silent skips the frame in headless runs (the old
+-- HandleSimAward path); in-client both show the real menu like a live
+-- roll. The ML picks one row per winner slot via AwardChosen.
+function M.PresentAwardMenu(sess, data, silent)
   M.pendingAwardMenus = M.pendingAwardMenus or {}
   local sk = sess.key or M.RollKey(sess.itemID)
   M.pendingAwardMenus[sk] = { sess = sess, data = data }
@@ -1275,19 +1283,23 @@ function M.HandleSimAward(sess, data)
     -- or re-roll (/zl cr). Session stays parked on the award menu.
     return
   end
-  if not (StaticPopupDialogs and StaticPopup_Show) then
-    -- Headless (tests): the menu stays pending and the harness plays the
-    -- ML via AwardChosen — same decision point as the client, minus the
-    -- frame.
+  if silent and not (StaticPopupDialogs and StaticPopup_Show) then
+    -- Headless sim (tests): the menu stays pending and the harness
+    -- plays the ML via AwardChosen — same decision point as the
+    -- client, minus the frame.
     return
   end
-  -- In-client sim: show the real menu like a live roll.
+  -- Live rolls and in-client sim: show the real menu.
   M.ShowAwardMenu(sess, data)
 end
 
+-- Backwards-compatible alias (tests + old callers stored HandleSimAward).
+function M.HandleSimAward(sess, data) M.PresentAwardMenu(sess, data, true) end
+
 -- The ML chose a recipient for the finished roll (kind-winner row,
 -- candidate grid, or ... selection). Confirms via popup, then awards.
--- Works for live and sim; sim continuation runs through Sim.afterAwards.
+-- Works for live and sim; sim continuation runs through Sim.afterAwards
+-- (queued entries) / Sim.afterRehearsal (rehearsal entries).
 -- choice = { name=recipient, via="winner"|"menu"|"candidate"|"tmog",
 --            rollType=optional }
 function M.AwardChosen(choice, itemID)
@@ -1319,7 +1331,6 @@ function M.AwardChosen(choice, itemID)
         sess.itemID, sess.rolls, { cap = Z.Caps.SR, requireSR = true, itemCount = sess.itemCount })) }
   end
   local sess, data = pend.sess, pend.data
-  if Z.Sim then Z.Sim.pendingAward = nil end
   local name = choice and choice.name
   if not name then Z.Print("Pick a recipient first.") return end
   -- Award applied (popup accepted or headless): a finished detail closes,
@@ -1933,9 +1944,9 @@ end
 
 function M.OnEvent(event, a1, a2)
   if event == "CHAT_MSG_SYSTEM" and M.session then
-    -- "Name rolls 42 (1-100)"
-    local player, roll, minR, maxR = string.match(tostring(a1 or ""), "(.+) rolls (%d+) %((%d+)%-(%d+)%)")
-    if player then M.OnSystemRoll(player, tonumber(roll), tonumber(minR), tonumber(maxR)) end
+    -- "Name rolls 42 (1-100)" — same intake the sim echoes register
+    -- through (single parser, single router: IntakeChatRoll).
+    M.IntakeChatRoll(a1)
   elseif event == "LOOT_OPENED" then
     M.lootOpen = true
     M.OnLootOpened()

@@ -828,6 +828,27 @@ function M.DetailOnFinish(itemID, menu)
     d = M.ParkedDetail(itemID)
   end
   if not d or d.itemID ~= itemID then return false end
+  -- Carry the landed rolls into the award view: sim/rehearsal feeds run
+  -- inline inside the Roll click, so the window flips rolling -> award
+  -- without ever painting the rolling list. The award view renders
+  -- d.rolls (SortedDetailRolls), so dropping them here shows "waiting
+  -- for rolls..." on a finished roll — and the router's post-starter
+  -- flip (doAction) must not wipe them either. Session rolls stay the
+  -- source of truth; the window only mirrors them.
+  local MLUI = Z.MasterLootUI
+  local sess = MLUI and MLUI.SessionAny and MLUI.SessionAny(itemID) or nil
+  if sess and sess.itemID == itemID and Z.Util.ArrayCount(sess.rolls or {}) > 0
+      and Z.Util.ArrayCount(d.rolls or {}) == 0 then
+    d.rolls = {}
+    for i = 1, Z.Util.ArrayCount(sess.rolls) do
+      local r = sess.rolls[i]
+      if r then
+        table.insert(d.rolls, { name = r.name, roll = r.roll,
+          rollType = r.type, effective = r.roll })
+      end
+    end
+    if sess.id then d.sessionID = sess.id end
+  end
   d.menu = menu
   d.phase = "award"
   d.countdown = nil
@@ -1356,13 +1377,25 @@ function M.doAction(itemID, actionID, extra)
       end
     end
     if ok then
+      -- playOne (sim/rehearsal starters) owns the rolling flip and may
+      -- have replaced M.detail; re-fetch so the checks below land on
+      -- the live object, never a stale snapshot.
+      if M.detail and M.detail.itemID == itemID then d = M.detail end
+      if ((d.phase or "pick") == "rolling" and d.sessionID)
+          or (((d.phase or "pick") == "award" or (d.phase or "pick") == "preaward") and d.menu) then
+        -- The starter already owns this window: a live rolling view
+        -- with landed rolls, or a finished award view (sim/rehearse
+        -- feeds + finish run inline inside the starter). Leave it
+        -- alone — re-flipping would wipe d.rolls (the reported "0
+        -- fake rolls in the ML window") or drag a finished award view
+        -- back to a sessionless rolling state.
+        return "rolling"
+      end
       local sess = Z.MasterLootUI and Z.MasterLootUI.SessionFor
         and Z.MasterLootUI.SessionFor(itemID)
         or (Z.MasterLootUI and Z.MasterLootUI.session)
-      -- playOne (sim/rehearsal starters) owns the rolling flip and may
-      -- have replaced M.detail; re-fetch so the flip below lands on the
-      -- live object, never a stale snapshot. Idempotent either way.
-      if M.detail and M.detail.itemID == itemID then d = M.detail end
+      -- Idempotent either way: a fresh pick window becomes the rolling
+      -- view for the session the starter just created.
       d.phase = "rolling"
       d.sessionID = sess and sess.id or nil
       d.rolls = {}
@@ -1429,7 +1462,7 @@ function M.doAction(itemID, actionID, extra)
       return "nothing to continue"
     end
     MLUI.UnparkSession(sess)
-    if Z.Sim and Z.Sim.ContinueRoll then Z.Sim.ContinueRoll(itemID) end
+    if Z.Sim and Z.Sim.FeedFreshRolls then Z.Sim.FeedFreshRolls(itemID) end
     d.phase = "rolling"
     d.sessionID = sess.id
     d.status = "rolling"

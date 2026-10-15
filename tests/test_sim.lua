@@ -1,7 +1,8 @@
 -- tests/test_sim.lua
--- Sim replays the live pipeline (MasterLootUI session + timers + routed chat
--- + windows) with precomputed fake rolls. Timer is pumped by hand; chat and
--- windows are stubbed and asserted. RunSimSession stays as the sync core.
+-- Sim replays the live pipeline (MasterLootUI session + routed chat
+-- + windows) with precomputed fake rolls. Feeds + finish run inline;
+-- chat and windows are stubbed and asserted. Every test drives the real
+-- pipeline (BeginSession/Finish/AwardChosen) — no parallel sync core.
 local T = { pass = 0, fail = 0, errors = {} }
 
 local function eq(a, b, msg)
@@ -104,7 +105,6 @@ local function resetHarness(rollTime)
   Sim.auto = false
   Sim.lastEntries = {}
   Sim.lives = {}
-  Sim.pendingAward = nil
   Sim.FakeCount = 2 -- pinned headcount: rigged rng maps 1:1 onto rolls
   ML.session = nil
   ML.sessions = {}
@@ -141,17 +141,66 @@ ZugLoot.LootWindow.detail.sessionID = parkedSess and parkedSess.id
 ML.Cancel(1001)
 ok(ML.session == nil, "cancelled session nil")
 ok(ZugLoot.LootWindow.detail == nil, "orphaned rolling detail closed")
--- A feed for the dead session id: must not error, and the cancelled
--- roll's history (written once by the inline finish, before Cancel must
--- NOT duplicate it.
+-- An echo for the dead session: refused silently — nothing printed,
+-- nothing routed — and the cancelled roll's history (written once by
+-- the inline finish, before Cancel) is NOT duplicated.
 local nHistBefore = SRData.RollCount(ZugLoot.DB.sheet, 1001)
-local deadID = parkedSess and parkedSess.id or -1
+local nPrintedBefore = #printed
 local okFeed, errFeed = pcall(function()
-  ZugLoot.MasterLootUI.OnItemSystemRoll(1001, "Aaa", 50, 1, 100, deadID)
+  ZugLoot.MasterLootUI.EchoSimRoll(parkedSess, "Aaa", 50, 1, 100)
 end)
-ok(okFeed, "stale feed after cancel does not error: " .. tostring(errFeed))
-eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), nHistBefore, "stale feed records nothing new")
+ok(okFeed, "stale echo after cancel does not error: " .. tostring(errFeed))
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), nHistBefore, "stale echo records nothing new")
+eq(#printed, nPrintedBefore, "stale echo prints nothing")
+-- A stray chat line with no live session is likewise a no-op (the
+-- intake guards on M.session, same as the live event path).
+local okStray, errStray = pcall(function()
+  ZugLoot.MasterLootUI.IntakeChatRoll("Aaa rolls 50 (1-100)")
+end)
+ok(okStray, "stray chat line does not error: " .. tostring(errStray))
+eq(#printed, nPrintedBefore, "stray chat line prints nothing")
 ok(drain(), "drain after stale feed")
+
+-- 0. Chat intake: one parser behind live chat and sim echoes.
+-- ParseSystemRoll reads "Name rolls R (min-max)" and rejects chatter.
+local pp, pr,plo, phi = ML.ParseSystemRoll("Aaa rolls 90 (1-100)")
+eq(pp, "Aaa", "parser reads the roller")
+eq(pr, 90, "parser reads the roll")
+eq(plo, 1, "parser reads min")
+eq(phi, 100, "parser reads max")
+ok(ML.ParseSystemRoll("Raid rolling Thunderfury...") == nil, "parser ignores roll calls")
+ok(ML.ParseSystemRoll("Aaa wins Thunderfury (raid-roll).") == nil, "parser ignores award lines")
+ok(ML.ParseSystemRoll("") == nil, "parser ignores empty lines")
+ok(ML.ParseSystemRoll(nil) == nil, "parser ignores nil")
+-- IntakeChatRoll routes to the live session (same path as OnEvent).
+resetHarness()
+ML.BeginSession(1001, "item:1001", "SR", false)
+ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+eq(#ML.session.rolls, 1, "chat line registers on the session")
+eq(ML.session.rolls[1].name, "Aaa", "chat roller named")
+eq(ML.session.rolls[1].type, "SR", "holder 1-100 reads SR")
+ML.IntakeChatRoll("Aaa rolls 50 (1-100)") -- first-roll-only
+ eq(#ML.session.rolls, 1, "duplicate chat roll ignored")
+ML.IntakeChatRoll("Raid rolling Thunderfury...") -- not a roll
+ eq(#ML.session.rolls, 1, "chatter ignored")
+ML.Cancel(1001)
+-- EchoSimRoll prints the line AND registers it (one call, both halves).
+resetHarness()
+local es = ML.BeginSession(1001, "item:1001", "SIM-OPEN", true)
+printed = {}
+ML.EchoSimRoll(es, "Bbb", 77, 1, 100)
+eq(#ML.session.rolls, 1, "echo registers on the session")
+eq(ML.session.rolls[1].name, "Bbb", "echo roller named")
+eq(ML.session.rolls[1].roll, 77, "echo roll kept")
+local sawEchoLine = false
+for i = 1, #printed do
+  if string.find(printed[i], "Bbb rolls 77 (1-100)", 1, true) then sawEchoLine = true end
+end
+ok(sawEchoLine, "echo prints the system-roll line locally")
+-- Range-blind ranges still derive kind from the range (OS 1-99).
+ML.EchoSimRoll(es, "Ossy", 55, 1, 99)
+eq(ML.session.rolls[2].type, "OS", "echo 1-99 reads OS")
+ML.Cancel(1001)
 
 -- 1. No sheet -> refuses, no crash, tells user to import.
 ZugLoot.DB = {}
@@ -210,15 +259,18 @@ for _, g in ipairs({
   math.random = realRandom
   if g.localOnly then
     eq(#chatSent, 0, "no SendChatMessage while solo")
-    local sawStart, sawResult, sawWinner = false, false, false
+    local sawStart, sawResult, sawWinner, sawEcho = false, false, false, false
     for i = 1, #printed do
       -- Pysanka-style lines, printed locally while solo.
       if string.find(printed[i], "1001", 1, true) then sawStart = true end
       if string.find(printed[i], "Aaa: 90 (SR)", 1, true) then sawResult = true end
       -- Sim awards stay local-print (source "sim" never chats).
       if string.find(printed[i], "Awarded 1001 to", 1, true) then sawWinner = true end
+      -- Fake rolls echo as system-roll chat lines, ML-local only.
+      if string.find(printed[i], "Aaa rolls 90 (1-100)", 1, true) then sawEcho = true end
     end
     ok(sawStart and sawResult and sawWinner, "solo sees start/result/winner locally")
+    ok(sawEcho, "solo sees the fake-roll echo locally")
   else
     local channels = {}
     for i = 1, #chatSent do channels[chatSent[i].channel] = true end
@@ -348,15 +400,26 @@ local h1001 = SRData.GetRolls(ZugLoot.DB.sheet, 1001)[1]
 eq(#h1001.excluded, 1, "sim history records excluded")
 eq(h1001.excluded[1].name, "Aaa", "sim history excluded name")
 
--- 9. Tie in sim: re-rolled on timers, then resolved (sync core unchanged).
+-- 9. Tie in sim resolves through the REAL pipeline: a tied finish
+-- leaves the session open (no award, no won mark), the ML continues
+-- with fresh tie-break rolls, and the combined list resolves.
 resetHarness()
 printed, dropAdds = {}, {}
-local tieRes = Sim.RunSimSession(ZugLoot.DB.sheet, 1001, "SIM",
-  { { name = "Aaa", roll = 50, type = "SR" }, { name = "Bbb", roll = 60, type = "SR" } }, "1001")
-eq(#tieRes.tied, 2, "tie detected")
-eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "tie session still recorded")
-ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "no won mark on tie")
-eq(#dropAdds, 0, "no award logged on tie")
+-- Aaa 50(+10=60) ties Bbb 60: tie-breaks 70 vs 71 settle it.
+math.random = rigged({ 50, 60, 70, 71 })
+Sim.SimItem("1001")
+math.random = realRandom
+-- finishSim already tie-looped inline (same path as §10): the parked
+-- menu holds the resolved winner, history written once per round.
+ok(ML.pendingAwardMenu ~= nil, "tie winner parked for the ML")
+ok(SRData.RollCount(ZugLoot.DB.sheet, 1001) >= 1, "tie rounds recorded")
+local tieW = ML.pendingAwardMenu.data.winners
+ok(tieW and tieW[1] ~= nil, "tie resolved to a winner")
+ok(#dropAdds == 0, "no award logged before the ML picks one")
+ML.AwardChosen({ name = tieW[1].name, via = "winner" })
+ok(drain(), "drain tie award")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, tieW[1].name), "tie winner marked")
+eq(#dropAdds, 1, "exactly one award after tie")
 
 -- 10. Async tie: tied players re-roll automatically, session closes.
 resetHarness()
@@ -628,6 +691,22 @@ ok(ML.session == nil, "manual default: no auto-start")
 eq(ZugLoot.DB.sheet, realSheet, "real sheet stays loaded (no swap)")
 -- ML picks the head item's Roll button: queued entry plays with fakes.
 eq(LW.doAction(1001, "roll"), "rolling", "Roll button plays queued entry")
+-- Regression: the doAction flip must NOT wipe the rolls playOne just
+-- landed (sim/rehearse starters own the rolling flip; the router's
+-- re-flip cleared d.rolls -> "0 fake rolls" in the ML window, and
+-- dragged the finished award view back to a sessionless rolling view
+-- -> "waiting for rolls..." on a finished roll).
+-- (playOne finishes inline, so the window is already at the award
+-- phase with the menu — and the fed rolls must still be listed.)
+eq(#(LW.detail and LW.detail.rolls or {}), 4, "ML window keeps the 4 fed rolls")
+ok(LW.detail and LW.detail.menu ~= nil, "ML window holds the award menu")
+eq(LW.detail and LW.detail.phase, "award", "ML window shows the award view")
+local winLines = LW.DetailLines()
+local sawWinRoll = false
+for i = 1, #winLines do
+  if string.find(winLines[i], "winner:", 1, true) then sawWinRoll = true end
+end
+ok(sawWinRoll, "ML window lists the winner, not waiting-for-rolls")
 local liveEntry = nil
 for _, e in pairs(Sim.lives or {}) do liveEntry = e break end
 ok(liveEntry ~= nil and liveEntry.rehearse, "queued entry playing")
