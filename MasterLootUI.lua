@@ -1179,11 +1179,17 @@ end
 -- never yanked back. All client calls pcall-guarded + nil-safe.
 M.autoML = false
 
--- Boss at the cursor? worldboss ONLY. Instanced bosses rarely carry
--- the flag, but elite can't be used: in raids every trash mob is elite
--- and trash wants group loot — an elite trigger would flip on every
--- pack. Raid-only on top: the flow is a raid flow (party dungeons keep
--- whatever the group runs). Pure shape, WoW globals nil-safe.
+-- Boss at the cursor? worldboss flag OR high HP. UnitClassification is
+-- too weak alone: indoor raid bosses usually report plain elite (and
+-- elite can't be the trigger — in raids every trash mob is elite and
+-- trash wants group loot). So: worldboss always wins; otherwise the
+-- target's max HP must clear BOSS_HP_MIN. Classic numbers: raid bosses
+-- bottom out ~200k (ZG priests) up to millions (Naxx); raid trash sits
+-- far below — except AQ40 Anubisath sentinels (~300k), which trip the
+-- floor too (harmless: AQ40 guilds run ML through trash anyway).
+-- Raid-only on top: the flow is a raid flow. Pure shape, WoW globals
+-- nil-safe.
+M.BOSS_HP_MIN = 100000
 function M.IsBossTarget()
   if not (UnitExists and UnitClassification) then return false end
   if not (Z.SRSecurity and Z.SRSecurity.IsInRaid
@@ -1191,8 +1197,10 @@ function M.IsBossTarget()
   local okE, exists = pcall(UnitExists, "target")
   if not (okE and exists) then return false end
   local okC, cls = pcall(UnitClassification, "target")
-  if not okC then return false end
-  return cls == "worldboss"
+  if okC and cls == "worldboss" then return true end
+  if not UnitHealthMax then return false end
+  local okH, hp = pcall(UnitHealthMax, "target")
+  return okH and type(hp) == "number" and hp >= M.BOSS_HP_MIN
 end
 
 function M.CanAutoSwitch()
@@ -1222,9 +1230,64 @@ function M.CurrentLootMethod()
   return nil
 end
 
+-- Boss threshold (Setup dropdown): the loot threshold applied with the
+-- auto-switch to master loot. 1 common .. 4 epic. Pure data + validated
+-- setter (headless-testable); the client call runs inside the switch.
+M.THRESHOLDS = {
+  { value = 1, label = "Common" },
+  { value = 2, label = "Uncommon" },
+  { value = 3, label = "Rare" },
+  { value = 4, label = "Epic" },
+}
+function M.ThresholdChoices()
+  local out = {}
+  for i = 1, Z.Util.ArrayCount(M.THRESHOLDS) do
+    local t = M.THRESHOLDS[i]
+    table.insert(out, { value = t.value,
+      label = t.label .. " (" .. t.value .. ")" })
+  end
+  return out
+end
+function M.BossThreshold()
+  local n = Z.DB and tonumber(Z.DB.bossThreshold) or nil
+  if n and n >= 1 and n <= 4 then return math.floor(n) end
+  return 4 -- default: bosses drop epics, threshold follows
+end
+function M.ThresholdLabel(n)
+  n = tonumber(n)
+  for i = 1, Z.Util.ArrayCount(M.THRESHOLDS) do
+    local t = M.THRESHOLDS[i]
+    if t.value == n then return t.label .. " (" .. t.value .. ")" end
+  end
+  return "Epic (4)"
+end
+-- Validated setter: stores the preference (1-4). Anything else refuses.
+-- Applies live ONLY through the boss auto-switch, never here.
+function M.SetBossThreshold(n)
+  n = tonumber(n)
+  if not (n and n >= 1 and n <= 4) then return false end
+  n = math.floor(n)
+  if Z.DB then Z.DB.bossThreshold = n end
+  return true
+end
+function M.CurrentThreshold()
+  if GetLootThreshold then
+    local ok, t = pcall(GetLootThreshold)
+    if ok and type(t) == "number" then return t end
+  end
+  return nil
+end
+function M.TrySetThreshold(n)
+  if not SetLootThreshold then return false end
+  local ok = pcall(SetLootThreshold, n)
+  return ok and true or false
+end
+
 -- Leader selected a boss: flip to master loot (once — already-master
 -- or already-switched is a no-op). Master is self: only the leader's
 -- own client runs this, so handing master to self is always right.
+-- The Setup threshold rides along (previous one remembered for the
+-- switch-back).
 function M.MaybeMasterOnBoss()
   if not M.CanAutoSwitch() then return false end
   if M.autoML then return false end
@@ -1234,7 +1297,14 @@ function M.MaybeMasterOnBoss()
   if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
   if M.TrySetLoot("master", me) then
     M.autoML = true
-    Z.Print("Boss selected — loot method set to master loot.")
+    M.prevThreshold = M.CurrentThreshold()
+    local want = M.BossThreshold()
+    if M.TrySetThreshold(want) then
+      Z.Print("Boss selected — loot method set to master loot, threshold "
+        .. M.ThresholdLabel(want) .. ".")
+    else
+      Z.Print("Boss selected — loot method set to master loot.")
+    end
     return true
   end
   return false
@@ -1242,7 +1312,8 @@ end
 
 -- A row left the list (award or ignore): with backToGroup on and OUR
 -- switch active, an emptied list means the boss is fully looted — flip
--- back to group loot. Sim rows never count (no corpse, no method).
+-- back to group loot and restore the remembered threshold. Sim rows
+-- never count (no corpse, no method).
 function M.MaybeGroupAfterBoss(source)
   if source == "sim" then return false end
   if not M.autoML then return false end
@@ -1253,6 +1324,10 @@ function M.MaybeGroupAfterBoss(source)
       and Z.Util.ArrayCount(Z.LootWindow.items) > 0 then return false end
   if M.TrySetLoot("group") then
     M.autoML = false
+    if M.prevThreshold then
+      M.TrySetThreshold(M.prevThreshold)
+      M.prevThreshold = nil
+    end
     Z.Print("Boss fully looted — loot method set back to group loot.")
     return true
   end

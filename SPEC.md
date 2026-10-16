@@ -235,8 +235,11 @@ Sheet = {
   (factory reset with confirmation: sheet, raid history, drop log and all
   options back to defaults; local data only, no permission gate),
   auto loot-method switching (**ML on boss**: as raid leader, flip
-  to master loot when selecting a raid boss — worldboss targets only,
-  raid only (raid trash is all elite and keeps group loot);
+  to master loot when selecting a raid boss — worldboss flag or 100k+ HP
+  (indoor bosses report elite; raid trash never reaches 100k), raid only; **Boss
+  threshold** dropdown (Common 1 .. Epic 4, default Epic) rides along
+  with the switch, previous threshold remembered and restored on
+  switch-back;
   **Back to group**: flip back to group loot once the boss is fully
   looted — only after OUR auto-switch, never yanks a manual change;
   both off by default), roll-time/log stats.

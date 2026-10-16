@@ -1427,7 +1427,7 @@ function M.RenderSetup()
     b8:SetText(mlLabel())
   end)
   Tip(b8, "ML on boss", "As raid leader, switch to master loot when you select a raid boss.",
-    "Leader only, raid only. Trash elites never trigger (they want group loot).")
+    "Leader only, raid only. Worldboss flag or 100k+ HP (trash never reaches it).")
   local b9 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b9:SetWidth(150) b9:SetHeight(24)
   b9:SetPoint("TOPLEFT", b8, "BOTTOMLEFT", 0, -8)
@@ -1442,9 +1442,27 @@ function M.RenderSetup()
   end)
   Tip(b9, "Back to group", "After the boss is fully looted, switch back to group loot.",
     "Only after OUR auto-switch (never yanks a manual change).")
+  -- Boss threshold dropdown: which loot threshold the auto-switch
+  -- applies with master loot (1 common .. 4 epic). Button shows the
+  -- current pick; clicking opens the 4-row choice list below it.
+  local b10 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b10:SetWidth(150) b10:SetHeight(24)
+  b10:SetPoint("TOPLEFT", b9, "BOTTOMLEFT", 0, -8)
+  local function threshLabel()
+    local MLUI = Z.MasterLootUI
+    if MLUI and MLUI.ThresholdLabel and MLUI.BossThreshold then
+      return "Threshold: " .. MLUI.ThresholdLabel(MLUI.BossThreshold())
+    end
+    return "Threshold: Epic (4)"
+  end
+  b10:SetText(threshLabel())
+  b10:SetScript("OnClick", function() M.ToggleThresholdDropdown(b10) end)
+  Tip(b10, "Boss threshold", "Loot threshold applied when auto-switching to master loot on a boss.",
+    "Previous threshold is remembered and restored on switch-back.")
   M.setupBtns = M.setupBtns or {}
   M.setupBtns.mlOnBoss = b8
   M.setupBtns.backToGroup = b9
+  M.setupBtns.bossThreshold = b10
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (/zl log)\n" ..
@@ -1611,12 +1629,94 @@ function M.DebugHeaderButtons()
   return out
 end
 
+-- Boss-threshold dropdown (Setup tab): one row per threshold
+-- (Common 1 .. Epic 4). Picking stores the preference via
+-- MasterLootUI.SetBossThreshold and relabels the button. Toggle-shut
+-- on re-click; headless-testable through ThresholdChoices/SetBossThreshold.
+M.threshDropdown = nil
+function M.CloseThresholdDropdown()
+  if M.threshDropdown then
+    if M.threshDropdown.Hide then M.threshDropdown:Hide() end
+    M.threshDropdown = nil
+  end
+end
+function M.ToggleThresholdDropdown(anchor)
+  local MLUI = Z.MasterLootUI
+  if not (MLUI and MLUI.ThresholdChoices and MLUI.SetBossThreshold) then return end
+  if not CreateFrame then return end -- headless: data layer only
+  if M.threshDropdown then
+    M.CloseThresholdDropdown()
+    return -- was open: toggle shut
+  end
+  local choices = MLUI.ThresholdChoices()
+  if Z.Util.ArrayCount(choices) == 0 then return end
+  local parent = M.frame or UIParent
+  local dd = CreateFrame("Frame", "ZugLootThresholdDropdown", parent)
+  if type(dd) ~= "table" or type(dd.SetWidth) ~= "function" then return end
+  if dd.SetFrameStrata then pcall(dd.SetFrameStrata, dd, "TOOLTIP") end
+  if dd.SetBackdrop then
+    dd:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8",
+      edgeFile = "Interface/Buttons/WHITE8x8", edgeSize = 0.5 })
+  end
+  if dd.SetBackdropColor then dd:SetBackdropColor(0, 0, 0, 1) end
+  if dd.SetBackdropBorderColor then dd:SetBackdropBorderColor(0.2, 0.2, 0.2, 1) end
+  if dd.EnableMouse then dd:EnableMouse(true) end
+  local width, y = 0, -4
+  dd.rows = {}
+  for i = 1, Z.Util.ArrayCount(choices) do
+    local c = choices[i] -- fresh local per iteration for the closure
+    local b = CreateFrame("Button", nil, dd)
+    if type(b) ~= "table" or type(b.SetWidth) ~= "function" then break end
+    b:SetHeight(16)
+    b:SetPoint("TOPLEFT", dd, "TOPLEFT", 5, y)
+    b:SetPoint("RIGHT", dd, "RIGHT", -5, 0)
+    if b.SetBackdrop then b:SetBackdrop({ bgFile = "Interface/Buttons/WHITE8x8" }) end
+    local function hover(a)
+      if b.SetBackdropColor then b:SetBackdropColor(0.125, 0.624, 0.976, a) end
+    end
+    hover(0)
+    if b.SetScript then
+      b:SetScript("OnEnter", function() hover(0.2) end)
+      b:SetScript("OnLeave", function() hover(0) end)
+      b:SetScript("OnClick", function()
+        M.CloseThresholdDropdown()
+        if MLUI.SetBossThreshold(c.value) then M.Refresh() end
+      end)
+    end
+    local fs
+    if b.CreateFontString then
+      fs = b:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+      fs:SetPoint("LEFT", b, "LEFT", 5, 0)
+      if fs.SetText then fs:SetText(c.label) end
+      local w = 0
+      if fs.GetStringWidth then w = fs:GetStringWidth() or 0 end
+      if w == 0 then w = string.len(c.label) * 7 end
+      if w > width then width = w end
+    end
+    b.choice = c
+    table.insert(dd.rows, b)
+    y = y - 18
+  end
+  dd:SetWidth(width + 20)
+  dd:SetHeight(-y + 5)
+  if dd.ClearAllPoints then dd:ClearAllPoints() end
+  if anchor and dd.SetPoint then
+    -- Below the button (setup rows grow downward).
+    dd:SetPoint("TOP", anchor, "BOTTOM", 0, -2)
+  elseif dd.SetPoint and M.frame then
+    dd:SetPoint("CENTER", M.frame, "CENTER", 0, 0)
+  end
+  if dd.Show then dd:Show() end
+  M.threshDropdown = dd
+end
+
 -- Setup-tab toggle buttons (headless-testable): the auto loot-method
--- switching pair. Returns { mlOnBoss, backToGroup } (nil before first
--- Setup render).
+-- switching pair + the boss-threshold dropdown button. Returns
+-- { mlOnBoss, backToGroup, bossThreshold } (nil before first Setup render).
 function M.DebugSetupToggles()
   local sb = M.setupBtns or {}
-  return { mlOnBoss = sb.mlOnBoss, backToGroup = sb.backToGroup }
+  return { mlOnBoss = sb.mlOnBoss, backToGroup = sb.backToGroup,
+    bossThreshold = sb.bossThreshold }
 end
 
 function M.Build()

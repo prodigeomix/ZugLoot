@@ -503,6 +503,22 @@ assert(Z.DB.mlOnBoss == true, "ML toggle flips the flag");
 assert(string.find(st.mlOnBoss.label or "", "ON", 1, true) ~= nil, "ML toggle relabels");
 st.backToGroup:GetScript("OnClick")();
 assert(Z.DB.backToGroup == true, "group toggle flips the flag");
+-- boss threshold dropdown: button shows the pick, 4 rows, click stores.
+Z.DB.bossThreshold = 4;
+Z.MainWindow.SelectTab("setup");
+local st2 = Z.MainWindow.DebugSetupToggles();
+assert(st2.bossThreshold ~= nil, "threshold button built");
+assert(string.find(st2.bossThreshold.label or "", "Epic", 1, true) ~= nil,
+  "threshold button shows the pick, got: " .. tostring(st2.bossThreshold.label));
+Z.MainWindow.ToggleThresholdDropdown(st2.bossThreshold);
+assert(Z.MainWindow.threshDropdown ~= nil, "threshold dropdown opened");
+assert(#Z.MainWindow.threshDropdown.rows == 4, "four threshold rows");
+assert(Z.MainWindow.threshDropdown.rows[1].choice.value == 1, "common first");
+assert(Z.MainWindow.threshDropdown.rows[3].choice.label == "Rare (3)", "rare labeled");
+Z.MainWindow.threshDropdown.rows[3]:GetScript("OnClick")();
+assert(Z.DB.bossThreshold == 3, "dropdown click stores rare");
+assert(Z.MainWindow.threshDropdown == nil, "dropdown closes on pick");
+Z.DB.bossThreshold = 4;
 Z.DB.mlOnBoss = false;
 Z.DB.backToGroup = false;
 print("setup loot toggles OK");

@@ -427,11 +427,26 @@ ok(not ML.MaybeMasterOnBoss(), "second select is a no-op")
 eq(#lootCalls, 1, "no double switch")
 -- Elite trash in a raid: NEVER switches (group loot stays).
 targetCls = "elite"
+UnitHealthMax = function(u) return 15000 end -- trash HP
 ML.autoML = false
 ok(not ML.MaybeMasterOnBoss(), "raid trash elite never switches")
 eq(#lootCalls, 1, "still one call")
+-- High-HP elite (indoor boss without the worldboss flag): switches.
+UnitHealthMax = function(u) return 400000 end -- boss HP
+ok(ML.MaybeMasterOnBoss(), "high-HP elite switches")
+eq(lootCalls[2][1], "master", "boss HP triggers master")
+ML.autoML = false
+table.remove(lootCalls)
+-- Worldboss flag still switches regardless of HP API presence.
+UnitHealthMax = nil
+targetCls = "worldboss"
+ok(ML.MaybeMasterOnBoss(), "worldboss flag switches without HP API")
+ML.autoML = false
+table.remove(lootCalls)
+UnitHealthMax = function(u) return 400000 end
 -- Non-boss target: no switch.
 targetCls = "normal"
+UnitHealthMax = function(u) return 3000 end -- critter HP
 ok(not ML.MaybeMasterOnBoss(), "trash target never switches")
 eq(#lootCalls, 1, "still one call")
 -- Party (not raid): no switch even on a worldboss.
@@ -477,9 +492,48 @@ ML.autoML = true
 ML.OnLootOpened()
 ML.Ignore(1001, "loot")
 eq(lootCalls[4][1], "group", "ignore-emptied list switches back")
+-- 15. Boss threshold: choices, validated setter, applied on switch,
+-- restored on switch-back.
+local tc = ML.ThresholdChoices()
+eq(#tc, 4, "four thresholds")
+eq(tc[1].value, 1, "common first")
+eq(tc[4].label, "Epic (4)", "epic labeled")
+ok(ML.SetBossThreshold(3), "rareaccepted")
+eq(ZugLoot.DB.bossThreshold, 3, "rare stored")
+ok(not ML.SetBossThreshold(0), "0 refused")
+ok(not ML.SetBossThreshold(5), "5 refused")
+ok(not ML.SetBossThreshold("epic"), "non-number refused")
+eq(ZugLoot.DB.bossThreshold, 3, "refusals keep rare")
+eq(ML.BossThreshold(), 3, "setter read back")
+eq(ML.ThresholdLabel(1), "Common (1)", "common labeled")
+ZugLoot.DB.bossThreshold = 99
+eq(ML.BossThreshold(), 4, "out-of-range falls back to epic")
+ZugLoot.DB.bossThreshold = nil
+eq(ML.BossThreshold(), 4, "absent falls back to epic")
+-- Applied on switch, restored on switch-back.
+ZugLoot.DB.bossThreshold = 4
+local threshCalls = {}
+SetLootThreshold = function(n) table.insert(threshCalls, n) return true end
+GetLootThreshold = function() return 2 end
+ML.autoML = false
+grouping = "raid"
+ZugLoot.SRSecurity.AmLeader = function() return true end
+targetCls = "worldboss"
+ZugLoot.DB.mlOnBoss = true
+ok(ML.MaybeMasterOnBoss(), "switch with threshold")
+eq(threshCalls[1], 4, "epic applied on switch")
+eq(ML.prevThreshold, 2, "previous threshold remembered")
+LW.SetItems({}, "loot")
+ZugLoot.DB.backToGroup = true
+ok(ML.MaybeGroupAfterBoss("raid"), "switch-back with restore")
+eq(threshCalls[2], 2, "previous threshold restored")
+ok(ML.prevThreshold == nil, "remembered threshold cleared")
+SetLootThreshold = nil
+GetLootThreshold = nil
 SetLootMethod = nil
 UnitExists = nil
 UnitClassification = nil
+UnitHealthMax = nil
 ZugLoot.SRSecurity.AmLeader = function() return true end
 grouping = "solo"
 

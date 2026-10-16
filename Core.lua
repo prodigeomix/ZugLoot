@@ -64,6 +64,9 @@ function Z.InitDB()
   -- group loot once the boss is fully looted. Absent = off.
   if ZugLootDB.mlOnBoss == nil then ZugLootDB.mlOnBoss = false end
   if ZugLootDB.backToGroup == nil then ZugLootDB.backToGroup = false end
+  -- Boss threshold for the auto-switch (Setup dropdown, 1 common ..
+  -- 4 epic). Default epic: bosses drop epics. Absent = default.
+  if ZugLootDB.bossThreshold == nil then ZugLootDB.bossThreshold = 4 end
   -- Pysanka raid-setup sheet (invitation word, buff/tank/debuff tables).
   if Z.Pysanka and Z.Pysanka.Ensure then Z.Pysanka.Ensure(ZugLootDB) end
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
