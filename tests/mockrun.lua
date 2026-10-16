@@ -19,8 +19,8 @@ local function newObj(kind)
   function o:SetAlpha(a) self.alpha=a end
   function o:GetAlpha() return self.alpha or 1 end
   function o:IsVisible() return not self.hidden end
-  function o:CreateTexture(...) local t={scripts={}, w=0, h=0}; function t:SetTexture(p) self.tex=p end; function t:GetTexture() return self.tex end; function t:SetAllPoints() end; function t:SetPoint() end; function t:SetHeight(h) self.h=h end; function t:SetWidth(w) self.w=w end; function t:SetVertexColor() end; function t:SetTexCoord(l,r,tm,b) self.coord={l,r,tm,b} end; function t:GetTexCoord() return self.coord end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
-  function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor() end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont() end; return fs end
+  function o:CreateTexture(...) local t={scripts={}, points={}, w=0, h=0}; function t:SetTexture(r,g,b,a) if type(r)=="number" and g~=nil then self.tex={r,g,b,a} else self.tex=r end end; function t:GetTexture() return self.tex end; function t:SetAllPoints() end; function t:SetPoint(...) table.insert(self.points,{...}) end; function t:SetHeight(h) self.h=h end; function t:SetWidth(w) self.w=w end; function t:SetVertexColor(r,g,b,a) self.vc={r,g,b,a} end; function t:SetTexCoord(l,r,tm,b) self.coord={l,r,tm,b} end; function t:GetTexCoord() return self.coord end; function t:Hide() end; function t:Show() end; function t:SetScript(k,f) self.scripts[k]=f end; function t:GetScript(k) return self.scripts[k] end; return t end
+  function o:CreateFontString(...) local fs={txt="",points={}}; function fs:SetAllPoints() end; function fs:SetText(s) self.txt=s end; function fs:GetText() return self.txt end; function fs:SetPoint(...) table.insert(self.points,{...}) end; function fs:ClearAllPoints() self.points={} end; function fs:SetWidth() end; function fs:SetHeight() end; function fs:SetJustifyH() end; function fs:SetJustifyV() end; function fs:SetTextColor(r,g,b,a) self.tc={r,g,b,a} end; function fs.SetShadowOffset() end; function fs:GetStringWidth() return 40 end; function fs:GetFont() return "Fonts\\FRIZQT__.TTF" end; function fs:SetFont(f,size,flags) self.font={f,size,flags} end; return fs end
   function o:GetFontString() local f={}; function f:SetFont() end; function f:SetPoint() end; function f:SetTextColor() end; return f end
   function o:SetStatusBarTexture() end
   function o:SetStatusBarColor() end
@@ -85,6 +85,7 @@ dofile("MainWindow.lua");
 dofile("LootWindow.lua");
 dofile("MasterLootUI.lua");
 dofile("RaiderLootUI.lua");
+dofile("Minimap.lua");
 local Z = ZugLoot;
 Z.MainWindow.Build();
 Z.MainWindow.Show("sheet");
@@ -517,6 +518,13 @@ assert(string.find(act, "Molten Core", 1, true), "active raid name, got: " .. to
 assert(string.find(act, "started 2024", 1, true), "active raid start, got: " .. tostring(act));
 assert(not string.find(act, "MOCK-RAID-1", 1, true), "ID stays on sub-line, got: " .. tostring(act));
 print("header invariant OK");
+-- brand uses the bundled fantasy face (falls back clean without it).
+assert(Z.MainWindow.brandFS ~= nil and Z.MainWindow.brandFS.txt == "ZUGLOOT",
+  "brand text");
+assert(Z.MainWindow.brandFS.font ~= nil
+  and Z.MainWindow.brandFS.font[1] == ZugLoot.Fonts.DISPLAY,
+  "brand uses the bundled display face, got: "
+  .. tostring(Z.MainWindow.brandFS.font and Z.MainWindow.brandFS.font[1]));
 -- header buttons: Reset rolls + Get sheet + Import + File exist exactly
 -- once each (Setup holds no duplicates). Get sheet hides solo/with sheet.
 local hb = Z.MainWindow.DebugHeaderButtons();
@@ -682,4 +690,27 @@ Z.RaiderLootUI.OnEvent("CANCEL_LOOT_ROLL", 7);
 assert(Z.RaiderLootUI.groupRollID == nil, "cancel clears the roll");
 RollOnLoot = nil; GetLootRollItemLink = nil;
 print("roll window OK");
+-- Minimap ZL badge: ONE prerendered image texture (feathered disc +
+-- Griffy gold ZL + halo, centered by measured bbox in Media/) — no
+-- FontStrings, so nothing can drift. Plus the gold tracking ring.
+Minimap = newObj("Frame");
+local mmBtn = Z.Minimap.Build();
+assert(mmBtn ~= nil, "minimap button built");
+assert(mmBtn.badge ~= nil, "badge texture built");
+assert(mmBtn.badge.tex == Z.Minimap.BADGE_IMAGE, "badge uses the media art");
+assert(mmBtn.badge.w == Z.Minimap.BADGE_SIZE
+  and mmBtn.badge.h == Z.Minimap.BADGE_SIZE, "badge sized");
+assert(mmBtn.badgeLabel == nil and mmBtn.badgeGlows == nil,
+  "no FontStrings: image-only badge");
+local function ptCenter(tex)
+  for _, p in ipairs(tex.points or {}) do
+    if p[1] == "CENTER" then return p[4], p[5] end -- point, rel, x, y
+  end
+  return nil, nil
+end
+local bbx, bby = ptCenter(mmBtn.badge);
+assert(bbx == 0 and bby == 0, "badge dead-centered on the button");
+assert(mmBtn:GetScript("OnClick"), "badge click wired");
+assert(mmBtn:GetScript("OnEnter"), "badge hover wired");
+print("minimap ZL badge OK");
 print("MOCK UI RUN OK");

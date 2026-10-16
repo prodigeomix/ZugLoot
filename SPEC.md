@@ -191,9 +191,15 @@ Sheet = {
   Setup holds options only (no duplicate import/clear buttons). (`SRView`/
   `VersionGrid` standalone frames retired into tabs; their modules keep
   pure logic + slash commands. DropLog has no tab: `Show()` prints.)
-- Minimap die button (`Minimap.lua`, `INV_Misc_Dice_02` on the classic
-  tracking-ring look): click toggles the main window, hover shows
-  version/raid/role, drag repositions (angle persisted per character).
+- Minimap ZL badge (`Minimap.lua`, `Media/ZL-Badge.tga` — one
+  prerendered image: feathered black disc + Griffy gold `ZL` + halo,
+  ink centered by measured bbox at bake time; no FontStrings, so client
+  font/anchor drift can't move the letters): click toggles the main
+  window, hover shows version/raid/role, drag repositions (angle
+  persisted per character). Classic tracking ring tinted gold on top.
+- **Brand**: the `ZUGLOOT` header uses the same bundled Griffy face
+  (`Z.Fonts.DISPLAY`, pcall-guarded with template-font fallback), gold
+  on the dark header — badge and window read as one identity.
 - **Sheet tab**, one card per item in **3 even columns** (row-major flow,
   single shared scroll body — columns scroll together; card styling
   unchanged): SR rollers in **two columns** inside each card, drop count as

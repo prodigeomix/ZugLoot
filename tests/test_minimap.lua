@@ -1,5 +1,5 @@
 -- tests/test_minimap.lua
--- Minimap die button: pure position math + tooltip lines + persisted
+-- Minimap ZL badge button: pure position math + tooltip lines + persisted
 -- angle. No frame APIs needed (Build is client-only, nil-guarded).
 local T = { pass = 0, fail = 0, errors = {} }
 
@@ -56,10 +56,14 @@ ZugLoot.DB.sheet = { meta = { raidID = "R1", raidName = "Molten Core" } }
 local lines2 = MM.TipLines()
 eq(lines2[2], "Molten Core", "raid name line")
 
--- 5. Build no-ops headless (no CreateFrame), icon is the die.
+-- 5. Build no-ops headless (no CreateFrame); the badge is one
+-- prerendered image (no FontStrings, no drift).
 eq(MM.Build(), nil, "headless build is nil-safe")
-eq(MM.ICON, "Interface\\Icons\\INV_Misc_Dice_01", "die icon (stock 1.12)")
-eq(MM.ICON_HIRES, "Interface\\AddOns\\LootBlare\\Dice", "hi-res dice override")
+eq(MM.BADGE_IMAGE,
+  "Interface\\AddOns\\ZugLoot\\Media\\ZL-Badge.tga",
+  "prerendered badge from Media")
+eq(MM.BADGE_SIZE, 32, "badge fills the button")
+ok(MM.ICON == nil and MM.ICON_HIRES == nil, "no stock icon: media badge only")
 ok(MM.button == nil, "no button headless")
 
 return T

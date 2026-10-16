@@ -1,5 +1,5 @@
 -- ZugLoot/Minimap.lua
--- Minimap button (die icon): left-click toggles the main window, hover
+-- Minimap button (ZL badge image): left-click toggles the main window, hover
 -- shows a status tooltip (raid, sheet state, role). Draggable around the
 -- minimap edge (position persisted per character). In-game only; pure
 -- position math is headless-testable (M.AnglePos).
@@ -8,8 +8,10 @@ local Z = ZugLoot
 local M = {}
 Z.Minimap = M
 
-M.ICON = "Interface\\Icons\\INV_Misc_Dice_01"
-M.ICON_HIRES = "Interface\\AddOns\\LootBlare\\Dice"
+M.BADGE_IMAGE = "Interface\\AddOns\\ZugLoot\\Media\\ZL-Badge.tga"
+M.BADGE_SIZE = 32 -- prerendered badge (feathered disc + Griffy gold ZL
+-- + halo, ink centered by measured bbox in Media/); single texture,
+-- no FontStrings — immune to client font/anchor drift
 M.BTN_SIZE = 32
 M.RADIUS = 80
 
@@ -94,29 +96,25 @@ function M.Build()
   if b.RegisterForClicks then
     pcall(b.RegisterForClicks, b, "LeftButtonUp", "RightButtonUp")
   end
-  -- Big die filling the button: full-bleed ARTWORK icon (no shrinking
-  -- BACKGROUND layer, no aggressive crop) + the classic tracking ring
-  -- on top for the minimap-button look.
-  local icon = b:CreateTexture(nil, "BACKGROUND")
-  icon:SetWidth(20) icon:SetHeight(20)
-  icon:SetPoint("CENTER", b, "CENTER", 0, 0)
-  if icon.SetTexture then icon:SetTexture(M.ICON) end
-  if M.ICON_HIRES and icon.SetTexture and icon.GetTexture then
-    -- Hi-res override only when it resolves (missing BLP would blank us).
-    local okCur = pcall(icon.GetTexture, icon)
-    if okCur then
-      pcall(icon.SetTexture, icon, M.ICON_HIRES)
-      local okHi, cur = pcall(icon.GetTexture, icon)
-      if not (okHi and cur and cur ~= "") then
-        pcall(icon.SetTexture, icon, M.ICON)
-      end
-    end
-  end
+  -- ZL badge: ONE prerendered image (feathered disc + Griffy gold ZL
+  -- + halo, Media/ZL-Badge.tga). No FontStrings: the client only
+  -- places a texture, so font loading, line-box anchoring, and ring
+  -- offsets can never drift the letters again.
+  local badge = b:CreateTexture(nil, "BACKGROUND")
+  badge:SetWidth(M.BADGE_SIZE) badge:SetHeight(M.BADGE_SIZE)
+  badge:SetPoint("CENTER", b, "CENTER", 0, 0)
+  if badge.SetTexture then badge:SetTexture(M.BADGE_IMAGE) end
+  b.badge = badge
   local ring = b:CreateTexture(nil, "OVERLAY")
   ring:SetWidth(54) ring:SetHeight(54)
   ring:SetPoint("TOPLEFT", b, "TOPLEFT", 0, 0)
   if ring.SetTexture then
     ring:SetTexture("Interface\\Minimap\\MiniMap-TrackingBorder")
+  end
+  if ring.SetVertexColor then
+    -- Gold-tinted ring: ties the border to the letters (white ring +
+    -- gold letters would read as two separate marks). Addon gold.
+    ring:SetVertexColor(1, 0.82, 0, 1)
   end
   b:EnableMouse(true)
   b:RegisterForDrag("LeftButton")

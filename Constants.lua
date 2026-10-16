@@ -40,3 +40,10 @@ ZugLoot.Limits = {
   -- them. Default mirrors the client default threshold (uncommon).
   LOOT_THRESHOLD_DEFAULT = 2,
 }
+
+-- Bundled display faces (Media/, OFL). Client loads them by addon path;
+-- pcall all SetFont call sites (a missing file must fall back clean).
+ZugLoot.Fonts = {
+  -- Griffy: fantasy display face — minimap ZL badge + main-window brand.
+  DISPLAY = "Interface\\AddOns\\ZugLoot\\Media\\Griffy-Regular.ttf",
+}

@@ -1604,6 +1604,12 @@ function M.Build()
   local brand = FS(f, "GameFontNormalLarge", "ZUGLOOT")
   brand:SetPoint("TOPLEFT", f, "TOPLEFT", 16, -12)
   brand:SetTextColor(PAL.gold[1], PAL.gold[2], PAL.gold[3])
+  -- Bundled fantasy face (Media/Griffy): pcall-guarded, falls back to
+  -- the template font when the file is missing.
+  if brand.SetFont and Z.Fonts and Z.Fonts.DISPLAY then
+    pcall(brand.SetFont, brand, Z.Fonts.DISPLAY, 20)
+  end
+  M.brandFS = brand
   local ver = FS(f, "GameFontNormalSmall", "v" .. tostring(Z.VERSION))
   ver:SetPoint("LEFT", brand, "RIGHT", 8, 0)
   ver:SetTextColor(PAL.mute[1], PAL.mute[2], PAL.mute[3])
