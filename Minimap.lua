@@ -72,7 +72,10 @@ function M.ShowTip(btn)
     GameTooltip:SetText(lines[1], 1, 0.82, 0)
   end
   if GameTooltip.AddLine then
-    for i = 2, #lines do
+    -- 5.0-safe: no # operator (parse-time error on the 1.12 client).
+    local n = 0
+    if Z.Util and Z.Util.ArrayCount then n = Z.Util.ArrayCount(lines) end
+    for i = 2, n do
       GameTooltip:AddLine(lines[i], 1, 1, 1, 1)
     end
   end

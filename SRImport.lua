@@ -9,6 +9,9 @@ Z.SRImport = M
 local pasteFrame = nil
 local editBox = nil
 
+-- 5.0 (client) uses string.gfind, 5.1+ uses string.gmatch.
+local Gfind = string.gmatch or string.gfind
+
 -- Serialize normalized sheet to a compact string for SHEET broadcast.
 -- Format: line format (lossless for our model) — no JSON lib needed in client.
 -- First line is META (raid identity for the receiver's header/archive):
@@ -85,7 +88,7 @@ function M.ExtractMeta(text)
     or string.match(text, "\nMETA;([^\n]*)")
   if not metaLine then return nil, text end
   local meta = {}
-  for k, v in string.gmatch(metaLine, "([%w]+)=([^,]*),?") do
+  for k, v in Gfind(metaLine, "([%w]+)=([^,]*),?") do
     if k == "raidID" then meta.raidID = munesc(v)
     elseif k == "name" then meta.raidName = munesc(v)
     elseif k == "by" then meta.importedBy = munesc(v)

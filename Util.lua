@@ -19,6 +19,14 @@ function M.ArrayCount(t)
   return n
 end
 
+-- Modulo on BOTH Lua 5.0 (client, no % operator) and 5.1+ (no math.mod):
+-- the one arithmetic helper the whole addon shares. n >= 0 everywhere
+-- we use it (indices, base64, roster wrap).
+function M.Mod(n, d)
+  if math.mod then return math.mod(n, d) end
+  return n - math.floor(n / d) * d
+end
+
 function M.TableCount(t)
   local n = 0
   if type(t) ~= "table" then return 0 end
@@ -79,9 +87,10 @@ function M.Base64Decode(data)
     if string.sub(data, i + 3, i + 3) == "=" then pad = pad + 1 end
     if string.sub(data, i + 2, i + 2) == "=" then pad = pad + 1 end
     local n = c1 * 262144 + c2 * 4096 + c3 * 64 + c4
-    local b1 = math.floor(n / 65536) % 256
-    local b2 = math.floor(n / 256) % 256
-    local b3 = n % 256
+    -- 5.0 has no % operator and 5.1+ has no math.mod: Util.Mod both.
+    local b1 = M.Mod(math.floor(n / 65536), 256)
+    local b2 = M.Mod(math.floor(n / 256), 256)
+    local b3 = M.Mod(n, 256)
     table.insert(out, string.char(b1))
     if pad < 2 then table.insert(out, string.char(b2)) end
     if pad < 1 then table.insert(out, string.char(b3)) end

@@ -2,6 +2,13 @@
 -- PURE roll resolution. No WoW API. Shared by live sessions, /zl sim, tests.
 local M = {}
 
+-- 5.0-safe modulo (no % operator on the 1.12 client; math.mod is gone
+-- on 5.1+). n >= 0 everywhere we use it (roster wrap).
+local function mod(n, d)
+  if math.mod then return math.mod(n, d) end
+  return n - math.floor(n / d) * d
+end
+
 local function count(t)
   local n = 0
   if type(t) == "table" then while t[n + 1] ~= nil do n = n + 1 end end
@@ -416,7 +423,7 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
   -- Wrap on small rosters (names stay unique via suffix).
   local n = 1
   while count(rolls) < total and count(players) > 0 do
-    local nm = players[((n - 1) % count(players)) + 1]
+    local nm = players[mod(n - 1, count(players)) + 1] -- 5.0: no % op
     local tag = nm
     if skip[nm] then tag = nm .. n end
     skip[tag] = true

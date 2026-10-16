@@ -660,8 +660,15 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
   max-not-sum SR+, winner/tie/miss-roll/one-win-per-item/2x, file-example parse.
 - In game: `/zl sim` + `/zl simboss` exercise the same `Resolver`; import a sheet
   via paste and via `Load from File`; check version grid with a second client.
-- Lua 5.0 compliance: skeleton avoids post-5.0 syntax; keep it that way
-  (no `~`, `//`, `goto`, integer division; use `math.floor`).
+- Lua 5.0 compliance (the 1.12 client runs 5.0; the suite runs 5.5, which
+  accepts everything 5.0 rejects): no `#`, no `%` operator (use
+  `Util.Mod` / the local `mod` in standalone files like Resolver),
+  no `//`, no `goto`, no bitwise ops, no `table.unpack`, no bare
+  `string.gmatch` (use the `string.gmatch or string.gfind` idiom).
+  Enforced by the `lua50 gate` in `tests/run_tests.lua` — a static scan
+  that fails the suite on any hit. Background: a `#` in Core.lua once
+  killed `/zl` entirely (whole-file parse failure) while the addon still
+  showed in the addon list.
 
 ## 8. Requirements traceability
 

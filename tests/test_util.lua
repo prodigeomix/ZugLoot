@@ -30,4 +30,10 @@ ok(s ~= "?" and string.find(s, "2024"), "epoch formats, got: " .. tostring(s))
 local s2 = Util.FormatTime(1720000000, "%Y")
 eq(s2, "2024", "custom format")
 
+-- Util.Mod: the shared 5.0/5.1+ modulo (no % op on client, no math.mod here).
+eq(Util.Mod(7, 3), 1, "7 mod 3")
+eq(Util.Mod(256, 256), 0, "256 mod 256")
+eq(Util.Mod(0, 5), 0, "0 mod 5")
+eq(Util.Mod(65536, 256), 0, "base64 row wraps")
+
 return T

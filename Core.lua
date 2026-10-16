@@ -37,7 +37,8 @@ end
 
 function Z.PrintHelp()
   local lines = Z.HelpLines()
-  for i = 1, #lines do Z.Print(lines[i]) end
+  -- 5.0-safe: no # operator (parse-time error on the 1.12 client).
+  for i = 1, Z.Util.ArrayCount(lines) do Z.Print(lines[i]) end
   return lines
 end
 

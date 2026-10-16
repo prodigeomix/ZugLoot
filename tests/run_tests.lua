@@ -68,6 +68,80 @@ for _, f in ipairs(files) do
   else print("parse ok: " .. f) end
 end
 
+-- Lua 5.0 gate (the 1.12 client runs 5.0; this suite runs 5.5, which
+-- accepts everything 5.0 rejects). Static scan of shipped files with
+-- comments and string literals stripped: flags # (length op), % (modulo
+-- op), // (int division), goto / ::labels::, bitwise ops, table.unpack,
+-- and bare string.gmatch (5.0 only has string.gfind). A single hit is a
+-- whole-file parse/runtime failure on the client — e.g. `#` in Core.lua
+-- once killed /zl while the addon still showed in the addon list.
+local function stripLua(src)
+  local out, i, n = {}, 1, string.len(src)
+  while i <= n do
+    local c = string.sub(src, i, i)
+    local two = string.sub(src, i, i + 1)
+    if two == "--" then
+      if string.sub(src, i, i + 3) == "--[[" then
+        local e = string.find(src, "]]", i + 4, true)
+        i = (e and (e + 2)) or (n + 1)
+      else
+        local e = string.find(src, "\n", i, true)
+        i = (e and (e + 1)) or (n + 1)
+      end
+      table.insert(out, "\n")
+    elseif c == '"' or c == "'" then
+      local j = i + 1
+      while j <= n do
+        local d = string.sub(src, j, j)
+        if d == "\\" then j = j + 2
+        elseif d == c then break
+        else j = j + 1 end
+      end
+      i = j + 1
+      table.insert(out, '""')
+    else
+      table.insert(out, c)
+      i = i + 1
+    end
+  end
+  return table.concat(out)
+end
+local fifty = {
+  { pat = "#[%a_({\"']", msg = "# length operator" },
+  { pat = "[^%s~=<>]%s+%%%s+[^%s=]", msg = "% modulo operator (use math.mod)" },
+  { pat = "//", msg = "// integer division" },
+  { pat = "%f[%a]goto%f[%A]", msg = "goto" },
+  { pat = "::", msg = "::label::" },
+  { pat = "table%.unpack", msg = "table.unpack (5.0: global unpack)" },
+  -- NOTE: `string.gmatch or string.gfind` fallback idiom is SAFE and
+  -- allowed; only a bare call is flagged. The pattern below requires
+  -- the match NOT to be followed by ` or `.
+  { pat = "string%.gmatch%f[^%s]", msg = "bare string.gmatch (5.0: string.gfind)" },
+  { pat = "%f[%A]~%f[%A]", msg = "~ bitwise op" },
+  { pat = "<<", msg = "<< bitwise op" },
+  { pat = ">>", msg = ">> bitwise op" },
+}
+local gateFail = 0
+for _, f in ipairs(files) do
+  local fh = io.open(f, "r")
+  if not fh then print("GATE FAIL " .. f .. ": unreadable") gateFail = gateFail + 1
+  else
+    local code = stripLua(fh:read("*a"))
+    fh:close()
+    for _, g in ipairs(fifty) do
+      local at = string.find(code, g.pat)
+      if at then
+        local line = 1
+        for _ in string.gmatch(string.sub(code, 1, at), "\n") do line = line + 1 end
+        print("GATE FAIL " .. f .. ":" .. line .. ": " .. g.msg)
+        gateFail = gateFail + 1
+      end
+    end
+  end
+end
+if gateFail == 0 then print("lua50 gate: clean") end
+totalFail = totalFail + gateFail
+
 print(string.format("TOTAL: %d passed, %d failed", totalPass, totalFail))
 if totalFail > 0 then os.exit(1) end
 print("All tests passed.")
