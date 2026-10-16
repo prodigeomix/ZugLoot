@@ -138,11 +138,12 @@ Sheet = {
   outside the addon. Chat follows the raid-roll style (Pysanka parity):
   one `Name: roll (TYPE)` line per roller (already-won tagged inline),
   then `Name wins Item.` on award.
-- Raid-roll (`/zl rr <link>`, loot ... `Raid-roll` choice — RollFor +
+- Raid-roll (loot `Raid roll` button — RollFor +
   Pysanka parity): the raid is announced numbered (`[1]:Name, ...`,
   chunked), the ML rolls 1-N with `/roll`, the number IS the winner
   (frozen roster, so leavers/joiners mid-roll change nothing; only the
-  ML's 1-N roll counts, first number only). Finish/award reuse the
+  ML's 1-N roll counts, first number only). The item goes straight out
+  on the number — no award window. Finish/award reuse the
   normal path, including the award line.
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; the resolver excludes them from later SR contests for that itemID.
@@ -238,7 +239,7 @@ Sheet = {
 ### 4.2 Loot console (`MasterLootUI.lua`) — RollFor-like, universal
 
 - `/zl` shows console: loot list (current loot window items w/ SR badges + counts).
-Rolls start from the loot-window Roll button only. Announce via
+Rolls start from the loot-window Roll / Raid roll buttons only. Announce via
 RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message.
 Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`) while the roll
 window is open, first-roll-only per player; over-rolls flagged, ties
@@ -358,18 +359,19 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   choose / close). (`HR` red for hard reserves, `SR` / `SR:n` orange for
   soft reserves). Nothing auto-starts — clicking a row opens the **row
   detail**: direct **Award** when exactly one SR/HR holder exists (no
-  rolling needed), **...** for a real dropdown (RollFor parity: blue-hover
-  rows — Roll, plus Award per reserver, plus one row per raid class like
-  `Warrior (4) >`): hovering (or clicking) a class row pops a side submenu
+  rolling needed), **Roll** + **Raid roll** as their own buttons (never
+  inside `...`; raid roll numbers the raid and the ML's number wins the
+  item straight out, no award window), **...** for a real dropdown
+  (RollFor parity: blue-hover rows — Award per reserver, plus one row
+  per raid class like `Warrior (4) >`): hovering (or clicking) a class row pops a side submenu
   with that class's players, so the whole raid is one hover away instead
   of a flat 40-name list. Every submenu name awards directly, even before
   a roll, and nobody already listed above repeats inside a group.
-  Mid-roll the same menu offers **Raid-roll instead** (ends the open roll,
-  raid-rolls the item); the award window keeps **Roll again** and
-  **Raid-roll instead** next to the awards.
+  The award window keeps **Roll again** and **Raid roll** as bar buttons
+  next to the winners.
   **Close** to dismiss and keep working the overview. `/zl cr`
   returns the item to open.
-- **Award menu** (RollFor finish-popup style): on roll completion nothing is
+- **Award menu** (RollFor finish-popup style): on SR-roll completion nothing is
   auto-awarded — the ML gets winners (ranked, roll-typed) + SR/MS/OS/TMOG
   loser groups + a **class-sorted candidate roster** (sheet + rollers + raid
   roster, winners starred like RollFor's candidate grid), and picks who gets

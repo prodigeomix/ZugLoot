@@ -144,7 +144,8 @@ local tName = LW.RowText(LW.items[1])
 ok(string.find(tName, "Sulfuras", 1, true) ~= nil, "row text shows item name")
 ok(string.find(tName, "|Hitem:", 1, true) == nil, "row text hides the raw link")
 
--- 3. Row detail, single holder: Award direct, ... lists, Close dismisses.
+-- 3. Row detail, single holder: Award direct, Roll + Raid roll buttons,
+-- ... lists, Close dismisses.
 LW.SetItems({
   { itemID = 1002, link = "item:1002", quality = 4, badge = "SR" },
   { itemID = 1001, link = "item:1001", quality = 4, badge = "SR:2" },
@@ -155,8 +156,10 @@ eq(d.single, true, "single holder flagged")
 eq(d.rollers[1], "Solo", "single holder named")
 local acts = LW.DetailActions(d)
 eq(acts[1].id, "award", "Award first on single")
-eq(acts[2].id, "more", "... second")
-eq(acts[3].id, "close", "Close last")
+eq(acts[2].id, "roll", "Roll second")
+eq(acts[3].id, "raidroll", "Raid roll third")
+eq(acts[4].id, "more", "... fourth")
+eq(acts[5].id, "close", "Close last")
 -- direct award: won mark + row GONE + detail closed, no session.
 eq(LW.doAction(1002, "award"), "awarded Solo", "direct award returns")
 ok(SRData.HasWon(sheet, 1002, "Solo"), "direct award won-marks")
@@ -164,11 +167,13 @@ ok(LW.Find(1002) == nil, "awarded row left the list")
 ok(LW.Find(1001) ~= nil, "unawarded row still listed")
 ok(LW.detail == nil, "detail closed after award")
 ok(ML.session == nil, "direct award starts no session")
--- multi holder: no direct Award, ... offers the choice list.
+-- multi holder: no direct Award; Roll + Raid roll buttons, then ... offers the choice list.
 local d2 = LW.OpenDetail(1001)
 eq(d2.single, false, "multi holder not single")
 local acts2 = LW.DetailActions(d2)
-eq(acts2[1].id, "more", "multi starts at ...")
+eq(acts2[1].id, "roll", "multi starts at Roll")
+eq(acts2[2].id, "raidroll", "Raid roll second")
+eq(acts2[3].id, "more", "... third")
 eq(LW.doAction(1001, "award"), "needs choice (...)", "multi award refused")
 local more = LW.doAction(1001, "more")
 ok(type(more) == "table" and #more >= 3, "... lists choices")
@@ -227,14 +232,14 @@ ok(#lines == 3, "three detail lines")
 ok(string.find(lines[1], "SR:2", 1, true) ~= nil, "title carries badge")
 ok(string.find(lines[2], "Aaa", 1, true) ~= nil, "rollers listed")
 local choices = LW.MoreChoices()
--- roll + raid-roll + two reserve awards + the class-grouped REST of the
+-- two reserve awards + the class-grouped REST of the
 -- roster (Solo, reserved on 1002) for direct pre-roll awards.
-eq(#choices, 5, "roll + raid-roll + two awards + class group")
-eq(choices[1].id, "roll", "first choice is SR roll")
-eq(choices[2].id, "raidroll", "second choice is raid-roll")
-eq(choices[4].name, "Bbb", "award row carries the name")
-eq(choices[5].id, "class", "rest of roster groups by class")
-eq(choices[5].members[1].name, "Solo", "group member awards directly")
+-- (Roll initiation lives on the bar buttons, never in the menu.)
+eq(#choices, 3, "two awards + class group")
+eq(choices[1].name, "Aaa", "first award row named")
+eq(choices[2].name, "Bbb", "award row carries the name")
+eq(choices[3].id, "class", "rest of roster groups by class")
+eq(choices[3].members[1].name, "Solo", "group member awards directly")
 -- Class groups never duplicate the labeled top-level rows.
 local topSeen = {}
 for i = 1, #choices do
@@ -303,10 +308,12 @@ eq(LW.RollRangeText({ roll = 90, rollType = "SR" }), "90/100", "kind cap fallbac
 local sorted = LW.SortedDetailRolls()
 eq(sorted[1].rollType, "SR", "SR first")
 eq(sorted[#sorted].rollType, "TMOG", "TMOG last")
--- Detail actions while rolling: Finish / Cancel / Close (no Award/...).
+-- Detail actions: pick offers Award (single) + Roll + Raid roll
+-- buttons + ...; rolling offers Finish / Cancel / Raid roll / Close.
 local racts = LW.DetailActions()
 eq(racts[1].id, "finish", "rolling offers Finish")
 eq(racts[2].id, "cancel", "rolling offers Cancel")
+eq(racts[3].id, "raidroll", "rolling offers Raid roll instead")
 -- Rolling again on the open rolling window is refused (a live roll
 -- blocks any fresh start until it finishes or closes).
 eq(LW.doAction(1001, "roll"), "roll failed", "double roll refused")
@@ -335,7 +342,8 @@ for i = 1, #LW.MoreChoices() do
   end
 end
 eq(dupName, nil, "award ... shows nobody twice")
--- Award-phase ... keeps Roll again + Raid-roll instead on top.
+-- Award-phase ... lists rollers/winners only (re-rolls live on the
+-- bar buttons); MoreRollControls stays the headless mirror of them.
 local arc = LW.MoreRollControls()
 eq(#arc, 2, "award ... keeps roll controls")
 eq(arc[1].id, "roll", "roll again first")
@@ -368,17 +376,22 @@ eq(LW.doAction(1001, "award-name", "Tmog"), "awarded Tmog", "tmog kind award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tmog"), "tmog winner marked")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "no spillover mark")
 
--- 6c. Raid-roll instead, mid-roll and post-roll: old roll ends, the
--- raid-roll starts clean on the same window.
+-- 6c. Raid roll button, mid-roll: old roll ends, the
+-- raid-roll starts clean on the same window. doAction("raidroll") stays
+-- (bar-button entry); the ... menu no longer carries roll rows.
 ZugLoot.DB = { sheet = makeSheet() }
 LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
 LW.OpenDetail(1001)
 LW.doAction(1001, "roll")
 ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+-- ... carries awardable names only now (buttons own roll initiation).
 local midCh = LW.MoreChoices()
 local midRaid = false
 for i = 1, #midCh do if midCh[i].id == "raidroll" then midRaid = true break end end
-ok(midRaid, "mid-roll ... offers raid-roll")
+ok(not midRaid, "... no longer offers raid-roll")
+local arc = LW.MoreRollControls()
+eq(#arc, 1, "mid-roll controls mirror the raid button")
+eq(arc[1].id, "raidroll", "raid-roll control")
 local realRaidRoll = ML.StartRaidRoll
 ML.StartRaidRoll = function(id)
   ML.roll = { itemID = id, mode = "RAIDROLL", rolls = {},

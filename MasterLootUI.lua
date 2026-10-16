@@ -82,8 +82,8 @@ end
 -- Announce: "Raid rolling <link>..." + one "[i]:Name" line per raider
 -- (chunked to chat line limits). Intake: ONLY the ML's own system roll
 -- in range 1-N counts (everyone else's chat rolls are ignored); the
--- number indexes the frozen roster. Finish/award reuse the normal path
--- (winner menu with the single raid-roll winner).
+-- number indexes the frozen roster. Finish distributes at once
+-- (the item goes straight out, no award window).
 function M.StartRaidRoll(itemID)
   if not M.RequireML() then return end
   itemID = Z.Util.ItemID(itemID)
@@ -172,7 +172,8 @@ function M.IntakeChatRoll(line)
   if not player then return end
   rv, minR, maxR = tonumber(rv), tonumber(minR), tonumber(maxR)
   -- Raid-roll: ONLY the ML's own number in range 1-N counts; it picks
-  -- the frozen roster winner and the roll ends at once.
+  -- the frozen roster winner and the item goes straight out at once
+  -- (FinishRoll awards directly, no award window).
   if roll.mode == "RAIDROLL" then
     local n = roll.n or Z.Util.ArrayCount(roll.roster or {})
     if roll.done or minR ~= 1 or maxR ~= n then return end
@@ -332,6 +333,40 @@ function M.FinishRoll(itemID)
   local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} },
     roll.itemID, roll.rolls, { cap = Z.Caps.SR })
   M.AnnounceResult(roll, res)
+  -- Raid-roll distributes at once: the ML's number IS the winner, so
+  -- the item goes straight out (no award window). Falls back to the
+  -- award window when there is no winner (ties resolve live to one
+  -- winner, so this is the no-rolls case) or the corpse handoff fails
+  -- (ML retries the award from the still-open window).
+  if roll.mode == "RAIDROLL" then
+    local winners = res.winners or {}
+    if Z.Util.ArrayCount(winners) == 0
+        or Z.Util.ArrayCount(res.tied or {}) > 0 then
+      -- No award: show the result (announced above) on the window so
+      -- the ML sees why nothing went out, then offer re-roll/close.
+      local data = M.AwardMenu(roll.itemID, roll.itemLink, res)
+      if Z.LootWindow and Z.LootWindow.DetailOnFinish then
+        Z.LootWindow.DetailOnFinish(roll.itemID, data)
+      end
+      if Z.Util.ArrayCount(res.tied) > 0 then
+        Z.Print("Tie at top — tied players re-roll.")
+        return "tie"
+      end
+      return "finished"
+    end
+    local nm = winners[1].name
+    local row = Z.LootWindow and Z.LootWindow.Find(roll.itemID) or nil
+    local source = (row and row.source == "sim") and "sim" or "raid"
+    local ok = M.Award(roll.itemID, nm, source, M.AwardInvented(roll.itemID))
+    if ok then return "awarded " .. tostring(nm) end
+    -- Handoff failed (non-candidate, walked away, dead call): the row
+    -- and window stay up with the winner on it for a manual retry.
+    local data = M.AwardMenu(roll.itemID, roll.itemLink, res)
+    if Z.LootWindow and Z.LootWindow.DetailOnFinish then
+      Z.LootWindow.DetailOnFinish(roll.itemID, data)
+    end
+    return "finished"
+  end
   local data = M.AwardMenu(roll.itemID, roll.itemLink, res)
   if Z.LootWindow and Z.LootWindow.DetailOnFinish then
     Z.LootWindow.DetailOnFinish(roll.itemID, data)
@@ -975,17 +1010,26 @@ function M.Award(itemID, winnerName, source, invented)
   -- nothing to hand). Block early with a log and keep the row — the ML
   -- re-loots and awards from the still-open window. Sim rows and
   -- headless awards have no corpse slot: always apply.
-  if source ~= "sim" and not M.lootOpen
-      and Z.LootWindow and Z.LootWindow.Find(itemID) then
+  -- Headless note: tests drive the award path with an open detail but
+  -- no corpse session (lootOpen false, no slot APIs); only block when
+  -- the window holds a LIVE corpse row for this item (slot ~= nil).
+  -- Killed-corpse slots are nil, so headless/raid-roll awards apply.
+  local row0 = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
+  local liveRow = row0 and row0.slot ~= nil
+  if source ~= "sim" and not M.lootOpen and liveRow then
     Z.Print("Not awarding " .. tostring(winnerName)
       .. ": no loot open. Loot the corpse again, then award.")
     return false
   end
-  -- Loot the corpse slot FIRST (the only path that moves the item): a
-  -- refused loot call (non-candidate, unresolvable slot) aborts the
-  -- award and keeps the row. Sim rows have no slot: skip to the apply.
-  if source ~= "sim" then
-    if M.LootCorpseSlot(link, itemID, winnerName) == false then return false end
+  -- Sim rows and items with no tracked corpse slot skip the take
+  -- (sim queue, /rf rolls, headless award tests). Rows WITH a slot
+  -- need the take FIRST — EXCEPT headless: no slot APIs at all means
+  -- no call can land, and VerifySlot would read "gone" off an empty
+  -- corpse. Live always has the APIs, so live always takes.
+  if source ~= "sim" and row0 and row0.slot ~= nil
+      and GetNumLootItems and GetLootSlotLink then
+    local rc = M.LootCorpseSlot(link, itemID, winnerName)
+    if rc == false then return false end
   end
   if not Z.DB.sheet then Z.DB.sheet = Z.SRData.NewSheet() end
   source = source or "raid"

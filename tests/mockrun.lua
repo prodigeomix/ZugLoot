@@ -197,7 +197,9 @@ assert(Z.LootWindow.detail.phase == "award", "detail flips to award");
 Z.LootWindow.RefreshDetail();
 assert(Z.LootWindow.detailFrame.timerBar.hidden == true,
   "bar hides once the roll finishes");
--- two award buttons: primary (SR winner) + Award TMOG (kind winner).
+-- bar buttons: primary (SR winner) + Award TMOG (kind winner) + Roll
+-- again + Raid roll + ... — roll initiation lives on the bar, never
+-- in the ... menu.
 Z.LootWindow.detail.menu.perType = Z.LootWindow.detail.menu.perType or {};
 Z.LootWindow.detail.menu.perType.TMOG = { entry = { name = "SoloPlayer",
   rollType = "TMOG", effective = 15 }, tied = {} };
@@ -211,8 +213,31 @@ assert(string.find(df2.tmogB.label or "", "SoloPlayer", 1, true) ~= nil,
 Z.LootWindow.detail.menu.perType.TMOG = {};
 Z.LootWindow.RefreshDetail();
 assert(df2.tmogB.hidden == true, "Award TMOG hidden without a TMOG roll");
+assert(df2.rollB ~= nil, "Roll button built");
+assert(df2.raidB ~= nil, "Raid roll button built");
+assert(df2.rollB.hidden ~= true, "Roll visible on the award window");
+assert(df2.raidB.hidden ~= true, "Raid roll visible on the award window");
+assert(string.find(df2.rollB.label or "", "Roll again", 1, true) ~= nil,
+  "award Roll re-labels, got: " .. tostring(df2.rollB.label));
+assert(string.find(df2.raidB.label or "", "Raid roll", 1, true) ~= nil,
+  "raid button labeled, got: " .. tostring(df2.raidB.label));
+-- pick phase: Roll + Raid roll start buttons; rolling: Roll hides,
+-- Raid roll stays (switch mid-roll).
+Z.LootWindow.detail.phase = "pick";
+Z.LootWindow.detail.menu = nil;
+Z.LootWindow.RefreshDetail();
+assert(df2.rollB.hidden ~= true, "Roll visible pre-roll");
+assert(df2.raidB.hidden ~= true, "Raid roll visible pre-roll");
+assert(string.find(df2.rollB.label or "", "^Roll", 1, false) ~= nil
+  or string.find(df2.rollB.label or "", "Roll", 1, true) ~= nil,
+  "pick Roll labeled, got: " .. tostring(df2.rollB.label));
+Z.LootWindow.detail.phase = "rolling";
+Z.LootWindow.RefreshDetail();
+assert(df2.rollB.hidden == true, "Roll hidden mid-roll");
+assert(df2.raidB.hidden ~= true, "Raid roll stays mid-roll");
 -- award phase: same winner rows power the primary button.
 Z.LootWindow.detail.phase = "award";
+Z.LootWindow.detail.menu = menu;
 Z.LootWindow.RefreshDetail();
 local preActs = Z.LootWindow.DetailActions();
 assert(preActs[1].id == "award-name", "award primary is the top winner");
@@ -231,7 +256,7 @@ local function barBox(b)
   return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
 end
 local vis = {}
-for _, n in ipairs({ "awardB", "tmogB", "moreB" }) do
+for _, n in ipairs({ "awardB", "tmogB", "rollB", "raidB", "moreB" }) do
   local btn = df[n]
   if btn and btn.hidden ~= true then
     local box = barBox(btn)
@@ -279,9 +304,14 @@ assert(hasTopRight(lwX.points), "overview X anchored top-right");
 assert(hasTopRight(dfX.points), "detail X anchored top-right");
 print("top-right X buttons OK");
 -- ... dropdown builds under the mock API, rows clickable, closes cleanly.
+-- (Roll initiation lives on the bar buttons, never in the menu.)
 Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
 assert(Z.LootWindow.moreDropdown ~= nil, "more dropdown opened");
-assert(#Z.LootWindow.moreDropdown.rows >= 2, "dropdown rows painted");
+assert(#Z.LootWindow.moreDropdown.rows >= 1, "dropdown rows painted");
+for _, r in ipairs(Z.LootWindow.moreDropdown.rows) do
+  assert(r.choice and r.choice.id ~= "roll" and r.choice.id ~= "raidroll",
+    "menu carries awards only, got: " .. tostring(r.choice and r.choice.id));
+end
 -- Class-group side submenu: find a class row, hover it, the submenu
 -- pops to the side with that class's players (no flat 40-name list).
 local classRow = nil;

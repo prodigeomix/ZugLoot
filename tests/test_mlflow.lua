@@ -198,8 +198,8 @@ ok(ML.roll == nil, "... award ends the roll")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "... award won-marks")
 ok(LW.Find(1001) == nil, "awarded row gone")
 
--- 6. Raid-roll instead, from the award window: ends the old roll,
--- numbers the raid, the ML's number wins.
+-- 6. Raid roll button: ends the old roll, numbers the raid, the ML's
+-- number wins and the item goes straight out (no award window).
 resetHarness()
 GetNumRaidMembers = function() return 3 end
 GetRaidRosterInfo = function(i)
@@ -216,22 +216,25 @@ ML.OnLootOpened()
 LW.OpenDetail(1001)
 eq(LW.doAction(1001, "roll"), "rolling", "normal roll starts")
 ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
--- Raid-roll from the ... menu replaces it.
+-- Raid roll from its own button replaces it (... carries awards only).
 local ch = LW.MoreChoices()
 local hasRaid = false
 for i = 1, #ch do if ch[i].id == "raidroll" then hasRaid = true break end end
-ok(hasRaid, "... offers raid-roll mid-roll")
+ok(not hasRaid, "... no longer carries raid-roll")
+local acts6 = LW.DetailActions()
+local hasRaidBtn = false
+for i = 1, #acts6 do if acts6[i].id == "raidroll" then hasRaidBtn = true break end end
+ok(hasRaidBtn, "Raid roll is its own button")
 eq(LW.doAction(1001, "raidroll"), "rolling", "raid-roll replaces the roll")
 eq(ML.roll.mode, "RAIDROLL", "raid-roll mode live")
 eq(#ML.roll.rolls, 0, "old rolls wiped, not merged")
 eq(rolledRanges[1][2], 3, "ML rolls 1-N")
 ML.IntakeChatRoll("Tenshiy rolls 99 (1-3)") -- raider roll ignored
 ok(ML.roll ~= nil, "raider roll ignored")
-ML.IntakeChatRoll("Pysanka rolls 2 (1-3)") -- ML number resolves
+ML.IntakeChatRoll("Pysanka rolls 2 (1-3)") -- ML number resolves + awards
 ok(ML.roll == nil, "raid-roll number ends the roll")
-eq(LW.detail.phase, "award", "award view on the same window")
-eq(LW.detail.menu.winners[1].name, "Tenshiy", "number maps to the roster")
-ML.AwardChosen({ name = "Tenshiy", via = "winner" }, 1001)
+ok(LW.detail == nil, "raid-roll awards directly, window closed")
+ok(LW.Find(1001) == nil, "raid-roll winner takes the row")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tenshiy"), "raid-roll winner awarded")
 GetNumRaidMembers = function() return 0 end
 GetRaidRosterInfo = function() return nil end

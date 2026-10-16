@@ -844,7 +844,10 @@ end
 -- Clicking a row opens a small window for that item:
 --   Award        — direct award, only when exactly one SR/HR holder exists
 --                  (labels them, like RollFor's single-winner shortcut).
---   ... (More)   — full choice list: award anyone / initiate roll.
+--   Roll         — its own button: start the SR roll for this item.
+--   Raid roll    — its own button: number the raid, ML's number wins
+--                  and the item goes straight out (no award window).
+--   ... (More)   — award anyone directly (class-grouped roster).
 --   Close        — dismiss, keep working the overview.
 -- Headless it prints the same rows; the ML answers via doAction(...).
 
@@ -1233,11 +1236,12 @@ function M.DetailLines(d)
 end
 
 -- Detail actions (data) per phase.
--- pick:    Award (single holder only), ... (More), Close.
+-- pick:    Award (single holder only), Roll, Raid roll, ... (More), Close.
 -- rolling: Finish (resolve now, award on this window), Cancel (end the
---          roll, window back to pick), Close (ends the roll AND closes).
--- award:   Award <winner> per winner row, ... (anyone else, incl. Roll
---          again + Raid-roll instead), Close.
+--          roll, window back to pick), Raid roll (end the open roll and
+--          raid-roll the item instead), Close (ends roll AND closes).
+-- award:   Award <winner> per winner row, Roll again, Raid roll,
+--          ... (anyone else), Close.
 function M.DetailActions(d)
   d = d or M.detail
   local actions = {}
@@ -1245,12 +1249,14 @@ function M.DetailActions(d)
   if (d.phase or "pick") == "rolling" then
     table.insert(actions, { id = "finish", label = "Finish" })
     table.insert(actions, { id = "cancel", label = "Cancel" })
+    table.insert(actions, { id = "raidroll", label = "Raid roll" })
     table.insert(actions, { id = "close", label = "Close" })
     return actions
   end
   if (d.phase or "pick") == "award" and d.menu then
     -- Every kind winner gets its own row: overall winner(s) first, then
-    -- each contested kind not already listed. ... covers anyone else.
+    -- each contested kind not already listed. Roll / Raid roll sit on
+    -- the bar next to the winners; ... covers anyone else.
     local listed = {}
     for i = 1, Z.Util.ArrayCount(d.menu.winners or {}) do
       local w = d.menu.winners[i]
@@ -1268,6 +1274,8 @@ function M.DetailActions(d)
           name = trow.entry.name, via = via })
       end
     end
+    table.insert(actions, { id = "roll", label = "Roll again" })
+    table.insert(actions, { id = "raidroll", label = "Raid roll" })
     table.insert(actions, { id = "more", label = "..." })
     table.insert(actions, { id = "close", label = "Close" })
     return actions
@@ -1275,6 +1283,8 @@ function M.DetailActions(d)
   if d.single then
     table.insert(actions, { id = "award", label = "Award " .. PName(d.rollers[1]) })
   end
+  table.insert(actions, { id = "roll", label = "Roll" })
+  table.insert(actions, { id = "raidroll", label = "Raid roll" })
   table.insert(actions, { id = "more", label = "..." })
   table.insert(actions, { id = "close", label = "Close" })
   return actions
@@ -1337,7 +1347,7 @@ function M.doAction(itemID, actionID, extra)
     return "roll failed"
   end
   if actionID == "raidroll" then
-    -- Raid-roll instead: the open roll (if any) for this item ends
+    -- Raid roll button: the open roll (if any) for this item ends
     -- early FIRST (explicit user end), then the raid-roll starts on the
     -- same window. On success the old view wipes and flips to rolling;
     -- on refusal the window drops back to pick with the old rolls kept
@@ -1408,7 +1418,8 @@ function M.seedCountdown(d)
   d.countdownDur = dur or d.countdown
 end
 
--- The "..." (More) list: every awardable name + roll initiation.
+-- The "..." (More) list: every awardable name. Roll initiation lives on
+-- the bar buttons (Roll / Raid roll), never in the menu.
 -- Returns lines (headless) and stores them for the client frame.
 -- Pre-roll the roster groups by class (same groups the client shows as
 -- side submenus); every listed name awards directly, no roll needed.
@@ -1423,7 +1434,7 @@ function M.MoreLines(d)
     end
   end
   if (d.phase or "pick") == "pick" then
-    table.insert(lines, "  Roll: start a roll for this item")
+    -- Roll initiation lives on the bar buttons, not in this list.
     local seen = {}
     for i = 1, Z.Util.ArrayCount(d.rollers or {}) do
       if d.rollers[i] then seen[d.rollers[i]] = true end
@@ -1441,11 +1452,8 @@ function M.MoreLines(d)
       end
     end
   else
-    -- Award phase: Roll again + Raid-roll instead, mirroring the menu.
-    for i = 1, Z.Util.ArrayCount(M.MoreRollControls(d)) do
-      local c = M.MoreRollControls(d)[i]
-      if c then table.insert(lines, "  " .. tostring(c.label)) end
-    end
+    -- Award phase: the bar buttons (Roll again / Raid roll) own
+    -- re-rolls; this list stays awardable names only.
   end
   table.insert(lines, "  Anyone: /zl award <name> after the roll, or award now")
   return lines
@@ -1566,11 +1574,16 @@ function M.BuildDetailFrame()
   if rolls.Hide then rolls:Hide() end
   f.rolls = rolls
   -- Button bar pinned to the BOTTOM (never overlapping the roll list):
-  -- primary left, ... right. The primary is context per phase
-  -- (re-labeled, never rebuilt):
-  -- pick:    "Award <name>" on a single holder, else hidden (use ...).
-  -- rolling: "Finish" (resolve now, award on this window).
-  -- award:   "Award <top winner>" (further winners via their own rows).
+  -- primary left, Roll, Raid roll, ... right. Roll + Raid roll are
+  -- their own buttons (never inside ...): rolling starts one click,
+  -- on every phase that can start one (pick, mid-roll switch, award
+  -- re-rolls).
+  -- pick:    "Award <name>" on a single holder, else hidden; Roll +
+  --          Raid roll always; ... = award anyone.
+  -- rolling: "Finish" (resolve now, award on this window) + Raid roll
+  --          (end the open roll, raid-roll instead); Roll hides.
+  -- award:   "Award <top winner>" (further winners via their own rows),
+  --          Roll again + Raid roll next to them.
   -- Width fits the label: measured text + padding, capped to the bar.
   -- NOTE: no SetPoint here — LayoutBar places all buttons (flow layout).
   local awardB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -1610,8 +1623,27 @@ function M.BuildDetailFrame()
     end
   end)
   f.tmogB = tmogB
+  -- Roll: its own button (never inside ...) — starts the SR roll for
+  -- this item. Visible on pick + award (re-roll); hidden mid-roll.
+  local rollB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  rollB:SetHeight(M.BTN_HEIGHT)
+  rollB:SetText("Roll")
+  rollB:SetScript("OnClick", function()
+    if M.detail then M.doAction(M.detail.itemID, "roll") end
+  end)
+  f.rollB = rollB
+  -- Raid roll: its own button (never inside ...) — numbers the raid,
+  -- the ML's number wins and the item goes straight out. Visible on
+  -- pick + award (re-roll) and mid-roll (ends the open roll first).
+  local raidB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  raidB:SetHeight(M.BTN_HEIGHT)
+  raidB:SetText("Raid roll")
+  raidB:SetScript("OnClick", function()
+    if M.detail then M.doAction(M.detail.itemID, "raidroll") end
+  end)
+  f.raidB = raidB
   -- "..." More: a real dropdown (RollFor GuiElements.dropdown parity) —
-  -- award anyone on the list, or initiate the roll. Anchored above the
+  -- award anyone on the list. Anchored above the
   -- button (drops UP like RollFor's candidate frame) so it never covers
   -- the bar.
   local moreB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
@@ -1726,7 +1758,8 @@ function M.PaintDetailFrame()
   end
   -- Button bar: collect the visible buttons, then flow-layout them
   -- (justify each row, wrap when narrow). Bar order: primary, TMOG,
-  -- .... A lone row spreads edge to edge; overflow wraps above.
+  -- Roll, Raid roll, .... A lone row spreads edge to edge; overflow
+  -- wraps above.
   -- (Close lives top-right as X, not in the bar.)
   local barW = M.DETAIL_WIDTH - M.BTN_MARGIN * 2
   local slots = {}
@@ -1736,7 +1769,7 @@ function M.PaintDetailFrame()
     table.insert(slots, { btn = btn, w = M.ButtonWidth(btn, text) })
   end
   -- Award rows: primary = top winner, TMOG button = TMOG kind
-  -- winner, ... = everyone else.
+  -- winner, Roll/Raid roll = re-roll buttons, ... = everyone else.
   local function awardButtons()
     if not (d.menu and phase == "award") then
       return
@@ -1756,6 +1789,9 @@ function M.PaintDetailFrame()
         f.tmogB:Hide()
       end
     end
+    -- Re-roll buttons live on the bar next to the winners.
+    if f.rollB then showBtn(f.rollB, "Roll again") end
+    if f.raidB then showBtn(f.raidB, "Raid roll") end
   end
   if f.awardB then
     local show, label = false, "Award"
@@ -1765,17 +1801,28 @@ function M.PaintDetailFrame()
       show, label = true, "Award " .. PName(d.rollers[1])
     end
     if phase == "award" and d.menu then
-      -- Award window: winner rows own the primary slot.
+      -- Award window: winner rows own the primary slot (+ re-rolls).
       awardButtons()
-    elseif show then
-      showBtn(f.awardB, label)
-    elseif f.awardB.Hide then
-      f.awardB:Hide()
-    end
-    if f.tmogB and phase ~= "award" then
-      -- TMOG button only lives on award windows; hidden otherwise
-      -- (pick/rolling, or no TMOG roll).
-      if f.tmogB.Hide then f.tmogB:Hide() end
+    else
+      if show then
+        showBtn(f.awardB, label)
+      elseif f.awardB.Hide then
+        f.awardB:Hide()
+      end
+      if f.tmogB and f.tmogB.Hide then f.tmogB:Hide() end
+      -- Roll + Raid roll: their own buttons on pick (start) and
+      -- mid-roll (raid-roll instead ends the open roll first).
+      -- Rolling hides the Roll start (Finish/Cancel own that phase)
+      -- but keeps the Raid roll button.
+      local wantRoll = phase == "pick" or phase == "rolling"
+      if f.rollB then
+        if phase == "pick" then showBtn(f.rollB, "Roll")
+        elseif f.rollB.Hide then f.rollB:Hide() end
+      end
+      if f.raidB then
+        if wantRoll then showBtn(f.raidB, "Raid roll")
+        elseif f.raidB.Hide then f.raidB:Hide() end
+      end
     end
   end
   if f.moreB then showBtn(f.moreB, "...") end
@@ -1808,24 +1855,26 @@ function M.PaintDetailFrame()
 end
 
 -- "..." from the client frame: a dropdown menu (RollFor dropdown parity)
--- with one row per choice: award anyone on the list, or initiate the roll.
+-- with one row per choice: award anyone on the list. Roll initiation
+-- lives on its own bar buttons (Roll / Raid roll), never in the menu.
 -- Rows highlight blue on hover; picking one runs it and closes the detail.
 -- Headless (tests, /zl text UIs) it falls back to printing MoreLines.
 M.moreDropdown = nil
 
 -- Dropdown choice rows for the detail (data, headless-testable):
--- { { id="roll", label="Roll" }, { id="award-name", label="Award <name>" },
---   { id="class", label="Warrior (3) >", class="Warrior", members={...} },
---   { id="raidroll", ... } }
--- Priority rows (roll initiation, labeled rollers, kind winners, and
--- post-roll Roll-again/Raid-roll) stay top-level for one click; the REST
--- of the awardable roster groups by class (MoreClassGroups), each group
+-- award rows + class groups only. Roll initiation lives on the bar
+-- buttons (Roll / Raid roll via doAction), never in the menu
+-- (MoreRollControls stays as the headless/text mirror of those buttons).
+-- Priority rows (labeled rollers, kind winners) stay top-level for one
+-- click; the REST of the awardable roster groups by class (MoreClassGroups), each group
 -- opening a side submenu with its players — a flat 40-name list becomes
 -- ~9 class rows. Every group member awards directly, even pre-roll
 -- (AwardDirect, no roll needed).
--- Roll-control rows for the ... menu (data): mid-roll the menu offers
+-- Roll-control rows (headless/text mirror of the bar buttons): pick
+-- offers nothing (bar buttons own it), mid-roll the menu offers
 -- Raid-roll instead (ends the open roll, raid-rolls the item); the award
--- window keeps Roll again and Raid-roll instead next to the awards.
+-- window keeps Roll again and Raid-roll instead next
+-- to the awards. Client menus never show these (bar buttons own them).
 -- Returns {} in pick phase.
 function M.MoreRollControls(d)
   d = d or M.detail
@@ -1846,16 +1895,8 @@ function M.MoreChoices(d)
   d = d or M.detail
   local out = {}
   if not d then return out end
-  if (d.phase or "pick") == "pick" and d.status == "open" then
-    table.insert(out, { id = "roll", label = "Roll" })
-    table.insert(out, { id = "raidroll", label = "Raid-roll" })
-  else
-    -- Award phase: Roll again + Raid-roll instead above the award rows,
-    -- so the ML never has to close the menu to roll again.
-    for i = 1, Z.Util.ArrayCount(M.MoreRollControls(d)) do
-      table.insert(out, M.MoreRollControls(d)[i])
-    end
-  end
+  -- Roll initiation lives on the bar buttons (Roll / Raid roll), never
+  -- in the menu: ... lists awardable names only.
   -- Landed rolls by name (their row carries roll + range for labels).
   local rolled = {}
   for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
@@ -2066,9 +2107,7 @@ function M.ToggleMoreDropdown(anchor)
         end
         M.CloseMoreDropdown()
         if M.detail then
-          if c.id == "roll" then M.doAction(M.detail.itemID, "roll")
-          elseif c.id == "raidroll" then M.doAction(M.detail.itemID, "raidroll")
-          elseif c.id == "award-name" then M.doAction(M.detail.itemID, "award-name", c.name) end
+          if c.id == "award-name" then M.doAction(M.detail.itemID, "award-name", c.name) end
         end
       end)
     end
@@ -2209,7 +2248,4 @@ function M.MoreAction()
   if not d then return end
   local lines = M.MoreLines(d)
   for i = 1, Z.Util.ArrayCount(lines) do Z.Print(lines[i]) end
-  if Z.MasterLootUI and d.status == "open" then
-    Z.Print("Roll it: /zl roll " .. tostring(d.itemID))
-  end
 end
