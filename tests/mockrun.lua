@@ -179,6 +179,9 @@ assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
 assert(Z.LootWindow.detailFrame.ignoreB ~= nil, "Ignore button built");
 assert(Z.LootWindow.detailFrame.ignoreB.label == "Ignore", "Ignore labeled");
 assert(Z.LootWindow.detailFrame.ignoreB:GetScript("OnClick"), "Ignore click wired");
+assert(Z.LootWindow.detailFrame.sandB ~= nil, "Sand button built");
+assert(Z.LootWindow.detailFrame.sandB.label == "Sand", "Sand labeled");
+assert(Z.LootWindow.detailFrame.sandB:GetScript("OnClick"), "Sand click wired");
 assert(Z.LootWindow.detailFrame.rolls ~= nil, "roll list widget built");
 -- rolling + award phases repaint under the mock API (persistent window).
 Z.LootWindow.detail.phase = "rolling";
@@ -266,7 +269,7 @@ local function barBox(b)
   return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
 end
 local vis = {}
-for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "ignoreB", "moreB" }) do
+for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "sandB", "ignoreB", "moreB" }) do
   local btn = df[n]
   if btn and btn.hidden ~= true then
     local box = barBox(btn)

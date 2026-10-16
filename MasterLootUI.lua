@@ -1377,6 +1377,194 @@ function M.Ignore(itemID, source)
   return true
 end
 
+-- Hourglass Sand distributor (item 19183): the ML hands a sand stack to
+-- the raid member with the lowest running total, so sand evens out over
+-- the raid. Ledger lives in Z.DB.sand ({ [name] = count }, SavedVariables)
+-- and is independent of the SR sheet: sand is never SR'd, never won-
+-- marked, never roll-logged. One corpse slot = one handoff = the whole
+-- stack to a single recipient; fairness comes from the ledger, not from
+-- splitting (a corpse slot cannot be split).
+M.SAND_ITEM_ID = 19183
+M.SAND_NAME = "Hourglass Sand"
+function M.IsSandItem(itemID)
+  return tonumber(itemID) == M.SAND_ITEM_ID
+end
+-- Ledger table, created on demand. Falls back to a transient table when
+-- there is no DB (headless tests driving the flow without InitDB).
+M._sandFallback = {}
+function M.SandLedger()
+  if Z.DB then
+    Z.DB.sand = Z.DB.sand or {}
+    return Z.DB.sand
+  end
+  return M._sandFallback
+end
+function M.SandTotal(ledger, name)
+  return tonumber((ledger or {})[name]) or 0
+end
+-- Pick the recipient: lowest ledger total, ties broken by roster order
+-- (stable, same ethos as the frozen raid-roll roster). Pure.
+function M.SandPick(roster, ledger)
+  local best, bestTotal = nil, nil
+  for i = 1, Z.Util.ArrayCount(roster or {}) do
+    local nm = roster[i]
+    if nm and nm ~= "" then
+      local t = M.SandTotal(ledger, nm)
+      if best == nil or t < bestTotal then
+        best, bestTotal = nm, t
+      end
+    end
+  end
+  return best
+end
+-- Sorted ledger for display: highest total first, name tiebreak. Pure.
+function M.SandTotals(ledger)
+  local out = {}
+  for nm, c in pairs(ledger or {}) do
+    table.insert(out, { name = nm, count = tonumber(c) or 0 })
+  end
+  table.sort(out, function(a, b)
+    if a.count ~= b.count then return a.count > b.count end
+    return (a.name or "") < (b.name or "")
+  end)
+  return out
+end
+-- Distribute one sand row: lowest-ledger raider takes the whole stack
+-- via the master-loot handoff, ledger += quantity, announced + logged.
+-- Ends any open roll for the item first (same as awarding). Returns
+-- true on success, false when refused (row kept).
+function M.SandDistribute(itemID, source)
+  if not M.RequireML() then return false end
+  itemID = Z.Util.ItemID(itemID)
+  if not itemID then
+    Z.Print("Nothing to distribute.")
+    return false
+  end
+  if not M.IsSandItem(itemID) then
+    Z.Print("Sand distribution is only for " .. M.SAND_NAME .. ".")
+    return false
+  end
+  local roster = M.RaidRoster()
+  if Z.Util.ArrayCount(roster) == 0 then
+    Z.Print("Nobody in the raid to give sand to.")
+    return false
+  end
+  local ledger = M.SandLedger()
+  local winnerName = M.SandPick(roster, ledger)
+  if not winnerName or winnerName == "" then
+    Z.Print("Nobody in the raid to give sand to.")
+    return false
+  end
+  M.EndRoll(itemID)
+  -- Distributed = gone: no finished round left to continue on this item.
+  if M.lastRound and M.lastRound.itemID == itemID then M.lastRound = nil end
+  local link = "item:" .. tostring(itemID)
+  local qty = 1
+  if Z.LootWindow then
+    local it = Z.LootWindow.Find(itemID)
+    if it then
+      if it.link then link = it.link end
+      if tonumber(it.quantity) and tonumber(it.quantity) > 0 then
+        qty = math.floor(tonumber(it.quantity))
+      end
+    end
+  end
+  -- Same corpse-open gate as the award path: walked-away corpse means
+  -- no handoff can land; re-loot and distribute from the open window.
+  -- Headless rows (no slot) skip the gate like headless awards do.
+  local row0 = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
+  local liveRow = row0 and row0.slot ~= nil
+  if source ~= "sim" and not M.lootOpen and liveRow then
+    Z.Print("Not distributing sand to " .. tostring(winnerName)
+      .. ": no loot open. Loot the corpse again, then distribute.")
+    return false
+  end
+  if source ~= "sim" and row0 and row0.slot ~= nil
+      and GetNumLootItems and GetLootSlotLink then
+    local rc = M.LootCorpseSlot(link, itemID, winnerName)
+    if rc == false then return false end
+  end
+  source = source or "raid"
+  ledger[winnerName] = M.SandTotal(ledger, winnerName) + qty
+  if Z.DropLog then Z.DropLog.Add(itemID, link, source, "sand", winnerName) end
+  local disp = M.DisplayItemLink(itemID, link)
+  local line = "Sand x" .. tostring(qty) .. " -> " .. tostring(winnerName)
+    .. " (" .. tostring(ledger[winnerName]) .. " total)"
+  if Z.Comm and Z.Comm.SayGroup and source ~= "sim" then
+    Z.Comm.SayGroup(line .. " [" .. tostring(disp) .. "]")
+  else
+    Z.Print(line)
+  end
+  if Z.SRView then Z.SRView.Refresh() end
+  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
+  if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
+  if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  M.MaybeGroupAfterBoss(source)
+  -- Queue bookkeeping, same as the award path.
+  if Z.Sim then
+    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
+      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
+          and Z.Sim.afterRehearsal then
+        Z.Sim.afterRehearsal()
+      end
+    end
+    if source == "sim" then
+      if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
+      if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
+    end
+  end
+  return true
+end
+-- /zl sand: print the ledger (highest first, grand total last).
+-- /zl sand reset: clear it (solo always; in group ML/leader only,
+-- same gate as the roll-log reset). Returns counts for feedback.
+function M.SandReset()
+  local ledger = M.SandLedger()
+  local nNames, nUnits = 0, 0
+  for nm, c in pairs(ledger) do
+    nNames = nNames + 1
+    nUnits = nUnits + (tonumber(c) or 0)
+  end
+  for nm in pairs(ledger) do ledger[nm] = nil end
+  return { names = nNames, units = nUnits }
+end
+function M.SandCommand(argText)
+  local sub = Z.Util and Z.Util.Trim(argText or "") or tostring(argText or "")
+  if sub == "" then
+    local totals = M.SandTotals(M.SandLedger())
+    if Z.Util.ArrayCount(totals) == 0 then
+      Z.Print("No sand distributed yet.")
+      return true
+    end
+    local grand = 0
+    for i = 1, Z.Util.ArrayCount(totals) do
+      local t = totals[i]
+      grand = grand + t.count
+      Z.Print("Sand: " .. tostring(t.name) .. " x" .. tostring(t.count))
+    end
+    Z.Print("Sand total: x" .. tostring(grand))
+    return true
+  end
+  if string.lower(sub) == "reset" then
+    local allowed = false
+    if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then
+      allowed = true
+    elseif Z.SRSecurity and Z.SRSecurity.CanBroadcast and Z.SRSecurity.CanBroadcast() then
+      allowed = true
+    end
+    if not allowed then
+      Z.Print("Only the master looter or raid leader can reset the sand ledger.")
+      return false
+    end
+    local c = M.SandReset()
+    Z.Print("Sand ledger cleared (" .. tostring(c.units) .. " sand across "
+      .. tostring(c.names) .. " raiders).")
+    return true
+  end
+  Z.Print("Usage: /zl sand [reset]")
+  return false
+end
+
 -- Old names, same single award path above. invented resolves off the
 -- open roll (rolled rehearsal) or the rehearsal queue (pre-roll award),
 -- so fake names never hit the sheet either way.

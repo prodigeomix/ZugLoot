@@ -846,6 +846,8 @@ end
 --   Roll         — its own button: start the SR roll for this item.
 --   Raid roll    — its own button: number the raid, ML's number wins
 --                  and the item goes straight out (no award window).
+--   Sand         — its own button, Hourglass Sand rows only: hand the
+--                  stack to the lowest-ledger raider (evens out).
 --   ... (More)   — award anyone directly (class-grouped roster).
 --   Close        — dismiss, keep working the overview.
 -- Headless it prints the same rows; the ML answers via doAction(...).
@@ -1254,6 +1256,7 @@ function M.DetailActions(d)
   d = d or M.detail
   local actions = {}
   if not d then return actions end
+  local MLUI = Z.MasterLootUI
   if (d.phase or "pick") == "rolling" then
     table.insert(actions, { id = "finish", label = "Finish" })
     table.insert(actions, { id = "cancel", label = "Cancel" })
@@ -1298,6 +1301,9 @@ function M.DetailActions(d)
   end
   table.insert(actions, { id = "roll", label = "Roll" })
   table.insert(actions, { id = "raidroll", label = "Raid roll" })
+  if MLUI and MLUI.IsSandItem and MLUI.IsSandItem(d.itemID) then
+    table.insert(actions, { id = "sand", label = "Sand" })
+  end
   table.insert(actions, { id = "ignore", label = "Ignore" })
   table.insert(actions, { id = "more", label = "..." })
   table.insert(actions, { id = "close", label = "Close" })
@@ -1338,6 +1344,19 @@ function M.doAction(itemID, actionID, extra)
       return "ignored " .. tostring(d.itemID)
     end
     return "ignore failed"
+  end
+  if actionID == "sand" then
+    -- Sand: distribute one Hourglass Sand row to the lowest-ledger
+    -- raider (ledger evens out over the raid). Not a roll: no SR,
+    -- no award window, no sheet writes — just the handoff + ledger.
+    if MLUI and MLUI.IsSandItem and MLUI.IsSandItem(d.itemID)
+        and MLUI.SandDistribute then
+      if MLUI.SandDistribute(d.itemID, d.source) then
+        return "sand " .. tostring(d.itemID)
+      end
+      return "sand failed"
+    end
+    return "sand failed"
   end
   if actionID == "roll" then
     -- Refused while ANY roll is open (finish, award, or close it first).
@@ -1709,6 +1728,16 @@ function M.BuildDetailFrame()
     if M.detail then M.doAction(M.detail.itemID, "ignore") end
   end)
   f.ignoreB = ignoreB
+  -- Sand: distributes one Hourglass Sand row to the lowest-ledger
+  -- raider. Built always (paint decides visibility); only ever shown
+  -- on sand rows (pick phase — sand is never rolled).
+  local sandB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  sandB:SetHeight(M.BTN_HEIGHT)
+  sandB:SetText("Sand")
+  sandB:SetScript("OnClick", function()
+    if M.detail then M.doAction(M.detail.itemID, "sand") end
+  end)
+  f.sandB = sandB
   -- "..." More: a real dropdown (RollFor GuiElements.dropdown parity) —
   -- award anyone on the list. Anchored above the
   -- button (drops UP like RollFor's candidate frame) so it never covers
@@ -1825,8 +1854,9 @@ function M.PaintDetailFrame()
   end
   -- Button bar: collect the visible buttons, then flow-layout them
   -- (justify each row, wrap when narrow). Bar order: primary, TMOG,
-  -- Continue rolling, Roll, Raid roll, Ignore, .... A lone row spreads
-  -- edge to edge; overflow wraps above.
+  -- Continue rolling, Roll, Raid roll, Sand, Ignore, .... Sand shows
+  -- only on sand rows in pick phase (sand is never rolled). A lone
+  -- row spreads edge to edge; overflow wraps above.
   -- (Close lives top-right as X, not in the bar.)
   local barW = M.DETAIL_WIDTH - M.BTN_MARGIN * 2
   local slots = {}
@@ -1899,6 +1929,17 @@ function M.PaintDetailFrame()
       end
       -- Ignore lives on the bar on every non-award phase too.
       if f.ignoreB then showBtn(f.ignoreB, "Ignore") end
+      -- Sand: only on sand rows in pick phase (sand is never rolled,
+      -- so rolling/award never show it).
+      local MLUI2 = Z.MasterLootUI
+      if f.sandB then
+        if phase == "pick" and MLUI2 and MLUI2.IsSandItem
+            and MLUI2.IsSandItem(d.itemID) then
+          showBtn(f.sandB, "Sand")
+        elseif f.sandB.Hide then
+          f.sandB:Hide()
+        end
+      end
     end
   end
   if f.moreB then showBtn(f.moreB, "...") end

@@ -145,6 +145,14 @@ Sheet = {
   ML's 1-N roll counts, first number only). The item goes straight out
   on the number — no award window. Finish/award reuse the
   normal path, including the award line.
+- Sand (loot `Sand` button, Hourglass Sand item 19183 only): the
+  lowest-ledger raider takes the row via the master-loot handoff, no
+  roll, no award window. Ledger `Z.DB.sand` (`{ [name] = count }`)
+  tracks running totals per raider so sand evens out over the raid;
+  one corpse slot = one handoff of the whole stack. Never touches the
+  SR sheet (no SR, no won mark, no roll history) — DropLog records it
+  as `sand`. `/zl sand` prints the ledger, `/zl sand reset` clears it
+  (solo always; in group ML/leader only).
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; the resolver excludes them from later SR contests for that itemID.
   Excluded rollers stay visible everywhere: their rolls are kept in a separate
