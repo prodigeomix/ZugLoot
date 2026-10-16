@@ -176,6 +176,9 @@ assert(#Z.LootWindow.rows == 1, "one overview row painted");
 Z.LootWindow.OpenDetail(19137);
 assert(Z.LootWindow.detail ~= nil, "detail data opened");
 assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
+assert(Z.LootWindow.detailFrame.ignoreB ~= nil, "Ignore button built");
+assert(Z.LootWindow.detailFrame.ignoreB.label == "Ignore", "Ignore labeled");
+assert(Z.LootWindow.detailFrame.ignoreB:GetScript("OnClick"), "Ignore click wired");
 assert(Z.LootWindow.detailFrame.rolls ~= nil, "roll list widget built");
 -- rolling + award phases repaint under the mock API (persistent window).
 Z.LootWindow.detail.phase = "rolling";
@@ -263,7 +266,7 @@ local function barBox(b)
   return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
 end
 local vis = {}
-for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "moreB" }) do
+for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "ignoreB", "moreB" }) do
   local btn = df[n]
   if btn and btn.hidden ~= true then
     local box = barBox(btn)
@@ -487,6 +490,22 @@ for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end
+-- setup tab: auto loot-method toggles exist, flip the DB flags, relabel.
+Z.DB.mlOnBoss = false;
+Z.DB.backToGroup = false;
+Z.MainWindow.SelectTab("setup");
+local st = Z.MainWindow.DebugSetupToggles();
+assert(st.mlOnBoss ~= nil, "ML on boss toggle built");
+assert(st.backToGroup ~= nil, "Back to group toggle built");
+assert(string.find(st.mlOnBoss.label or "", "OFF", 1, true) ~= nil, "ML toggle starts OFF");
+st.mlOnBoss:GetScript("OnClick")();
+assert(Z.DB.mlOnBoss == true, "ML toggle flips the flag");
+assert(string.find(st.mlOnBoss.label or "", "ON", 1, true) ~= nil, "ML toggle relabels");
+st.backToGroup:GetScript("OnClick")();
+assert(Z.DB.backToGroup == true, "group toggle flips the flag");
+Z.DB.mlOnBoss = false;
+Z.DB.backToGroup = false;
+print("setup loot toggles OK");
 -- scrollbar invariant, checked on every tab: a visible slider may only belong
 -- to the active tab. Hidden tabs must never paint a thumb (the old bug left
 -- stale sliders from hidden tabs over the live list).

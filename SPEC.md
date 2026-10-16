@@ -234,7 +234,11 @@ Sheet = {
   Load from File, auto-roll toggle, clear won marks, **Reset all settings**
   (factory reset with confirmation: sheet, raid history, drop log and all
   options back to defaults; local data only, no permission gate),
-  roll-time/log stats.
+  auto loot-method switching (**ML on boss**: as party/raid leader, flip
+  to master loot when selecting a boss — worldboss + elite targets;
+  **Back to group**: flip back to group loot once the boss is fully
+  looted — only after OUR auto-switch, never yanks a manual change;
+  both off by default), roll-time/log stats.
 - **Raids tab**: imported raids with the **latest raid at the top**, ordered
   by raid datetime = the sheet's `meta.importedAt` import timestamp (the
   closest thing to a raid start time the sheet carries; `archivedAt` is only
@@ -385,9 +389,12 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   with that class's players, so the whole raid is one hover away instead
   of a flat 40-name list. Every submenu name awards directly, even before
   a roll, and nobody already listed above repeats inside a group.
-  The award window keeps **Continue rolling**, **Roll again** and
-  **Raid roll** as bar buttons
-  next to the winners.
+  The award window keeps **Continue rolling**, **Roll again**,
+  **Raid roll** and **Ignore** as bar buttons
+  next to the winners. **Ignore** (on every phase: pick, rolling,
+  award) drops the row with no award, no won mark, no corpse take and
+  no roll history — the item stays on the corpse for manual handling,
+  the audit log records it as ignored. Sim rows advance the queue.
   **Close** to dismiss and keep working the overview. `/zl cr`
   returns the item to open.
 - **Award menu** (RollFor finish-popup style): on SR-roll completion nothing is

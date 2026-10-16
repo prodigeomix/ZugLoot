@@ -1153,7 +1153,135 @@ function M.Award(itemID, winnerName, source, invented)
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
   if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  -- Boss fully looted after OUR auto-switch? Flip back to group loot.
+  M.MaybeGroupAfterBoss(source)
   -- Test queue bookkeeping: an awarded sim row must not stay rollable.
+  if Z.Sim then
+    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
+      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
+          and Z.Sim.afterRehearsal then
+        Z.Sim.afterRehearsal()
+      end
+    end
+    if source == "sim" then
+      if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
+      if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
+    end
+  end
+  return true
+end
+
+-- Auto loot-method switching (party-leader boss flow, Setup options):
+-- mlOnBoss flips to master loot when the leader selects a boss;
+-- backToGroup flips back to group loot once the boss is fully looted
+-- (every row gone). Only ever acts on the leader's own client, only
+-- when WE made the switch (M.autoML), so a manual change by anyone is
+-- never yanked back. All client calls pcall-guarded + nil-safe.
+M.autoML = false
+
+-- Boss at the cursor? worldboss always; elite too (instanced bosses
+-- rarely carry the worldboss flag). Pure shape, WoW globals nil-safe.
+function M.IsBossTarget()
+  if not (UnitExists and UnitClassification) then return false end
+  local okE, exists = pcall(UnitExists, "target")
+  if not (okE and exists) then return false end
+  local okC, cls = pcall(UnitClassification, "target")
+  if not okC then return false end
+  return cls == "worldboss" or cls == "elite"
+end
+
+function M.CanAutoSwitch()
+  if not (Z.DB and Z.DB.mlOnBoss) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.AmLeader
+      and Z.SRSecurity.AmLeader()) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.IsInGroup
+      and Z.SRSecurity.IsInGroup()) then return false end
+  return true
+end
+
+function M.TrySetLoot(method, masterName)
+  if not SetLootMethod then return false end
+  if method == "master" then
+    local ok = pcall(SetLootMethod, "master", masterName)
+    return ok and true or false
+  end
+  local ok = pcall(SetLootMethod, method)
+  return ok and true or false
+end
+
+function M.CurrentLootMethod()
+  if Z.SRSecurity and Z.SRSecurity.LootMethod then
+    local ok, m = pcall(Z.SRSecurity.LootMethod)
+    if ok then return m end
+  end
+  return nil
+end
+
+-- Leader selected a boss: flip to master loot (once — already-master
+-- or already-switched is a no-op). Master is self: only the leader's
+-- own client runs this, so handing master to self is always right.
+function M.MaybeMasterOnBoss()
+  if not M.CanAutoSwitch() then return false end
+  if M.autoML then return false end
+  if not M.IsBossTarget() then return false end
+  if M.CurrentLootMethod() == "master" then return false end
+  local me = nil
+  if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
+  if M.TrySetLoot("master", me) then
+    M.autoML = true
+    Z.Print("Boss selected — loot method set to master loot.")
+    return true
+  end
+  return false
+end
+
+-- A row left the list (award or ignore): with backToGroup on and OUR
+-- switch active, an emptied list means the boss is fully looted — flip
+-- back to group loot. Sim rows never count (no corpse, no method).
+function M.MaybeGroupAfterBoss(source)
+  if source == "sim" then return false end
+  if not M.autoML then return false end
+  if not (Z.DB and Z.DB.backToGroup) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.AmLeader
+      and Z.SRSecurity.AmLeader()) then return false end
+  if Z.LootWindow and Z.LootWindow.items
+      and Z.Util.ArrayCount(Z.LootWindow.items) > 0 then return false end
+  if M.TrySetLoot("group") then
+    M.autoML = false
+    Z.Print("Boss fully looted — loot method set back to group loot.")
+    return true
+  end
+  return false
+end
+
+-- Ignore the item: drop the row with no award, no won mark, no corpse
+-- take, no roll history. Ends any open roll for the item FIRST (same
+-- as awarding). The item stays on the corpse for manual handling; the
+-- audit trail records it as ignored. Sim rows advance the queue like
+-- an award (an ignored sim row must not stay rollable either).
+function M.Ignore(itemID, source)
+  if not M.RequireML() then return end
+  if not itemID then
+    Z.Print("Nothing to ignore.")
+    return
+  end
+  M.EndRoll(itemID)
+  -- Ignored = gone: no finished round left to continue on this item.
+  if M.lastRound and M.lastRound.itemID == itemID then M.lastRound = nil end
+  local link = "item:" .. tostring(itemID)
+  if Z.LootWindow then
+    local it = Z.LootWindow.Find(itemID)
+    if it and it.link then link = it.link end
+  end
+  source = source or "raid"
+  if Z.DropLog then Z.DropLog.Add(itemID, link, source, "ignored", nil) end
+  local disp = M.DisplayItemLink(itemID, link)
+  Z.Print("Ignored " .. disp .. " (left on the corpse).")
+  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
+  if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
+  if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  M.MaybeGroupAfterBoss(source)
+  -- Queue bookkeeping, same as the award path.
   if Z.Sim then
     if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
       if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
@@ -1677,6 +1805,10 @@ function M.OnEvent(event, a1, a2)
     M.OnLootOpened()
   elseif event == "LOOT_CLOSED" then
     M.lootOpen = false
+  elseif event == "PLAYER_TARGET_CHANGED" then
+    -- Party-leader boss flow: selecting a boss flips to master loot
+    -- (Setup option, leader only, no-op unless everything lines up).
+    M.MaybeMasterOnBoss()
   elseif event == "LOOT_BIND_CONFIRM" then
     -- BoP take: confirm every armed click-to-loot slot. a1 is the slot
     -- on 1.12 (nil-safe: confirm all armed slots when it isn't).

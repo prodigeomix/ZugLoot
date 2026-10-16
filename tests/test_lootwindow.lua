@@ -158,8 +158,9 @@ local acts = LW.DetailActions(d)
 eq(acts[1].id, "award", "Award first on single")
 eq(acts[2].id, "roll", "Roll second")
 eq(acts[3].id, "raidroll", "Raid roll third")
-eq(acts[4].id, "more", "... fourth")
-eq(acts[5].id, "close", "Close last")
+eq(acts[4].id, "ignore", "Ignore fourth")
+eq(acts[5].id, "more", "... fifth")
+eq(acts[6].id, "close", "Close last")
 -- direct award: won mark + row GONE + detail closed, no session.
 eq(LW.doAction(1002, "award"), "awarded Solo", "direct award returns")
 ok(SRData.HasWon(sheet, 1002, "Solo"), "direct award won-marks")
@@ -173,7 +174,8 @@ eq(d2.single, false, "multi holder not single")
 local acts2 = LW.DetailActions(d2)
 eq(acts2[1].id, "roll", "multi starts at Roll")
 eq(acts2[2].id, "raidroll", "Raid roll second")
-eq(acts2[3].id, "more", "... third")
+eq(acts2[3].id, "ignore", "Ignore third")
+eq(acts2[4].id, "more", "... fourth")
 eq(LW.doAction(1001, "award"), "needs choice (...)", "multi award refused")
 local more = LW.doAction(1001, "more")
 ok(type(more) == "table" and #more >= 3, "... lists choices")
@@ -308,12 +310,14 @@ eq(LW.RollRangeText({ roll = 90, rollType = "SR" }), "90/100", "kind cap fallbac
 local sorted = LW.SortedDetailRolls()
 eq(sorted[1].rollType, "SR", "SR first")
 eq(sorted[#sorted].rollType, "TMOG", "TMOG last")
--- Detail actions: pick offers Award (single) + Roll + Raid roll
--- buttons + ...; rolling offers Finish / Cancel / Raid roll / Close.
+-- Detail actions: pick offers Award (single) + Roll + Raid roll +
+-- Ignore buttons + ...; rolling offers Finish / Cancel / Raid roll /
+-- Ignore / Close.
 local racts = LW.DetailActions()
 eq(racts[1].id, "finish", "rolling offers Finish")
 eq(racts[2].id, "cancel", "rolling offers Cancel")
 eq(racts[3].id, "raidroll", "rolling offers Raid roll instead")
+eq(racts[4].id, "ignore", "rolling offers Ignore")
 -- Rolling again on the open rolling window is refused (a live roll
 -- blocks any fresh start until it finishes or closes).
 eq(LW.doAction(1001, "roll"), "roll failed", "double roll refused")
@@ -387,6 +391,40 @@ ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "window award won-marks")
 ok(LW.Find(1001) == nil, "awarded row left the list")
 ok(LW.detail == nil, "window closed after award")
 ok(ML.roll == nil, "no roll survives the award")
+
+-- 6a2. Ignore: drops the row with no award, no won mark, no history —
+-- from pick, mid-roll (ends the roll), and the award window.
+ZugLoot.DB = { sheet = makeSheet() }
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+  { itemID = 1002, link = "item:1002", badge = "SR" },
+}, "loot")
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore from pick")
+ok(LW.Find(1001) == nil, "ignored row gone")
+ok(LW.detail == nil, "window closed after ignore")
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "ignore won-marks nobody")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "ignore records no history")
+ok(LW.Find(1002) ~= nil, "other row untouched")
+-- Mid-roll ignore ends the live roll.
+LW.OpenDetail(1002)
+LW.doAction(1002, "roll")
+ML.IntakeChatRoll("Solo rolls 70 (1-100)")
+eq(LW.doAction(1002, "ignore"), "ignored 1002", "ignore mid-roll")
+ok(ML.roll == nil, "ignore ends the roll")
+ok(LW.detail == nil, "window closed")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 0, "unfinished roll logs nothing")
+-- Award-phase ignore: history from the finished round stays (rolls
+-- really happened), but nobody wins.
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+LW.doAction(1001, "roll")
+ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+LW.doAction(1001, "finish")
+eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore from award")
+ok(LW.Find(1001) == nil and LW.detail == nil, "ignored item fully gone")
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "award-phase ignore won-marks nobody")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "finished-round history kept")
 
 -- 6b. TMOG kind winner directly awardable next to the outright winner.
 ZugLoot.DB = { sheet = makeSheet() }

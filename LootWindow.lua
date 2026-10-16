@@ -1241,13 +1241,15 @@ function M.DetailLines(d)
 end
 
 -- Detail actions (data) per phase.
--- pick:    Award (single holder only), Roll, Raid roll, ... (More), Close.
+-- pick:    Award (single holder only), Roll, Raid roll, Ignore,
+--          ... (More), Close.
 -- rolling: Finish (resolve now, award on this window), Cancel (end the
 --          roll, window back to pick), Raid roll (end the open roll and
---          raid-roll the item instead), Close (ends roll AND closes).
+--          raid-roll the item instead), Ignore (drop the row, no award),
+--          Close (ends roll AND closes).
 -- award:   Award <winner> per winner row, Continue rolling (reopen
 --          intake, landed rolls kept), Roll again (fresh), Raid roll,
---          ... (anyone else), Close.
+--          Ignore, ... (anyone else), Close.
 function M.DetailActions(d)
   d = d or M.detail
   local actions = {}
@@ -1256,6 +1258,7 @@ function M.DetailActions(d)
     table.insert(actions, { id = "finish", label = "Finish" })
     table.insert(actions, { id = "cancel", label = "Cancel" })
     table.insert(actions, { id = "raidroll", label = "Raid roll" })
+    table.insert(actions, { id = "ignore", label = "Ignore" })
     table.insert(actions, { id = "close", label = "Close" })
     return actions
   end
@@ -1285,6 +1288,7 @@ function M.DetailActions(d)
     table.insert(actions, { id = "continue", label = "Continue rolling" })
     table.insert(actions, { id = "roll", label = "Roll again" })
     table.insert(actions, { id = "raidroll", label = "Raid roll" })
+    table.insert(actions, { id = "ignore", label = "Ignore" })
     table.insert(actions, { id = "more", label = "..." })
     table.insert(actions, { id = "close", label = "Close" })
     return actions
@@ -1294,6 +1298,7 @@ function M.DetailActions(d)
   end
   table.insert(actions, { id = "roll", label = "Roll" })
   table.insert(actions, { id = "raidroll", label = "Raid roll" })
+  table.insert(actions, { id = "ignore", label = "Ignore" })
   table.insert(actions, { id = "more", label = "..." })
   table.insert(actions, { id = "close", label = "Close" })
   return actions
@@ -1322,6 +1327,17 @@ function M.doAction(itemID, actionID, extra)
   end
   if actionID == "more" then
     return M.MoreLines(d)
+  end
+  if actionID == "ignore" then
+    -- Ignore: drop the row with no award, no won mark, no history.
+    -- Ends any open roll for the item first (same as awarding). The
+    -- item stays on the corpse for manual handling; the audit trail
+    -- records it as ignored.
+    if MLUI and MLUI.Ignore then
+      MLUI.Ignore(d.itemID, d.source)
+      return "ignored " .. tostring(d.itemID)
+    end
+    return "ignore failed"
   end
   if actionID == "roll" then
     -- Refused while ANY roll is open (finish, award, or close it first).
@@ -1605,11 +1621,11 @@ function M.BuildDetailFrame()
   if rolls.Hide then rolls:Hide() end
   f.rolls = rolls
   -- Button bar pinned to the BOTTOM (never overlapping the roll list):
-  -- primary left, Roll, Raid roll, ... right. Roll + Raid roll are
-  -- their own buttons (never inside ...): rolling starts one click,
+  -- primary left, Roll, Raid roll, Ignore, ... right. Roll + Raid roll
+  -- are their own buttons (never inside ...): rolling starts one click,
   -- on every phase that can start one (pick, mid-roll switch, award
   -- re-rolls). Continue rolling reopens a finished round with the
-  -- landed rolls kept.
+  -- landed rolls kept. Ignore drops the row on every phase.
   -- pick:    "Award <name>" on a single holder, else hidden; Roll +
   --          Raid roll always; ... = award anyone.
   -- rolling: "Finish" (resolve now, award on this window) + Raid roll
@@ -1684,6 +1700,15 @@ function M.BuildDetailFrame()
     if M.detail then M.doAction(M.detail.itemID, "continue") end
   end)
   f.contB = contB
+  -- Ignore: drops the row with no award, no won mark, no corpse take.
+  -- Visible on every phase (pick, rolling, award).
+  local ignoreB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
+  ignoreB:SetHeight(M.BTN_HEIGHT)
+  ignoreB:SetText("Ignore")
+  ignoreB:SetScript("OnClick", function()
+    if M.detail then M.doAction(M.detail.itemID, "ignore") end
+  end)
+  f.ignoreB = ignoreB
   -- "..." More: a real dropdown (RollFor GuiElements.dropdown parity) —
   -- award anyone on the list. Anchored above the
   -- button (drops UP like RollFor's candidate frame) so it never covers
@@ -1800,8 +1825,8 @@ function M.PaintDetailFrame()
   end
   -- Button bar: collect the visible buttons, then flow-layout them
   -- (justify each row, wrap when narrow). Bar order: primary, TMOG,
-  -- Continue rolling, Roll, Raid roll, .... A lone row spreads edge to
-  -- edge; overflow wraps above.
+  -- Continue rolling, Roll, Raid roll, Ignore, .... A lone row spreads
+  -- edge to edge; overflow wraps above.
   -- (Close lives top-right as X, not in the bar.)
   local barW = M.DETAIL_WIDTH - M.BTN_MARGIN * 2
   local slots = {}
@@ -1812,7 +1837,7 @@ function M.PaintDetailFrame()
   end
   -- Award rows: primary = top winner, TMOG button = TMOG kind
   -- winner, Continue rolling + Roll/Raid roll = re-roll buttons,
-  -- ... = everyone else.
+  -- Ignore = drop the row, ... = everyone else.
   local function awardButtons()
     if not (d.menu and phase == "award") then
       return
@@ -1837,6 +1862,7 @@ function M.PaintDetailFrame()
     if f.contB then showBtn(f.contB, "Continue rolling") end
     if f.rollB then showBtn(f.rollB, "Roll again") end
     if f.raidB then showBtn(f.raidB, "Raid roll") end
+    if f.ignoreB then showBtn(f.ignoreB, "Ignore") end
   end
   if f.awardB then
     local show, label = false, "Award"
@@ -1871,6 +1897,8 @@ function M.PaintDetailFrame()
         if wantRoll then showBtn(f.raidB, "Raid roll")
         elseif f.raidB.Hide then f.raidB:Hide() end
       end
+      -- Ignore lives on the bar on every non-award phase too.
+      if f.ignoreB then showBtn(f.ignoreB, "Ignore") end
     end
   end
   if f.moreB then showBtn(f.moreB, "...") end
