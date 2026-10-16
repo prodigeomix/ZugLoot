@@ -234,8 +234,9 @@ Sheet = {
   Load from File, auto-roll toggle, clear won marks, **Reset all settings**
   (factory reset with confirmation: sheet, raid history, drop log and all
   options back to defaults; local data only, no permission gate),
-  auto loot-method switching (**ML on boss**: as party/raid leader, flip
-  to master loot when selecting a boss — worldboss + elite targets;
+  auto loot-method switching (**ML on boss**: as raid leader, flip
+  to master loot when selecting a raid boss — worldboss targets only,
+  raid only (raid trash is all elite and keeps group loot);
   **Back to group**: flip back to group loot once the boss is fully
   looted — only after OUR auto-switch, never yanks a manual change;
   both off by default), roll-time/log stats.

@@ -1426,8 +1426,8 @@ function M.RenderSetup()
     if Z.DB then Z.DB.mlOnBoss = not Z.DB.mlOnBoss end
     b8:SetText(mlLabel())
   end)
-  Tip(b8, "ML on boss", "As party/raid leader, switch to master loot when you select a boss.",
-    "Leader only. Worldboss + elite targets.")
+  Tip(b8, "ML on boss", "As raid leader, switch to master loot when you select a raid boss.",
+    "Leader only, raid only. Trash elites never trigger (they want group loot).")
   local b9 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b9:SetWidth(150) b9:SetHeight(24)
   b9:SetPoint("TOPLEFT", b8, "BOTTOMLEFT", 0, -8)

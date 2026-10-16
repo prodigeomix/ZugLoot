@@ -402,33 +402,44 @@ local candNames = {}
 for i = 1, #menu.candidates do candNames[menu.candidates[i].name] = true end
 ok(not candNames["Aaa"] and not candNames["Bbb"], "rollers never repeat as candidates")
 
--- 14. Auto loot-method switching (party-leader boss flow): option off =
--- nothing happens; option on + leader + boss target = master loot with
--- self as master; fully looting (last row gone) flips back to group.
--- Non-leaders, non-boss targets, and solo never switch.
+-- 14. Auto loot-method switching (raid-leader boss flow): option off =
+-- nothing happens; option on + leader + raid + worldboss target = master
+-- loot with self as master; fully looting (last row gone) flips back to
+-- group. Non-leaders, non-raid groups, elite trash, and solo never switch
+-- (in raids every trash mob is elite and wants group loot).
 resetHarness()
 local lootCalls = {}
 SetLootMethod = function(m, master) table.insert(lootCalls, { m, master }) return true end
 local targetCls = "worldboss"
 UnitExists = function(u) return u == "target" end
 UnitClassification = function(u) return targetCls end
-grouping = "party"
+grouping = "raid"
 ZugLoot.SRSecurity.AmLeader = function() return true end
 ZugLoot.SRSecurity.LootMethod = function() return "group" end
 ZugLoot.DB.mlOnBoss = true
 ZugLoot.DB.backToGroup = true
 ML.autoML = false
-ok(ML.MaybeMasterOnBoss(), "leader + boss target switches")
+ok(ML.MaybeMasterOnBoss(), "leader + raid boss target switches")
 eq(lootCalls[1][1], "master", "master loot method")
 eq(lootCalls[1][2], "SoloPlayer", "self as master")
 ok(ML.autoML, "auto-switch flagged")
 ok(not ML.MaybeMasterOnBoss(), "second select is a no-op")
 eq(#lootCalls, 1, "no double switch")
+-- Elite trash in a raid: NEVER switches (group loot stays).
+targetCls = "elite"
+ML.autoML = false
+ok(not ML.MaybeMasterOnBoss(), "raid trash elite never switches")
+eq(#lootCalls, 1, "still one call")
 -- Non-boss target: no switch.
 targetCls = "normal"
-ML.autoML = false
 ok(not ML.MaybeMasterOnBoss(), "trash target never switches")
 eq(#lootCalls, 1, "still one call")
+-- Party (not raid): no switch even on a worldboss.
+targetCls = "worldboss"
+grouping = "party"
+ok(not ML.MaybeMasterOnBoss(), "party never switches")
+eq(#lootCalls, 1, "still one call")
+grouping = "raid"
 -- Non-leader: no switch even on a boss.
 targetCls = "worldboss"
 ZugLoot.SRSecurity.AmLeader = function() return false end

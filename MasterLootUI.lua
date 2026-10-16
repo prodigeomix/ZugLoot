@@ -1179,15 +1179,20 @@ end
 -- never yanked back. All client calls pcall-guarded + nil-safe.
 M.autoML = false
 
--- Boss at the cursor? worldboss always; elite too (instanced bosses
--- rarely carry the worldboss flag). Pure shape, WoW globals nil-safe.
+-- Boss at the cursor? worldboss ONLY. Instanced bosses rarely carry
+-- the flag, but elite can't be used: in raids every trash mob is elite
+-- and trash wants group loot — an elite trigger would flip on every
+-- pack. Raid-only on top: the flow is a raid flow (party dungeons keep
+-- whatever the group runs). Pure shape, WoW globals nil-safe.
 function M.IsBossTarget()
   if not (UnitExists and UnitClassification) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.IsInRaid
+      and Z.SRSecurity.IsInRaid()) then return false end
   local okE, exists = pcall(UnitExists, "target")
   if not (okE and exists) then return false end
   local okC, cls = pcall(UnitClassification, "target")
   if not okC then return false end
-  return cls == "worldboss" or cls == "elite"
+  return cls == "worldboss"
 end
 
 function M.CanAutoSwitch()
