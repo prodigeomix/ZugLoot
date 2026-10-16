@@ -30,6 +30,7 @@ function Z.HelpLines()
     "    simstop .......... stop the sim, reset everything",
     "    rehearse [on|off]  solo master-loot practice with invented rollers",
     "    rolldebug ........ trace roll feeds (ML window diagnosis)",
+    "    lootdebug ........ verbose click-to-loot logging (slot, corpse, link)",
     "    help ............. this list",
   }
 end
@@ -176,6 +177,11 @@ function Z.Slash(msg)
     if Z.LootWindow then
       Z.LootWindow.rollDebug = not Z.LootWindow.rollDebug
       Z.Print("rolldebug " .. (Z.LootWindow.rollDebug and "ON" or "OFF"))
+    end
+  elseif cmd == "lootdebug" then
+    if Z.LootWindow then
+      Z.LootWindow.lootDebug = not Z.LootWindow.lootDebug
+      Z.Print("lootdebug " .. (Z.LootWindow.lootDebug and "ON" or "OFF"))
     end
   else Z.Print("unknown command. /zl help")
   end

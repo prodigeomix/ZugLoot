@@ -298,6 +298,21 @@ local refusedBefore = #masterGiven
 ML.AwardDirect(1001, "NobodyHere", "loot")
 eq(#masterGiven, refusedBefore, "non-candidate issues no loot call")
 ok(LW.Find(1001) ~= nil, "refused award keeps the row")
+-- Below-threshold item that "dropped for me": the ML takes it through
+-- the handoff with their own candidate index (verified live: plain
+-- LootSlot under master loot issues ok=true but the server ignores it
+-- and the row strands [done]).
+ML.OnLootOpened()
+lootSlots = { { link = "item:5001:0:0:0", quality = 0 } }
+ML.OnLootOpened()
+local plain = 0
+LootSlot = function(slot, force) plain = plain + 1 end
+ML.lootOpen = true
+ok(ML.LootCorpseSlot("item:5001:0:0:0", 5001, "SoloPlayer") == true,
+  "below-threshold self-loot issues")
+eq(plain, 0, "no dead plain LootSlot for ML self-take")
+eq(#masterGiven, refusedBefore + 1, "grey self-take hands off via master loot")
+eq(masterGiven[#masterGiven][2], 1, "own candidate index for grey")
 GetMasterLootCandidate = nil
 GetLootMethod = nil
 LootSlot = nil

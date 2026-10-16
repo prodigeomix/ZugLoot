@@ -662,31 +662,121 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
     if LootSlot then return pcall(LootSlot, s, 1) end
   end
   local function callLoot()
-    if method == "master" and winnerName and winnerName ~= "" then
-      -- Roll rows under master loot ALWAYS hand off by candidate index
-      -- (RollFor parity: GetMasterLootCandidate(slot, i) -> index) —
-      -- INCLUDING awards to yourself: plain LootSlot is a silent
-      -- server-side no-op for threshold+ items under master loot, so a
-      -- self-award must go through GiveMasterLoot with your own
-      -- candidate index. Vanilla quirk: one-arg
-      -- GetMasterLootCandidate(i) ignores the slot.
-      -- Free/coin rows (below threshold) stay on plain LootSlot: under
-      -- master loot anyone loots those directly off the corpse.
+    -- Routing (stock rule: the PARTY threshold gates the loot method):
+    -- threshold+ takes under master loot go through the handoff
+    -- (RollFor parity: GetMasterLootCandidate(slot, i) -> index, never
+    -- by name) — awards to others AND self-awards (plain LootSlot is a
+    -- silent server-side no-op for those: verified live). Below-threshold
+    -- takes, coin, and unknown-quality rows loot straight to the player
+    -- via LootSlot in ANY method — under master loot those are free loot
+    -- (that's what the threshold MEANS), anyone including the ML takes
+    -- them off the corpse directly.
+    -- Vanilla quirk: one-arg GetMasterLootCandidate(i) ignores the slot.
+    -- ML SELF-TAKE under master loot (winner == me == the ML): plain
+    -- LootSlot is a silent no-op here too (verified live via the debug
+    -- log: LOOT-ISSUED ok=true, server ignores it, row strands [done]).
+    -- So a below-threshold take to SELF under master loot goes through
+    -- the handoff with the ML's own candidate index — same as a
+    -- threshold+ self-award. No amML gate: only the ML ever calls this
+    -- path with winner == self (raiders click free rows with winner ==
+    -- self too, but GiveMasterLoot errors for non-ML — pcall-guarded,
+    -- falls back to LootSlot).
+    local me = nil
+    if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
+    local liveQ = nil
+    if GetLootSlotInfo then
+      local ok, a, b, c, d = pcall(GetLootSlotInfo, slot)
+      liveQ = ok and tonumber(d) or nil
+    end
+    if liveQ == nil and GetItemInfo and link then
+      local ok, n, l, q = pcall(GetItemInfo, link)
+      if ok then liveQ = tonumber(q) end
+    end
+    if liveQ == nil then
       local row = Z.LootWindow and Z.LootWindow.Find
         and Z.LootWindow.Find(itemID) or nil
-      local isFree = (itemID == "Coin")
-        or (row and (row.free or row.coin))
-      if not isFree then
-        local idx = M.MasterLootIndex(slot, winnerName)
-        if not idx then
+      if row then liveQ = tonumber(row.quality) end
+    end
+    -- Poor (0) is NEVER a roll row (ScanSlot parity); unknown quality
+    -- (cold cache, no slot quality) isn't either.
+    local thresh = M.LootThreshold()
+    local isRoll = itemID ~= "Coin" and liveQ ~= nil and liveQ > 0
+      and liveQ >= thresh
+    -- Routing inputs for the debug line (printed BEFORE the call, so a
+    -- dead call still leaves its decision behind).
+    local amML, mlName = nil, nil
+    if Z.SRSecurity and Z.SRSecurity.AmML then
+      local ok, v = pcall(Z.SRSecurity.AmML)
+      if ok then amML = v end
+    end
+    if GetLootMaster then
+      local ok, v = pcall(GetLootMaster)
+      if ok then mlName = v end
+    end
+    local function dbgLine(call)
+      return "lootdebug: call=" .. tostring(call)
+        .. " slot=" .. tostring(slot)
+        .. " winner=" .. tostring(winnerName)
+        .. " amML=" .. tostring(amML) .. " ml=" .. tostring(mlName)
+        .. " method=" .. tostring(method)
+        .. " liveQ=" .. tostring(liveQ) .. " thresh=" .. tostring(thresh)
+        .. " link=" .. tostring(link)
+    end
+    local dbg = Z.LootWindow and Z.LootWindow.lootDebug
+    -- Debug trace (chat + CustomData/ZugLoot_debug.txt): routing inputs
+    -- BEFORE the call, the issued call + pcall result AFTER. A dead
+    -- (silent-drop) call still leaves its full decision behind.
+    local function trace(line)
+      if dbg and Z.Print then Z.Print(line) end
+      if Z.FileIO and Z.FileIO.Log then Z.FileIO.Log(line) end
+    end
+    -- Trace every master-loot-path decision, and every call while
+    -- lootdebug is on. (Plain LootSlot takes log on debug only.)
+    local selfTake = (method == "master" and me and winnerName
+      and winnerName ~= "" and winnerName == me and itemID ~= "Coin")
+    local isMasterPath = (method == "master" and winnerName
+      and winnerName ~= "" and (isRoll or selfTake))
+    if isMasterPath or dbg then trace(dbgLine(isMasterPath and "MASTER?" or "LOOT?")) end
+    if method == "master" and winnerName and winnerName ~= "" and (isRoll or selfTake) then
+      local idx = M.MasterLootIndex(slot, winnerName)
+      trace(dbgLine("MASTER") .. " idx=" .. tostring(idx)
+        .. " selfTake=" .. tostring(selfTake and true or false))
+      if not idx then
+        if selfTake then
+          -- Not on the candidate list (or list unreadable): fall back
+          -- to the plain call rather than strand the row. pcall-guarded
+          -- below; a dead call un-dims via the watchdog.
+          if dbg then trace(dbgLine("MASTER-FALLBACK")) end
+        else
           Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.")
           return false
         end
-        if GiveMasterLoot then return pcall(GiveMasterLoot, slot, idx) end
-        return "noslot"
+      elseif GiveMasterLoot then
+        local okM, errM = pcall(GiveMasterLoot, slot, idx)
+        trace(dbgLine("MASTER-ISSUED") .. " ok=" .. tostring(okM)
+          .. " err=" .. tostring(errM))
+        -- Self-take handoff that the client rejects (non-ML caller,
+        -- bad index): fall through to the plain call, don't strand.
+        if not (selfTake and not okM) then
+          return okM, errM
+        end
+        if dbg then trace(dbgLine("MASTER-FALLBACK")) end
+      elseif not selfTake then
+        -- Corpse open, handoff certain, but no API: never fake the award
+        -- (won-mark + vanished row while the item sits on the corpse).
+        -- Refuse with the row kept.
+        Z.Print("Can't award " .. tostring(winnerName) .. ": master loot unavailable.")
+        return false
       end
+      -- selfTake with no usable handoff: plain LootSlot below.
     end
-    if LootSlot then return superLoot(slot) end
+    if dbg then trace(dbgLine("LOOT")) end
+    if LootSlot then
+      local okL, errL = superLoot(slot)
+      if dbg then trace(dbgLine("LOOT-ISSUED") .. " ok=" .. tostring(okL)
+        .. " err=" .. tostring(errL)) end
+      return okL, errL
+    end
     return "noslot"
   end
   local okCall, errCall = callLoot()
@@ -694,8 +784,11 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
   if not okCall then
     -- The pcall itself blew up (bad slot, tainted call): NEVER dim the
     -- row — surface the error so a dead loot call can't masquerade as
-    -- "done" (the reported ghost: gray row, nothing looted).
-    Z.Print("Loot failed (slot " .. tostring(slot) .. "): " .. tostring(errCall))
+    -- "done" (the reported ghost: gray row, nothing looted). Refusals
+    -- above already said why (errCall nil): stay quiet here.
+    if errCall ~= nil then
+      Z.Print("Loot failed (slot " .. tostring(slot) .. "): " .. tostring(errCall))
+    end
     return false
   end
   -- Armed, not done: the row drops when LOOT_SLOT_CLEARED confirms the
@@ -1048,10 +1141,17 @@ function M.ScanSlot(slot, threshold)
     local _, _, qq = GetItemInfo(link)
     q = qq
   end
-  q = q or 0
+  q = tonumber(q) or 0
   local entry = { link = link, quality = q,
     texture = tex, quantity = qty, slot = slot, name = slotName }
   entry.itemID = Z.Util.ItemID(link)
+  -- Poor (quality 0) is NEVER a roll row: always free, whatever the
+  -- party threshold reads (even 0). Matches the bag-addon scale the
+  -- user sees (grey = 0 = below everything).
+  if q <= 0 then
+    entry.free = true
+    return entry
+  end
   local thresh = threshold or M.LootThreshold()
   if q >= thresh then
     if Z.LootWindow and Z.LootWindow.IsGroupRollItem

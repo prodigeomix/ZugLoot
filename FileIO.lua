@@ -6,6 +6,25 @@ local M = {}
 Z.FileIO = M
 
 M.SR_FILENAME = "ZugLoot_SR.txt"
+M.LOG_FILENAME = "ZugLoot_debug.txt"
+
+-- Debug log: append-only file in CustomData/ (Nampower WriteCustomFile
+-- mode "a"), readable from outside the client. Every entry is one
+-- line: "<clock> <msg>". Nil-safe everywhere: no file API (or a
+-- failed write) silently no-ops — chat output is unaffected.
+-- Toggle via /zl lootdebug; the toggle ALSO appends on/off markers so
+-- the file shows session boundaries.
+function M.Log(msg)
+  if not WriteCustomFile then return false end
+  local stamp = "?"
+  if time then
+    local ok, t = pcall(time)
+    if ok and t then stamp = tostring(t) end
+  end
+  local line = tostring(stamp) .. " " .. tostring(msg or "") .. "\n"
+  local ok = pcall(WriteCustomFile, M.LOG_FILENAME, line, "a")
+  return ok and true or false
+end
 
 function M.IsAvailable()
   return ReadCustomFile ~= nil

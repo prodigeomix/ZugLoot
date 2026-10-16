@@ -87,14 +87,30 @@ lootSlots = {
 eq(table.concat(scanKinds(), ","), "free,free,roll,roll,roll", "uncommon: grey/white free, green+ roll")
 eq(ML.LootThreshold(), 2, "live threshold read")
 
--- 2. Grey is always free, even at an epic threshold; green/blue free too.
+-- 2. Grey is always free, even at an epic threshold — and even at a
+-- common (1) threshold: poor (0) is below everything. Green/blue free
+-- too at epic.
 thresh = 4
 eq(table.concat(scanKinds(), ","), "free,free,free,free,roll", "epic: only epics roll")
 eq(ML.LootThreshold(), 4, "threshold follows the party setting")
+thresh = 1
+lootSlots = {
+  { link = "item:5001:0:0:0", quality = 0, name = "Ruined Pelt" },
+  { link = "item:5002:0:0:0", quality = 1, name = "Linen Cloth" },
+}
+eq(table.concat(scanKinds(), ","), "free,roll", "common: grey still free, white rolls")
+thresh = 2
 
 -- 3. Group-loot method: at-threshold items are Blizzard group rolls
 -- (listed, never looted); below-threshold stays free.
 grouping, method, thresh = "party", "group", 2
+lootSlots = {
+  { link = "item:5001:0:0:0", quality = 0, name = "Ruined Pelt" },
+  { link = "item:5002:0:0:0", quality = 1, name = "Linen Cloth" },
+  { link = "item:5003:0:0:0", quality = 2, name = "Green Tunic" },
+  { link = "item:5004:0:0:0", quality = 3, name = "Blue Blade" },
+  { link = "item:5005:0:0:0", quality = 4, name = "Epic Helm" },
+}
 local kinds = scanKinds()
 eq(table.concat(kinds, ","), "free,free,group,group,group", "group loot owns at-threshold rows")
 
@@ -114,24 +130,35 @@ lootSlots = { { link = "item:5003:0:0:0", quality = 2, name = "Green Tunic" } }
 local er = ML.ScanSlot(1, 4)
 ok(er ~= nil and er.free, "explicit rare cutoff keeps greens free")
 
--- 7. Below-threshold click loots straight to the player under MASTER
--- loot: plain LootSlot fires, GiveMasterLoot never does.
+-- 7. ML self-take of a below-threshold item under MASTER loot goes
+-- through the handoff with the ML's own index (verified live: plain
+-- LootSlot is a silent no-op there — LOOT-ISSUED ok=true, server
+-- ignores it, row strands [done]).
 grouping, method, thresh = "party", "master", 2
 UnitName = function() return "Me" end
+ZugLoot.SRSecurity.AmML = function() return true end
 LW.blizzardTakeover = true
 ML.lootOpen = true
 local plain, master = {}, {}
 LootSlot = function(s, f) table.insert(plain, { s, f }) end
-GiveMasterLoot = function() table.insert(master, true) end
+GiveMasterLoot = function(slot, idx) table.insert(master, { slot, idx }) end
+GetMasterLootCandidate = function(a, b)
+  local i = (type(a) == "number" and b == nil) and a or b
+  if i == 1 then return "Me" end
+  return nil
+end
 lootSlots = { { link = "item:5001:0:0:0", quality = 0, name = "Ruined Pelt" } }
 local scanned = ML.ScanSlot(1, nil)
 ok(scanned ~= nil and scanned.free, "grey scans free under master loot")
 LW.SetItems({ { itemID = 5001, link = "item:5001:0:0:0",
   quality = 0, slot = 1, free = true } }, "loot")
-eq(LW.OnRowClick(5001, 1), "looting", "grey click loots")
-eq(#plain, 1, "plain LootSlot issued")
-eq(plain[1][1], 1, "correct corpse slot")
-eq(#master, 0, "master loot never touched for below-threshold")
+eq(LW.OnRowClick(5001, 1), "looting", "grey click loots (ML self-take)")
+eq(#master, 1, "ML grey self-take hands off via master loot")
+eq(master[1][1], 1, "correct corpse slot")
+eq(master[1][2], 1, "own candidate index")
+eq(#plain, 0, "no dead plain LootSlot for ML self-take")
+GetMasterLootCandidate = nil
+ZugLoot.SRSecurity.AmML = nil
 
 -- Restore client globals for the other test files.
 GetLootThreshold = saveThreshold

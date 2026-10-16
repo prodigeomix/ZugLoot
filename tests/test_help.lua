@@ -32,10 +32,10 @@ ok(string.find(lines[1], "9.9.9-test", 1, true) ~= nil, "header carries version"
 
 -- Slim set: exactly these commands, nothing else.
 local kept = { "sheet", "import", "loadfile", "sheetreq", "sync",
-  "simboss", "simraid", "simstop", "rehearse", "rolldebug", "help" }
+  "simboss", "simraid", "simstop", "rehearse", "rolldebug", "lootdebug", "help" }
 local dropped = { "raids", "raid", "rf", "arf", "rr", "2x", "fr", "cr",
   "show", "hide", "time", "autoclose", "auto", "ver", "verlist",
-  "sim", "simtmog", "simroll", "lootdebug", "rollauto", "lootframe",
+  "sim", "simtmog", "simroll", "rollauto", "lootframe",
   "log", "logclear", "reset", "roll", "award" }
 local function documents(cmd)
   for _, ln in ipairs(lines) do

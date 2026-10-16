@@ -81,7 +81,12 @@ end
 function M.Clear()
   M.items = {}
   M.detail = nil
-  M.DisarmWatchdogs()
+  -- Watchdogs parked while walking away must NOT die with the list:
+  -- the row they guard re-parks and resumes, and the watch must still
+  -- un-dim it if the server dropped the call (else a silent call
+  -- strands a grey [done] row that only a rescan can clear). Pending
+  -- arms live in MasterLootUI.pendingLoot and park/restore with the
+  -- corpse, so the watch re-checks the right arm on fire.
   M.Refresh()
   M.RefreshDetail()
 end
@@ -93,12 +98,19 @@ end
 -- wait for a confirm that never comes, don't strand grey rows). If the
 -- slot emptied without an event, reconcile. Timer-driven (vanilla-safe);
 -- headless no-op without corpse APIs. One watchdog per click; disarmed
--- by confirm (RescanLeftovers), error (UI_ERROR_MESSAGE), or firing.
+-- by confirm (RescanLeftovers clears the arm), error (UI_ERROR_MESSAGE),
+-- or firing. Survives Clear()/walk-away: the arm lives in
+-- MasterLootUI.pendingLoot (parked/restored with the corpse) and the
+-- row resumes on re-loot, so a late fire still finds and un-dims it.
+-- Corpse-scoped: a parked arm from an OLD corpse must not un-dim a row
+-- on the new one — the watch keys on the corpse key pinned at click
+-- time and no-ops after a corpse change.
 M.watchdogs = nil
 function M.WatchClick(slot, itemID, rowName)
   if not (GetNumLootItems and Z.Timer and Z.Timer.After) then return end
   M.watchdogs = M.watchdogs or {}
-  local wd = { slot = slot, itemID = itemID, dead = false }
+  local key = Z.MasterLootUI and Z.MasterLootUI.lootKey or nil
+  local wd = { slot = slot, itemID = itemID, dead = false, corpse = key }
   table.insert(M.watchdogs, wd)
   Z.Timer.After(4, function()
     wd.dead = true
@@ -107,6 +119,10 @@ function M.WatchClick(slot, itemID, rowName)
         if M.watchdogs[i] == wd then table.remove(M.watchdogs, i) break end
       end
     end
+    -- Corpse changed since the click (walk-away onto something else):
+    -- this arm belongs to the old corpse, never touch the new list.
+    local curKey = Z.MasterLootUI and Z.MasterLootUI.lootKey or nil
+    if wd.corpse ~= curKey then return end
     -- Armed click still pending AND row still dimmed = silent ignore.
     local armed = Z.MasterLootUI and Z.MasterLootUI.pendingLoot
       and Z.MasterLootUI.pendingLoot[slot]
@@ -1059,6 +1075,8 @@ function M.OnRowClick(itemID, clickSlot)
 end
 
 -- /zl lootdebug: verbose click-to-loot logging (slot, corpse size, link).
+-- Sticky: stays on until toggled off (survives reloads) so a silent
+-- call can be caught across sessions without re-arming mid-corpse.
 M.lootDebug = false
 
 -- /zl rolldebug: one chat line per roll feed naming exactly where it
