@@ -262,7 +262,6 @@ function M.DetachBlizzardLoot(takeOver)
     end
   end
   frameTakeover(LootFrame) -- client global; nil headless (tests never define it)
-  frameTakeover(pfLootFrame) -- pfQuest's loot skin, same treatment when present
   M.blizzardTakeover = takeOver
 end
 -- Per-loot safety net: keep Blizzard's frame down while OUR rows cover

@@ -4,8 +4,8 @@
 -- window, loot overview rows, loot detail header) and all five now run
 -- this same code, so they can never drift apart again:
 --   hover       = full GameTooltip item details via SetHyperlink with the
---                 BARE item string (the form every working 1.12 addon uses:
---                 Bagshui/Atlas/CFMQuest/pfLoot all pass "item:...", never
+--                 BARE item string (the form working 1.12 addons use:
+--                 bag/loot addons all pass "item:...", never
 --                 the full color link). The client itself queries the server
 --                 for uncached items, so details appear even with a cold
 --                 cache — never a dead tooltip. Only a bare NAME (no id at

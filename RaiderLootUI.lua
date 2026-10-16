@@ -242,7 +242,15 @@ function M.Build()
     btn:SetText(b.label)
     local font = btn:GetFontString()
     if font then
-      if font.SetFont then font:SetFont("Fonts\\FRIZQT__.TTF", 8, "OUTLINE") end
+      -- Keep the template font (never hardcode a Fonts\ path: file
+      -- layout varies across clients and a missing file blanks the
+      -- text); only shrink + outline via the font's own path.
+      if font.GetFont and font.SetFont then
+        local okF, fpath = pcall(font.GetFont, font)
+        if okF and fpath and fpath ~= "" then
+          pcall(font.SetFont, font, fpath, 8, "OUTLINE")
+        end
+      end
       font:SetPoint("TOP", btn, "TOP", 0, -3)
       font:SetTextColor(0.7, 0.7, 0.7)
     end

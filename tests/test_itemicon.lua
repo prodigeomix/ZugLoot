@@ -69,7 +69,7 @@ end
 resetClient()
 
 -- 1. Hover, full link: SetHyperlink gets the BARE item string (the form
--- every working 1.12 addon uses — Bagshui/Atlas/CFMQuest/pfLoot). The
+-- working 1.12 addons use). The
 -- client resolves it from cache or queries the server.
 eq(II.Hover({}, 17063, FULL), "hyper", "full link hover kind")
 eq(tips[1][1], "hyper", "full link hover calls SetHyperlink")
