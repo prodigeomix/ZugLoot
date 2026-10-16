@@ -666,9 +666,14 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
   no `//`, no `goto`, no bitwise ops, no `table.unpack`, no bare
   `string.gmatch` (use the `string.gmatch or string.gfind` idiom).
   Enforced by the `lua50 gate` in `tests/run_tests.lua` — a static scan
-  that fails the suite on any hit. Background: a `#` in Core.lua once
+  that fails the suite on any hit. Plus polyfill coverage: `Util.lua`
+  (2nd in the toc) shims `string.match`/`string.gmatch` off
+  `string.find`/`string.gfind` when the client lacks them, and
+  `tests/test_util.lua` simulates a strict-5.0 client (natives hidden)
+  to prove the shims hold. Background: a `#` in Core.lua once
   killed `/zl` entirely (whole-file parse failure) while the addon still
-  showed in the addon list.
+  showed in the addon list; later a missing `string.match` on a strict
+  client broke every `/zl` command the same way.
 
 ## 8. Requirements traceability
 

@@ -112,7 +112,7 @@ local fifty = {
   { pat = "//", msg = "// integer division" },
   { pat = "%f[%a]goto%f[%A]", msg = "goto" },
   { pat = "::", msg = "::label::" },
-  { pat = "table%.unpack", msg = "table.unpack (5.0: global unpack)" },
+  { pat = "table%.unpack%f[^%s]", msg = "table.unpack (5.0: global unpack)" },
   -- NOTE: `string.gmatch or string.gfind` fallback idiom is SAFE and
   -- allowed; only a bare call is flagged. The pattern below requires
   -- the match NOT to be followed by ` or `.
