@@ -352,7 +352,10 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   window becomes the award window**: TWO award buttons -- `Award <winner>`
   (kind winner by priority) and `Award TMOG (<name>)` whenever the TMOG
   kind was contested — `...` for anyone else (candidates: any raider, for
-  when something is wrong with the rolls), Close. Awarding ends any open
+  when something is wrong with the rolls), Close. **Continue rolling**
+  reopens intake on the finished round with the landed rolls kept
+  (unlike **Roll again**, which starts fresh); newcomers roll in,
+  re-rollers are first-roll-only. Awarding ends any open
   roll first, then hands out the item and closes the window; the row
   leaves the list (done = gone). Ties stay open for a fresh re-roll round.
   Cancel ends the roll and drops the window back to pick (re-roll /
@@ -367,7 +370,8 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   with that class's players, so the whole raid is one hover away instead
   of a flat 40-name list. Every submenu name awards directly, even before
   a roll, and nobody already listed above repeats inside a group.
-  The award window keeps **Roll again** and **Raid roll** as bar buttons
+  The award window keeps **Continue rolling**, **Roll again** and
+  **Raid roll** as bar buttons
   next to the winners.
   **Close** to dismiss and keep working the overview. `/zl cr`
   returns the item to open.

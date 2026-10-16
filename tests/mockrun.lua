@@ -197,9 +197,9 @@ assert(Z.LootWindow.detail.phase == "award", "detail flips to award");
 Z.LootWindow.RefreshDetail();
 assert(Z.LootWindow.detailFrame.timerBar.hidden == true,
   "bar hides once the roll finishes");
--- bar buttons: primary (SR winner) + Award TMOG (kind winner) + Roll
--- again + Raid roll + ... — roll initiation lives on the bar, never
--- in the ... menu.
+-- bar buttons: primary (SR winner) + Award TMOG (kind winner) +
+-- Continue rolling + Roll again + Raid roll + ... — roll initiation
+-- lives on the bar, never in the ... menu.
 Z.LootWindow.detail.menu.perType = Z.LootWindow.detail.menu.perType or {};
 Z.LootWindow.detail.menu.perType.TMOG = { entry = { name = "SoloPlayer",
   rollType = "TMOG", effective = 15 }, tied = {} };
@@ -215,25 +215,31 @@ Z.LootWindow.RefreshDetail();
 assert(df2.tmogB.hidden == true, "Award TMOG hidden without a TMOG roll");
 assert(df2.rollB ~= nil, "Roll button built");
 assert(df2.raidB ~= nil, "Raid roll button built");
+assert(df2.contB ~= nil, "Continue rolling button built");
 assert(df2.rollB.hidden ~= true, "Roll visible on the award window");
 assert(df2.raidB.hidden ~= true, "Raid roll visible on the award window");
+assert(df2.contB.hidden ~= true, "Continue rolling visible on the award window");
+assert(string.find(df2.contB.label or "", "Continue rolling", 1, true) ~= nil,
+  "continue labeled, got: " .. tostring(df2.contB.label));
 assert(string.find(df2.rollB.label or "", "Roll again", 1, true) ~= nil,
   "award Roll re-labels, got: " .. tostring(df2.rollB.label));
 assert(string.find(df2.raidB.label or "", "Raid roll", 1, true) ~= nil,
   "raid button labeled, got: " .. tostring(df2.raidB.label));
--- pick phase: Roll + Raid roll start buttons; rolling: Roll hides,
--- Raid roll stays (switch mid-roll).
+-- pick phase: Roll + Raid roll start buttons (Continue hidden);
+-- rolling: Roll + Continue hide, Raid roll stays (switch mid-roll).
 Z.LootWindow.detail.phase = "pick";
 Z.LootWindow.detail.menu = nil;
 Z.LootWindow.RefreshDetail();
 assert(df2.rollB.hidden ~= true, "Roll visible pre-roll");
 assert(df2.raidB.hidden ~= true, "Raid roll visible pre-roll");
+assert(df2.contB.hidden == true, "Continue hidden pre-roll");
 assert(string.find(df2.rollB.label or "", "^Roll", 1, false) ~= nil
   or string.find(df2.rollB.label or "", "Roll", 1, true) ~= nil,
   "pick Roll labeled, got: " .. tostring(df2.rollB.label));
 Z.LootWindow.detail.phase = "rolling";
 Z.LootWindow.RefreshDetail();
 assert(df2.rollB.hidden == true, "Roll hidden mid-roll");
+assert(df2.contB.hidden == true, "Continue hidden mid-roll");
 assert(df2.raidB.hidden ~= true, "Raid roll stays mid-roll");
 -- award phase: same winner rows power the primary button.
 Z.LootWindow.detail.phase = "award";
@@ -256,7 +262,7 @@ local function barBox(b)
   return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
 end
 local vis = {}
-for _, n in ipairs({ "awardB", "tmogB", "rollB", "raidB", "moreB" }) do
+for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "moreB" }) do
   local btn = df[n]
   if btn and btn.hidden ~= true then
     local box = barBox(btn)

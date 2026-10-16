@@ -331,6 +331,9 @@ ok(sawWinner, "award window names the winner with kind")
 local aacts = LW.DetailActions()
 eq(aacts[1].id, "award-name", "award offers winner rows")
 eq(aacts[1].name, "Aaa", "top winner first")
+local hasCont = false
+for i = 1, #aacts do if aacts[i].id == "continue" then hasCont = true break end end
+ok(hasCont, "award offers Continue rolling")
 -- Award ... lists each roller once (with their roll above): no bare
 -- duplicate of a name already shown with a roll.
 local seenNames, dupName = {}, nil
@@ -343,11 +346,41 @@ for i = 1, #LW.MoreChoices() do
 end
 eq(dupName, nil, "award ... shows nobody twice")
 -- Award-phase ... lists rollers/winners only (re-rolls live on the
--- bar buttons); MoreRollControls stays the headless mirror of them.
+-- bar buttons); MoreRollControls stays the headless mirror of them
+-- (Continue rolling first, then fresh Roll again, then Raid roll).
 local arc = LW.MoreRollControls()
-eq(#arc, 2, "award ... keeps roll controls")
-eq(arc[1].id, "roll", "roll again first")
-eq(arc[2].id, "raidroll", "raid-roll second")
+eq(#arc, 3, "award controls mirror the re-roll buttons")
+eq(arc[1].id, "continue", "continue rolling first")
+eq(arc[2].id, "roll", "roll again second")
+eq(arc[3].id, "raidroll", "raid-roll third")
+-- 6a. Continue rolling: reopens intake with the landed rolls kept
+-- (unlike Roll again, which starts fresh).
+eq(LW.doAction(1001, "continue"), "rolling", "continue reopens the roll")
+ok(ML.roll ~= nil and ML.roll.itemID == 1001, "continued roll is live")
+eq(#ML.roll.rolls, 3, "landed rolls carried over")
+eq(#LW.detail.rolls, 3, "window keeps the landed rolls")
+eq(LW.detail.phase, "rolling", "window back to rolling")
+ML.IntakeChatRoll("Stranger rolls 80 (1-100)") -- already rolled: first-roll-only
+eq(#ML.roll.rolls, 3, "re-roll from the same player ignored")
+ML.IntakeChatRoll("NewGuy rolls 70 (1-100)") -- newcomer joins the round
+eq(#ML.roll.rolls, 4, "newcomer roll lands")
+eq(#LW.detail.rolls, 4, "window shows the newcomer")
+eq(LW.doAction(1001, "finish"), "finished", "re-finish resolves")
+eq(LW.detail.phase, "award", "award window again")
+-- Re-finishing stamps again: continuing chains (all four rolls kept).
+eq(LW.doAction(1001, "continue"), "rolling", "continue chains after re-finish")
+eq(#ML.roll.rolls, 4, "chained continue keeps every roll")
+ok(ML.lastRound == nil, "stamp consumed on use")
+eq(LW.doAction(1001, "finish"), "finished", "third finish resolves")
+-- Continue refused off the award window: back to a fresh pick, the
+-- stamp is gone with the close.
+ML.roll = nil
+LW.CloseDetail()
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "roll"), "rolling", "fresh roll after close")
+ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+eq(LW.doAction(1001, "finish"), "finished", "finish resolves")
 -- Award from the window closes everything.
 eq(LW.doAction(1001, "award-name", "Aaa"), "awarded Aaa", "award in window")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "window award won-marks")

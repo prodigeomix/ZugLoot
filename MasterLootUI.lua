@@ -16,6 +16,13 @@ Z.MasterLootUI = M
 -- roll can never collect rolls or auto-finish late. There are no parked
 -- sessions, no pending menus, no background rolls. Ever.
 M.roll = nil -- THE roll (or nil): { itemID, itemLink, mode, rolls, silent }
+M.lastRound = nil -- last FINISHED round stamp (see FinishRoll)
+
+-- The last FINISHED round, stamped by FinishRoll before the roll clears:
+-- { itemID, itemLink, mode, silent, invented, roster, n }. Lets the award
+-- window "Continue rolling": reopen intake on the same item with the
+-- landed rolls kept. Item-checked on use, so a stale stamp never leaks
+-- across items.
 
 -- Loot console is universal: anyone who can SEE the loot runs the window
 -- (solo, party/raid of any loot method, master looter or not). Rolling and
@@ -52,6 +59,9 @@ end
 -- End the roll if it is THIS item's. Every window-close, award, and
 -- timeout path funnels through here: disarm the clock, clear the
 -- table. A dead roll collects nothing and finishes nothing.
+-- NOTE: the finish stamp (M.lastRound) is NOT cleared here — the award
+-- window needs it for "Continue rolling" after the finish ended the
+-- roll. Award paths clear it when the item leaves (see Award).
 function M.EndRoll(itemID)
   local r = M.roll
   if not r then return end
@@ -240,10 +250,59 @@ function M.AddRoll(player, rv, minR, maxR)
 end
 
 
+-- Continue rolling a FINISHED round: reopen intake on the same window
+-- with the landed rolls kept (unlike "Roll again", which starts fresh).
+-- Only from the award phase: needs the finish stamp (same item) and no
+-- live roll. Carries mode/silent/invented/roster over; SIM rounds feed
+-- no auto-fakes (the queue entry was consumed at start — the ML collects
+-- manual /rolls from here). Refuses cross-item, mid-roll, and stamps
+-- gone (awarded/closed/cancelled). Returns the reopened roll or nil.
+function M.ContinueRoll(itemID)
+  if M.roll then
+    Z.Print("A roll is already running — finish, award, or close it first.")
+    return nil
+  end
+  local stamp = M.lastRound
+  itemID = Z.Util.ItemID(itemID)
+  if not itemID or not stamp or stamp.itemID ~= itemID then
+    Z.Print("Nothing to continue — finish a roll first.")
+    return nil
+  end
+  local LW = Z.LootWindow
+  local d = LW and LW.detail or nil
+  if not d or d.itemID ~= itemID or (d.phase or "pick") ~= "award" then
+    Z.Print("Nothing to continue — finish a roll first.")
+    return nil
+  end
+  local kept = {}
+  for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
+    local r = d.rolls[i]
+    if r and r.name then table.insert(kept, r) end
+  end
+  local roll = M.BeginRoll(itemID, stamp.itemLink or ("item:" .. tostring(itemID)),
+    stamp.mode or "SR", stamp.silent)
+  if not roll then return nil end
+  if stamp.invented then roll.invented = stamp.invented end
+  if stamp.roster then roll.roster = stamp.roster end
+  if stamp.n then roll.n = stamp.n end
+  -- Landed rolls, kept: live truth in the intake's own shape
+  -- ({name, roll, type, min, max, effective}); first-roll-only guards
+  -- still apply to newcomers AND re-rollers.
+  for i = 1, Z.Util.ArrayCount(kept) do
+    local r = kept[i]
+    table.insert(roll.rolls, { name = r.name, roll = r.roll,
+      type = r.rollType, min = r.min, max = r.max,
+      effective = r.effective or r.roll })
+  end
+  M.lastRound = nil -- consumed: one continue per finish
+  return roll
+end
+
 -- Cancel the open roll: intake dead, clock dead, row back to open. The
 -- window itself is LootWindow's job (it drops back to pick for a
 -- re-roll choice). Cancelling kills the clock: a dead roll must never
--- auto-finish late.
+-- auto-finish late. A cancelled item has no finished round: the stamp
+-- for THIS item dies here (other items never share a window anyway).
 function M.Cancel(itemID)
   local roll = M.roll
   if not roll then Z.Print("No active roll.") return end
@@ -251,6 +310,7 @@ function M.Cancel(itemID)
   itemID = roll.itemID
   M.CancelRollTimer(roll)
   M.roll = nil
+  if M.lastRound and M.lastRound.itemID == itemID then M.lastRound = nil end
   Z.Print("Roll cancelled.")
   if Z.RaiderLootUI then Z.RaiderLootUI.Hide() end
   if Z.LootWindow and Z.LootWindow.MarkOpen then
@@ -322,12 +382,18 @@ end
 -- the SAME window (rolling view flips to winners). Ties stay open for
 -- a re-roll round. The roll ends here either way for intake purposes:
 -- FinishRoll clears M.roll FIRST so no late roll can land mid-resolve;
--- the window keeps the landed rolls for the award. Returns "tie" (still
+-- the window keeps the landed rolls for the award. The finished round
+-- is stamped on M.lastRound (mode/silent/invented/roster carried over)
+-- so "Continue rolling" can reopen intake on the same window with
+-- the landed rolls kept. Returns "tie" (still
 -- open for re-rolls) or "awarded"/"finished".
 function M.FinishRoll(itemID)
   local roll = M.roll
   if not roll then Z.Print("No active roll.") return "closed" end
   if itemID and roll.itemID ~= itemID then return "closed" end
+  M.lastRound = { itemID = roll.itemID, itemLink = roll.itemLink,
+    mode = roll.mode, silent = roll.silent, invented = roll.invented,
+    roster = roll.roster, n = roll.n }
   M.EndRoll()
   local sheet = Z.DB and Z.DB.sheet
   local res = Z.Resolver.ResolveItem(sheet or { items = {}, won = {} },
@@ -1000,6 +1066,8 @@ function M.Award(itemID, winnerName, source, invented)
     return
   end
   M.EndRoll(itemID)
+  -- Awarded = gone: no finished round left to continue on this item.
+  if M.lastRound and M.lastRound.itemID == itemID then M.lastRound = nil end
   local link = "item:" .. tostring(itemID)
   if Z.LootWindow then
     local it = Z.LootWindow.Find(itemID)

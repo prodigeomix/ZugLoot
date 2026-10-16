@@ -141,6 +141,23 @@ ok(LW.Find(1001) == nil, "awarded row gone")
 ok(LW.detail == nil, "window closed after award")
 ok(Sim.running == false, "run ended when drained")
 
+-- 1b. Continue rolling on a finished sim round: landed fakes kept, a
+-- manual /roll joins (no auto re-fakes: the queue entry was consumed).
+resetHarness()
+math.random = rigged({ 90, 80 })
+Sim.SimItem("1001")
+math.random = realRandom
+eq(LW.doAction(1001, "finish"), "finished", "sim finish resolves")
+eq(LW.doAction(1001, "continue"), "rolling", "continue reopens the sim round")
+ok(ML.roll ~= nil and ML.roll.mode == "SIM", "continued roll stays SIM")
+eq(#ML.roll.rolls, 2, "sim fakes carried over")
+ML.IntakeChatRoll("Me rolls 55 (1-100)")
+eq(#ML.roll.rolls, 3, "manual roll joins the continued round")
+eq(LW.doAction(1001, "finish"), "finished", "continued round re-finishes")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa") == false, "no award yet from continue")
+ML.AwardChosen({ name = "Aaa", via = "winner" })
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "continued round awards")
+
 -- 2. Closing the window ends the roll: intake dead, no late finish.
 resetHarness()
 math.random = rigged({ 90, 80 })
