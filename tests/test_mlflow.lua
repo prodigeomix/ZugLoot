@@ -360,7 +360,36 @@ for i = 1, #printed do
 end
 ok(sawNamed, "chat names the item")
 
--- 12. Award menu data: winners + kind groups + TMOG row + candidates.
+-- 12. Sheet log floor: below rare (green here) never enters the sheet —
+-- no stub, no history, no won mark — while the roll/award flow itself
+-- still works (item loots, row clears).
+resetHarness()
+lootSlots = { { link = "item:6001:0:0:0", quality = 2 } }
+ML.OnLootOpened()
+ok(LW.Find(6001) ~= nil, "green row listed")
+LW.OpenDetail(6001)
+eq(LW.doAction(6001, "roll"), "rolling", "green roll starts")
+ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+eq(LW.doAction(6001, "finish"), "finished", "green finish resolves")
+ok(ZugLoot.DB.sheet.items[6001] == nil, "green never stubbed onto the sheet")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 6001), 0, "green roll history never recorded")
+ML.AwardChosen({ name = "Aaa", via = "winner" }, 6001)
+ok(not SRData.HasWon(ZugLoot.DB.sheet, 6001, "Aaa"), "green award leaves no won mark")
+ok(LW.Find(6001) == nil, "green row still clears on award")
+-- Rare and above still log: stub + history + won mark.
+resetHarness()
+lootSlots = { { link = "item:6002:0:0:0", quality = 3 } }
+ML.OnLootOpened()
+LW.OpenDetail(6002)
+LW.doAction(6002, "roll")
+ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+LW.doAction(6002, "finish")
+ok(ZugLoot.DB.sheet.items[6002] ~= nil, "rare stubbed onto the sheet")
+eq(SRData.RollCount(ZugLoot.DB.sheet, 6002), 1, "rare roll history recorded")
+ML.AwardChosen({ name = "Aaa", via = "winner" }, 6002)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 6002, "Aaa"), "rare award won-marks")
+
+-- 13. Award menu data: winners + kind groups + TMOG row + candidates.
 resetHarness()
 local res = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001,
   { { name = "Aaa", roll = 90, type = "SR" }, { name = "Bbb", roll = 80, type = "SR" } },

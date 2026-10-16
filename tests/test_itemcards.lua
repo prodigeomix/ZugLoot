@@ -146,6 +146,29 @@ eq(SRData.PruneUnreserved(unSheet), 1, "one stub pruned")
 ok(unSheet.items[50] == nil, "stub gone")
 ok(unSheet.items[200] ~= nil, "SR item kept")
 
+-- 8b. Sheet log floor (rare 3+ only): below rare never enters the sheet.
+ok(SRData.LoggableQuality(3), "rare loggable")
+ok(SRData.LoggableQuality(4), "epic loggable")
+ok(SRData.LoggableQuality(5), "legendary loggable")
+ok(not SRData.LoggableQuality(2), "uncommon not logged")
+ok(not SRData.LoggableQuality(1), "common not logged")
+ok(not SRData.LoggableQuality(0), "poor not logged")
+ok(SRData.LoggableQuality(nil), "unknown quality proceeds")
+local floorSheet = SRData.NewSheet()
+ok(not SRData.EnsureUnreserved(floorSheet, 51, 2), "green stub refused")
+ok(floorSheet.items[51] == nil, "green never stubbed")
+ok(not SRData.EnsureUnreserved(floorSheet, 52, 0), "grey stub refused")
+ok(SRData.EnsureUnreserved(floorSheet, 53, 3), "rare stub added")
+ok(SRData.EnsureUnreserved(floorSheet, 54, nil), "unknown-quality stub added")
+ok(SRData.MarkWon(floorSheet, 53, "Aaa", 4), "epic won marks")
+ok(SRData.HasWon(floorSheet, 53, "Aaa"), "epic won kept")
+ok(not SRData.MarkWon(floorSheet, 55, "Bbb", 2), "green won refused")
+ok(not SRData.HasWon(floorSheet, 55, "Bbb"), "green won never lands")
+ok(SRData.MarkWon(floorSheet, 56, "Ccc"), "unknown-quality won marks")
+-- Direct MarkWon with explicit 0 refuses (callers normalize the
+-- list-default 0 to nil before calling).
+eq(SRData.MarkWon(floorSheet, 58, "Eee", 0), false, "explicit poor won refused")
+
 -- 9. Cards sort alphabetically by item name (client cache or sheet
 -- name), numeric ids only as tie-break; stubs still trail at bottom.
 GetItemInfo = function(id)

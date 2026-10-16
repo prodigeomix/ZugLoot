@@ -80,6 +80,17 @@ end
 
 M.ROLLS_PER_ITEM_MAX = 25
 
+-- Sheet log floor: roll history, unreserved stubs, and won marks only
+-- ever cover rare (blue, 3) and above. Anything below never enters the
+-- sheet. Unknown quality (nil — cold item cache, no row) can't be
+-- classified, so it proceeds (old behavior, no data loss).
+M.SHEET_QUALITY_MIN = 3
+function M.LoggableQuality(quality)
+  local q = tonumber(quality)
+  if q == nil then return true end
+  return q >= M.SHEET_QUALITY_MIN
+end
+
 -- Roll history: every finished roll session for an itemID this raid.
 -- entry = { t=epoch, mode="SR"|"OPEN"|"RAID"|"TWO", winners={names},
 --             entries={ {name, base, sr_plus, effective, missroll, excludedWon} } }
@@ -325,10 +336,14 @@ function M.TransformRaidRes(data)
   return sheet, nil
 end
 
--- Won marks: one copy per player per item per raid.
-function M.MarkWon(sheet, itemID, player)
+-- Won marks: one copy per player per item per raid. Optional quality
+-- (4th arg) enforces the sheet log floor: below rare never marks
+-- (returns false, marks nothing). Nil quality proceeds (unclassifiable).
+function M.MarkWon(sheet, itemID, player, quality)
+  if not M.LoggableQuality(quality) then return false end
   sheet.won[itemID] = sheet.won[itemID] or {}
   sheet.won[itemID][player] = true
+  return true
 end
 
 function M.HasWon(sheet, itemID, player)
@@ -345,10 +360,13 @@ end
 
 -- Ensure an item dropped/rolled but never SR'd has a stub entry so it shows
 -- on the sheet (at the bottom, flagged `unsr`). Never touches an existing
--- entry: real SR data is never clobbered. Returns true if a stub was added.
+-- entry: real SR data is never clobbered. Rare-and-above only: a known
+-- below-rare quality refuses (returns false, nothing added) — such items
+-- never enter the sheet. Returns true if a stub was added.
 function M.EnsureUnreserved(sheet, itemID, quality)
   if not sheet or not itemID then return false end
   if sheet.items[itemID] then return false end
+  if not M.LoggableQuality(quality) then return false end
   sheet.items[itemID] = { quality = quality or 4, rollers = {}, unsr = true }
   return true
 end

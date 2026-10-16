@@ -159,6 +159,15 @@ Sheet = {
   from `sheet.items`, a stub `{ quality, rollers = {}, unsr = true }` is added
   via `SRData.EnsureUnreserved` — never touching existing entries, so real SR
   data can't be clobbered. Empty sessions (no rolls) add nothing.
+- **Sheet log floor (rare 3+ only)**: roll history, unreserved stubs,
+  and won marks only ever cover rare (blue) and above — anything below
+  never enters the sheet (`SRData.SHEET_QUALITY_MIN = 3`, enforced via
+  `SRData.LoggableQuality` at every roll-session write: `AnnounceResult`
+  history + stubs, `Award` won marks, `AWARD` receive won marks).
+  Unknown quality (cold item cache, no row) proceeds — it can't be
+  classified, so nothing is lost. Quality 0 counts as unknown: poor
+  items are always free rows and can never roll. Imports are user data
+  and are never filtered.
 - Cards: unreserved items render at the **bottom** of the Sheet tab
   (`SRData.SortedCardIDs`: SR'd numeric first, stubs last), with a grey
   `[not SR'd]` title badge and a `(not on SR sheet — open roll)` body line.
@@ -532,7 +541,8 @@ window owns everything; closing it ends the roll — exactly like live.
 - Every sim roll is **written back into the sheet**: roll history
   (`sheet.rolls`, mode `SIM`, same shape as live via
   `Resolver.ToHistoryEntry`), won marks, and drop-log entries
-  (source `sim`). Visible in the Sheet tab right away.
+  (source `sim`). Visible in the Sheet tab right away. The sheet log
+  floor applies (rare 3+ only — see §3.3).
 - `/zl rehearse [on|off]` — solo master-loot practice, no sheet needed.
   While on, every solo corpse's non-coin rows queue with invented rollers
   (Aldric, Bryn, Cora, ...) and wait for the ML: each item's Roll button

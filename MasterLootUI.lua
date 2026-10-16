@@ -494,25 +494,43 @@ function M.AnnounceResult(roll, res)
   -- Persist the roll into per-item roll history. Same shape the sim
   -- writes (Resolver.ToHistoryEntry). Rehearsal rolls skip this
   -- entirely: invented rolls must never enter the real sheet's history
-  -- (or plant unreserved stubs on it).
+  -- (or plant unreserved stubs on it). Below rare (known quality < 3)
+  -- logs nothing at all — no stub, no history: such items never enter
+  -- the sheet. Unknown quality proceeds (unclassifiable, no data loss).
+  -- Quality 0 counts as unknown: poor items are always free rows and can
+  -- never roll, so 0 at finish time means "no data" (sim rows default
+  -- to it), not "grey".
   if roll.invented then
     if Z.MainWindow then Z.MainWindow.Refresh() end
   elseif Z.DB and Z.DB.sheet and Z.SRData.RecordRolls then
-    -- Item rolled but never SR'd: stub it onto the sheet so it shows at the
-    -- bottom, flagged as not SR'd. Only when rolls actually happened.
-    if Z.Util.ArrayCount(res.entries or {}) > 0 and Z.SRData.EnsureUnreserved then
-      local q = nil
-      if GetItemInfo then
-        local _, _, qq = GetItemInfo(tonumber(roll.itemID))
-        q = qq
-      end
-      if Z.SRData.EnsureUnreserved(Z.DB.sheet, roll.itemID, q) then
-        Z.Print("Note: " .. tostring(roll.itemLink or roll.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
-      end
+    local q = nil
+    if GetItemInfo then
+      local _, _, qq = GetItemInfo(tonumber(roll.itemID))
+      q = qq
     end
-    Z.SRData.RecordRolls(Z.DB.sheet, roll.itemID,
-      Z.Resolver.ToHistoryEntry(res, roll.mode, (time and time()) or 0))
-    if Z.MainWindow then Z.MainWindow.Refresh() end
+    if q == nil and Z.LootWindow and Z.LootWindow.Find then
+      local row = Z.LootWindow.Find(roll.itemID)
+      if row then q = tonumber(row.quality) end
+    end
+    if q == nil and Z.DB.sheet.items then
+      local it = Z.DB.sheet.items[roll.itemID]
+      if it then q = tonumber(it.quality) end
+    end
+    if q == 0 then q = nil end -- never a real rolled quality (see above)
+    if Z.SRData.LoggableQuality and not Z.SRData.LoggableQuality(q) then
+      if Z.MainWindow then Z.MainWindow.Refresh() end
+    else
+      -- Item rolled but never SR'd: stub it onto the sheet so it shows at the
+      -- bottom, flagged as not SR'd. Only when rolls actually happened.
+      if Z.Util.ArrayCount(res.entries or {}) > 0 and Z.SRData.EnsureUnreserved then
+        if Z.SRData.EnsureUnreserved(Z.DB.sheet, roll.itemID, q) then
+          Z.Print("Note: " .. tostring(roll.itemLink or roll.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
+        end
+      end
+      Z.SRData.RecordRolls(Z.DB.sheet, roll.itemID,
+        Z.Resolver.ToHistoryEntry(res, roll.mode, (time and time()) or 0))
+      if Z.MainWindow then Z.MainWindow.Refresh() end
+    end
   end
 end
 
@@ -1108,7 +1126,20 @@ function M.Award(itemID, winnerName, source, invented)
     end
   end
   if not skipWon then
-    Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName)
+    -- Sheet log floor: a known below-rare award still loots, broadcasts,
+    -- and clears the row — it just leaves no won mark behind.
+    local wq = nil
+    if row0 then wq = tonumber(row0.quality) end
+    if wq == nil and GetItemInfo then
+      local _, _, qq = GetItemInfo(tonumber(itemID))
+      wq = qq
+    end
+    if wq == nil and Z.DB.sheet.items then
+      local it = Z.DB.sheet.items[itemID]
+      if it then wq = tonumber(it.quality) end
+    end
+    if wq == 0 then wq = nil end -- list default, never a rolled quality
+    Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName, wq)
   end
   if Z.Comm then Z.Comm.BroadcastAward(itemID, winnerName) end
   if Z.DropLog then Z.DropLog.Add(itemID, link, source, "award", winnerName) end

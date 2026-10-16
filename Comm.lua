@@ -214,7 +214,14 @@ function M.OnMessage(msg, sender)
   if string.sub(msg, 1, 6) == "AWARD:" then
     local itemID, winner = string.match(msg, "AWARD:(%d+):(.+)$")
     if itemID and Z.DB and Z.DB.sheet and Z.SRData then
-      Z.SRData.MarkWon(Z.DB.sheet, tonumber(itemID), winner)
+      -- Sheet log floor (sender-side parity): a known below-rare award
+      -- leaves no won mark. Unknown quality proceeds (unclassifiable).
+      local q = nil
+      if GetItemInfo then
+        local _, _, qq = GetItemInfo(tonumber(itemID))
+        q = qq
+      end
+      Z.SRData.MarkWon(Z.DB.sheet, tonumber(itemID), winner, q)
       if Z.MainWindow then Z.MainWindow.Refresh() end
       if Z.SRView then Z.SRView.Refresh() end
     end
