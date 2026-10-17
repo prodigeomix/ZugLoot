@@ -115,7 +115,15 @@ local function resolveSimRow(itemID, link)
   end
   return name, fullLink or link, q or 0
 end
-local function syncWindow()
+-- Rebuild the sim loot window from the queue. keepListed=false (queue
+-- building: fresh SimItem/SimBoss/stage) replaces the list wholesale.
+-- keepListed=true (award-time re-sync via SyncLootWindow) ALSO carries
+-- over listed-but-unqueued sim rows — ignored-by-mistake rows and (as
+-- insurance) the active roll's row, whose entries were consumed at roll
+-- start. Live parity: an ignored row stays listed across other items'
+-- awards instead of vanishing. Flags are re-applied after SetItems
+-- (which resets them); order is queue first, leftovers in list order.
+local function syncWindow(keepListed)
   if not Z.LootWindow then return end
   local W = Z.LootWindow
   local sheet = Z.DB and Z.DB.sheet
@@ -132,7 +140,32 @@ local function syncWindow()
         quality = q, badge = badge })
     end
   end
+  local reIgnore = {}
+  if keepListed then
+    local activeID = Z.MasterLootUI and Z.MasterLootUI.roll
+      and Z.MasterLootUI.roll.itemID or nil
+    for i = 1, Z.Util.ArrayCount(W.items) do
+      local it = W.items[i]
+      if it and it.itemID and it.source == "sim"
+          and (it.ignored or it.itemID == activeID) then
+        local queued = false
+        for j = 1, Z.Util.ArrayCount(M.pending) do
+          if M.pending[j] and M.pending[j].itemID == it.itemID then
+            queued = true break
+          end
+        end
+        if not queued then
+          table.insert(rows, { itemID = it.itemID, link = it.link,
+            name = it.name, quality = it.quality, badge = it.badge })
+          if it.ignored then table.insert(reIgnore, it.itemID) end
+        end
+      end
+    end
+  end
   W.SetItems(rows, "sim")
+  for i = 1, Z.Util.ArrayCount(reIgnore) do
+    if W.MarkIgnored then W.MarkIgnored(reIgnore[i]) end
+  end
 end
 
 -- Open the roll and land every fake instantly. Real /rolls landing while
@@ -152,16 +185,46 @@ function M.RequestRoll(itemID)
   local entry = at and M.pending[at] or nil
   if not entry then
     if not (Z.DB and Z.DB.rehearse) then
-      Z.Print("SIM: item " .. tostring(itemID) .. " is not in the test queue.")
-      return false
+      -- Ignored-by-mistake sim row: the row is still listed AND flagged
+      -- ignored, but Ignore dropped its queue entry. Rebuild standard
+      -- fakes from the sheet and roll — Roll, Raid roll, Award, ...
+      -- all work on it again; the ignored mark clears via MarkRolling
+      -- below, exactly like the live path. Scoped to ignored rows
+      -- ONLY: a listed-but-unflagged row with no entry (tie re-roll,
+      -- consumed queue) still refuses — manual /rolls from there.
+      -- (Rebuilt fakes are standard: simtmog-style TMOG or filler
+      -- counts from the original queue are not preserved.)
+      local sheet = Z.DB and Z.DB.sheet
+      local W = Z.LootWindow
+      local row = W and W.Find and W.Find(itemID)
+      if sheet and row and row.source == "sim" and row.ignored then
+        entry = queueEntry(sheet, itemID,
+          row.link or ("item:" .. tostring(itemID)), {})
+        -- queueEntry stages; this roll consumes the entry at once
+        -- (same as table.remove on the normal path) — otherwise the
+        -- item would stay queued AND roll now, rolling twice. No
+        -- syncWindow: pending membership is unchanged (staged then
+        -- consumed), and re-syncing here would wipe the still-listed
+        -- ignored row off the window before MarkRolling clears it.
+        for i = Z.Util.ArrayCount(M.pending), 1, -1 do
+          if M.pending[i] == entry then table.remove(M.pending, i) break end
+        end
+        M.running = true
+        Z.Print("SIM: " .. dispName(itemID, row.link)
+          .. " was ignored — re-queued, rolling again.")
+      else
+        Z.Print("SIM: item " .. tostring(itemID) .. " is not in the test queue.")
+        return false
+      end
+    else
+      local W = Z.LootWindow
+      local row = W and W.Find and W.Find(itemID)
+      if not row then return false end
+      entry = { itemID = itemID, link = row.link or ("item:" .. tostring(itemID)),
+        rolls = Z.Resolver.FakeRolls(nil, nil,
+          { roster = M.RehearseNames, count = 5 }),
+        roster = M.RehearseNames, rehearse = true }
     end
-    local W = Z.LootWindow
-    local row = W and W.Find and W.Find(itemID)
-    if not row then return false end
-    entry = { itemID = itemID, link = row.link or ("item:" .. tostring(itemID)),
-      rolls = Z.Resolver.FakeRolls(nil, nil,
-        { roster = M.RehearseNames, count = 5 }),
-      roster = M.RehearseNames, rehearse = true }
   else
     table.remove(M.pending, at)
   end
@@ -545,7 +608,10 @@ function M.AfterAward()
 end
 
 function M.OnSimAwarded(_itemID) M.AfterAward() end
-function M.SyncLootWindow() syncWindow() end
+-- Award-time re-sync: keep listed-but-unqueued (ignored) sim rows on
+-- the window across other items' awards — live parity. Queue-building
+-- callers use the fresh syncWindow() above.
+function M.SyncLootWindow() syncWindow(true) end
 
 if ZugLoot then ZugLoot.Sim = M end
 return M

@@ -325,4 +325,64 @@ eq(hist[1].winners[1], "Aaa", "history names the winner")
 eq(hist[1].mode, "SIM", "history mode tagged")
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 
+-- 10. Ignored-by-mistake sim item stays operable: ignoring drops the
+-- queue entry but the row stays listed; Roll re-queues fresh fakes and
+-- rolls (no "not in the test queue" dead end), clearing the mark.
+resetHarness()
+math.random = rigged({ 2, 90, 80, 2, 99, 50 })
+Sim.SimBoss("Test Boss")
+math.random = realRandom
+eq(#Sim.pending, 2, "boss queues two drops")
+eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore first drop by mistake")
+ok(LW.Find(1001) ~= nil and LW.Find(1001).ignored, "ignored sim row stays listed")
+eq(#Sim.pending, 1, "ignore dropped its queue entry")
+-- Roll it anyway: re-queued, fakes land, mark clears.
+math.random = rigged({ 90, 80 })
+eq(LW.doAction(1001, "roll"), "rolling", "ignored sim row re-rollable")
+math.random = realRandom
+ok(ML.roll ~= nil and ML.roll.itemID == 1001, "re-roll runs on the item")
+eq(#ML.roll.rolls, 2, "rebuilt fakes landed")
+ok(not LW.Find(1001).ignored, "re-roll clears the ignored mark")
+eq(#Sim.pending, 1, "re-roll consumed its entry (no double queue)")
+eq(LW.doAction(1001, "finish"), "finished", "re-roll finishes")
+ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "re-rolled item awards")
+-- The other drop was never touched: still queued, still rolls.
+ok(Sim.RequestRoll(1002), "untouched drop still rolls")
+eq(LW.doAction(1002, "finish"), "finished", "untouched drop finishes")
+ML.AwardChosen({ name = "Ccc", via = "winner" }, 1002)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "untouched drop awards")
+ok(Sim.running == false, "run ends when drained")
+-- Gone rows still refuse cleanly (row left the list on award).
+printed = {}
+ok(not Sim.RequestRoll(1001), "awarded-away row refuses")
+ok(string.find(printed[#printed] or "", "not in the test queue", 1, true) ~= nil,
+  "gone row keeps the honest error")
+
+-- 11. Ignored sim row survives OTHER items' awards (live parity):
+-- ignore A, roll + award B, A stays listed and ignored — then A
+-- still rolls on demand.
+resetHarness()
+math.random = rigged({ 2, 90, 80, 2, 99, 50 })
+Sim.SimBoss("Test Boss")
+math.random = realRandom
+eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore first drop")
+ok(Sim.RequestRoll(1002), "second drop rolls")
+eq(LW.doAction(1002, "finish"), "finished", "second drop finishes")
+ML.AwardChosen({ name = "Ccc", via = "winner" }, 1002)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "second drop awarded")
+-- The ignored row survived the award-time re-sync, flag intact.
+local kept = LW.Find(1001)
+ok(kept ~= nil, "ignored row survives the other award")
+ok(kept and kept.ignored, "ignored flag survives the other award")
+-- ...and still rolls on demand afterwards.
+math.random = rigged({ 90, 80 })
+eq(LW.doAction(1001, "roll"), "rolling", "surviving row re-rolls")
+math.random = realRandom
+eq(#ML.roll.rolls, 2, "survivor fakes landed")
+eq(LW.doAction(1001, "finish"), "finished", "survivor finishes")
+ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "survivor awards")
+ok(Sim.running == false, "run ends when drained")
+
 return T

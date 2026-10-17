@@ -440,7 +440,13 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   award) marks the row ignored — it STAYS listed (`[ignored]`) with no
   award, no won mark, no corpse take and no roll history; the item stays
   on the corpse for manual handling, the audit log records it as
-  ignored. Sim rows advance the queue. When no rows remain, or only
+  ignored. Sim rows advance the queue — and a mistakenly-ignored sim
+  row stays fully operable: it survives other items' awards on the
+  window (award-time re-sync carries ignored rows over, flag intact —
+  live parity), and rolling it re-queues fresh standard fakes from
+  the sheet (the ignored mark clears, like live), so Roll, Raid roll,
+  Award and ... all work on it again. Only a row that actually left
+  the list still refuses (`not in the test queue`). When no rows remain, or only
   ignored rows do, looting is finished: the detail closes, the loot
   window can close, and a raid-boss auto-switch flips back to group
   loot when it should.
