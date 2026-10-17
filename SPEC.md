@@ -92,8 +92,11 @@ Sheet = {
    off) — value is what matters.
 2. **Static file** (`CustomData/ZugLoot_SR.txt`, via Load from File): accepts
    *either* a raw raidres export blob pasted into the file (base64, exactly
-   what raidres.top gives you) *or* the static line format below. Paste-import
-   accepts both as well; format is auto-detected (export first, lines second).
+   what raidres.top gives you), the CSV export below, *or* the static line
+   format. Paste-import accepts all three as well; format is auto-detected
+   (export first, CSV second, lines third). Lines above the payload
+   (tool headers, "copy below this line" notes) are dropped for the
+   export and CSV formats.
 3. **Static line format** (hand-written sheets, either path):
    `#` comments, blank lines ignored.
    ```
@@ -104,7 +107,20 @@ Sheet = {
    ```
    Grammar per entry: `itemID` (required number), `:count` (default 1),
    `+srplus` (default 0). `HARDRES;` line lists hard-reserved item IDs.
-3. Anything else → import error naming the first bad line (never half-imports).
+4. **CSV export** (either path): header-matched, so column order and extra
+   columns (`Item`, `Boss`, `Comment`, `Date`) don't matter. Minimum
+   columns: `ID` (+`Attendee`); minimum per row: numeric ID + non-empty
+   attendee (other rows skipped). `Class` feeds the sheet class store
+   (unknown still imports, just uncolored); `Specialization` is optional
+   (missing = class-default role); `SR+` defaults to 0. Header aliases:
+   `ID`/`ItemID`, `Attendee`/`Player`/`Name`/`Character`/`Raider`,
+   `Specialization`/`Spec`, `SR+`/`SRPlus`. Lines above the header
+   (preamble) are dropped.
+   ```
+   ID,Item,Boss,Attendee,Class,Specialization,SR+
+   18814,"Choker of the Fire Lord",Ragnaros,Pysanka,Paladin,Protection,70
+   ```
+5. Anything else → import error naming the first bad line (never half-imports).
 
 ### 3.2 Roll types (normative): each kind judged by itself
 
@@ -127,7 +143,12 @@ Sheet = {
   (one-win-per-item; excluded SR rolls stay visible with `[already won]`,
   never silently dropped). MS/OS/TMOG stay contestable after a win (e.g.
   rolling transmog after winning mainspec).
-- Off-sheet rolls (no holders on the item): same single path — kind
+- Multi-SR allowance: a player who SR'd the item N times (`rolls`, e.g.
+  `x2`) may roll up to N times in one session; their best roll stands.
+  Extra rolls are extra chances, never extra winners: a player's own
+  rolls never tie against each other, and anything past the allowance is
+  ignored. Non-holders roll once.
+- Off-sheet rolls (no holders on the item): same single path - kind
   priority SR > MS > OS, with an empty SR contest. An MS 33 beats an
   OS 76 even with nobody holding SR; OS wins only with no MS contest.
 - Two-copies drops (`2x<link>`): winner + runner-up (same kind first, then
@@ -273,7 +294,8 @@ Sheet = {
 Rolls start from the loot-window Roll / Raid roll buttons only. Announce via
 RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message.
 Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`) while the roll
-window is open, first-roll-only per player; over-rolls flagged, ties
+window is open, up to the player's SR allowance (one roll, or N rolls
+for N reservations of the item); over-rolls flagged, ties
 re-roll fresh. Exactly one roll at a time — closing its window ends it.
 Raider clients pop their roll window off the ML/RL's RAID_WARNING roll
 call ONLY (`MatchRollCall`: `Roll for X: /roll ...` dice line or full
@@ -386,7 +408,7 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   when something is wrong with the rolls), Close. **Continue rolling**
   reopens intake on the finished round with the landed rolls kept
   (unlike **Roll again**, which starts fresh); newcomers roll in,
-  re-rollers are first-roll-only. Awarding ends any open
+  re-rollers are allowance-capped. Awarding ends any open
   roll first, then hands out the item and closes the window; the row
   leaves the list (done = gone). Ties stay open for a fresh re-roll round.
   Cancel ends the roll and drops the window back to pick (re-roll /
@@ -445,7 +467,8 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   and tooltips, plus a top-screen huge-text **winner banner** (5s fade, winner
   in class color). Roll-list class resolution is roster-first with the SR
   sheet as fallback (see §4.8).
-- First-roll-only; extra rolls ignored with notice. Auto-close timer configurable
+- Rolls up to the SR allowance (one roll, or N for N reservations of
+the item); extra rolls ignored with notice. Auto-close timer configurable
   (`/zl time N`, `/zl autoclose on|off`).
 - Draggable; `/zl show|hide`.
 
@@ -629,6 +652,7 @@ ZugLoot/
     test_resolver.lua winner / tie / missroll / one-win / 2x tests
   CustomData_example/
     ZugLoot_SR.txt   static-file format example (copy to <WoW>/CustomData/)
+    ZugLoot_SR.txt.csv  CSV export format example (same destination)
 ```
 
 Load order respects deps (pure → security/comm → import → views). All files are

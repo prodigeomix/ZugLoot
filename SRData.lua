@@ -218,9 +218,166 @@ function M.ParseLineFormat(text)
   return sheet, nil
 end
 
+-- A pasted blob may carry preamble lines above it (tool headers,
+-- "copy below this line" notes). First JSON / long-base64 line wins;
+-- everything above is dropped. Returns nil when no payload line is found
+-- (caller keeps the original text so empty/garbage errors still fire).
+function M.IsBase64Line(t)
+  local s = string.gsub(tostring(t or ""), "%s", "")
+  if string.len(s) < 32 then return false end
+  return string.find(s, "^[A-Za-z0-9+/=]+$") ~= nil
+end
+
+function M.ExtractPayload(text)
+  local started = false
+  local out = {}
+  for line in Gfind(tostring(text or "") .. "\n", "([^\n]*)\n") do
+    local t = Util.Trim(line)
+    if not started then
+      if t ~= "" and (string.sub(t, 1, 1) == "{" or M.IsBase64Line(t)) then
+        started = true
+      end
+    end
+    if started then table.insert(out, line) end
+  end
+  if not started then return nil end
+  return table.concat(out, "\n")
+end
+
+-- Quote-aware single CSV row split (5.0-safe). Handles quoted fields
+-- ("Sigil of Ancient Accord", "Date (GMT)") and "" escapes; every
+-- field comes back trimmed.
+function M.ParseCSVRow(line)
+  line = tostring(line or "")
+  local out, field = {}, {}
+  local i, n = 1, string.len(line)
+  local inQ = false
+  while i <= n do
+    local c = string.sub(line, i, i)
+    if inQ then
+      if c == '"' then
+        if string.sub(line, i + 1, i + 1) == '"' then
+          table.insert(field, '"')
+          i = i + 2
+        else
+          inQ = false
+          i = i + 1
+        end
+      else
+        table.insert(field, c)
+        i = i + 1
+      end
+    else
+      if c == '"' then
+        inQ = true
+        i = i + 1
+      elseif c == "," then
+        table.insert(out, table.concat(field))
+        field = {}
+        i = i + 1
+      else
+        table.insert(field, c)
+        i = i + 1
+      end
+    end
+  end
+  table.insert(out, table.concat(field))
+  for k = 1, Util.ArrayCount(out) do out[k] = Util.Trim(out[k]) end
+  return out
+end
+
+-- Second SR-sheet format: CSV export (ID,Attendee,Class,Specialization,SR+
+-- plus ignored columns like Item/Boss/Date). Header-matched, so column
+-- order and extras don't matter; lines above the header are preamble and
+-- dropped. Minimum columns: ID + Attendee. Class/Spec feed the sheet
+-- class store (combined Class+Spec, no spaces, for RoleOf); SR+ defaults 0.
+local CSV_ID = { id = true, itemid = true }
+local CSV_ATT = { attendee = true, player = true, name = true, character = true, raider = true }
+local CSV_CLASS = { class = true }
+local CSV_SPEC = { specialization = true, spec = true }
+local CSV_PLUS = { ["sr+"] = true, srplus = true }
+
+local function csvHNorm(s)
+  s = string.lower(Util.Trim(s or ""))
+  s = string.gsub(s, "[ _]", "")
+  return s
+end
+
+local function csvColMap(fields)
+  local map = {}
+  for i = 1, Util.ArrayCount(fields) do
+    local h = csvHNorm(fields[i])
+    if CSV_ID[h] and not map.id then map.id = i
+    elseif CSV_ATT[h] and not map.att then map.att = i
+    elseif CSV_CLASS[h] and not map.class then map.class = i
+    elseif CSV_SPEC[h] and not map.spec then map.spec = i
+    elseif CSV_PLUS[h] and not map.plus then map.plus = i end
+  end
+  if map.id and map.att then return map end
+  return nil
+end
+
+function M.ParseCSVFormat(text)
+  local lines = {}
+  for line in Gfind(tostring(text or "") .. "\n", "([^\n]*)\n") do
+    table.insert(lines, line)
+  end
+  -- Header scan: preamble (tool notes, blanks, # comments) above the
+  -- header is dropped — first ID+Attendee header line wins.
+  local map, headerAt = nil, nil
+  local i = 1
+  while lines[i] ~= nil do
+    local t = Util.Trim(lines[i])
+    if t ~= "" and string.sub(t, 1, 1) ~= "#" then
+      local m = csvColMap(M.ParseCSVRow(lines[i]))
+      if m then map, headerAt = m, i break end
+    end
+    i = i + 1
+  end
+  if not map then return nil, "no CSV header (needs ID + Attendee columns)" end
+  local nCols = Util.ArrayCount(M.ParseCSVRow(lines[headerAt]))
+  local sheet = M.NewSheet()
+  sheet.meta.source = "csv"
+  i = headerAt + 1
+  while lines[i] ~= nil do
+    local t = Util.Trim(lines[i])
+    if t ~= "" and string.sub(t, 1, 1) ~= "#" then
+      local f = M.ParseCSVRow(lines[i])
+      while Util.ArrayCount(f) < nCols do table.insert(f, "") end
+      local id = Util.ItemID(f[map.id])
+      local nm = Util.Trim(f[map.att] or "")
+      -- Rows without the minimum fields aren't reservations: skip
+      -- (mirrors TransformRaidRes, which skips entries lacking name/id).
+      if id and nm ~= "" then
+        local plusStr = ""
+        if map.plus then plusStr = f[map.plus] or "" end
+        local plus = tonumber(Util.Trim(plusStr))
+        local bonus = (plus and plus > 0) and plus or nil
+        addRoller(sheet, id, 4, nm, 1, bonus)
+        local cls = ""
+        if map.class then cls = Util.Trim(f[map.class] or "") end
+        if cls ~= "" then
+          local spec = ""
+          if map.spec then spec = Util.Trim(f[map.spec] or "") end
+          -- No spaces: "Paladin"+"Protection" -> "PaladinProtection"
+          -- so RoleOf/SpecName see the spec suffix.
+          local raw = string.gsub(cls, "%s+", "") .. string.gsub(spec, "%s+", "")
+          M.SetPlayerClass(sheet, nm, raw)
+        end
+      end
+    end
+    i = i + 1
+  end
+  return sheet, nil
+end
+
 -- raidres.top / fly.dev / softres.it export: base64(json). Accepts raw json too.
 function M.ParseRaidResExport(encodedOrJson)
   local raw = tostring(encodedOrJson or "")
+  -- Preamble tolerance: lines above the blob are dropped (first JSON /
+  -- long-base64 line wins). No payload line: keep the text so the
+  -- empty/garbage errors below still fire.
+  raw = M.ExtractPayload(raw) or raw
   raw = Util.Trim(raw)
   if raw == "" then return nil, "empty import data" end
   local decoded = Util.Base64Decode(raw)
