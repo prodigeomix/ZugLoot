@@ -8,6 +8,50 @@ Z.SRImport = M
 
 local pasteFrame = nil
 local editBox = nil
+local importScroll = nil
+local importBorder = nil
+
+-- Static sheet box geometry: fixed width, ~10 lines tall. Neither
+-- the box nor the dialog ever resizes; long pastes scroll inside.
+M.IMPORT_BOX_W = 502
+M.IMPORT_BOX_H = 150
+
+-- Test hook: live import frame (for the strata/level assert).
+function M.DebugImportFrame()
+  return pasteFrame
+end
+
+-- Test hook: live sheet edit box + its scroll frame + the border frame
+-- (geometry/focus asserts).
+function M.DebugImportBox()
+  return editBox
+end
+function M.DebugImportScroll()
+  return importScroll
+end
+function M.DebugImportBorder()
+  return importBorder
+end
+
+-- Keep the import sheet above the main window: same DIALOG strata the
+-- frame already uses, but pinned to a level over the main frame (nil-
+-- safe on mock frames). Called at build time and on every show, since
+-- the main window rebuilds (new frame object/level) on size changes.
+local function RaiseImportAboveMain()
+  if not pasteFrame then return end
+  if pasteFrame.SetToplevel then pcall(pasteFrame.SetToplevel, pasteFrame, true) end
+  if pasteFrame.SetFrameStrata then pcall(pasteFrame.SetFrameStrata, pasteFrame, "DIALOG") end
+  if pasteFrame.SetFrameLevel then
+    local lvl = 100
+    local main = Z.MainWindow and Z.MainWindow.frame
+    if main and main.GetFrameLevel then
+      local ok, ml = pcall(main.GetFrameLevel, main)
+      if ok and tonumber(ml) then lvl = tonumber(ml) + 10 end
+    end
+    pcall(pasteFrame.SetFrameLevel, pasteFrame, lvl)
+  end
+  if pasteFrame.Raise then pcall(pasteFrame.Raise, pasteFrame) end
+end
 
 -- 5.0 (client) uses string.gfind, 5.1+ uses string.gmatch.
 local Gfind = string.gmatch or string.gfind
@@ -353,17 +397,18 @@ end
 function M.ShowPaste()
   if not pasteFrame then
     pasteFrame = CreateFrame("Frame", "ZugLootImportFrame", UIParent)
-    pasteFrame:SetWidth(560) pasteFrame:SetHeight(460)
+    pasteFrame:SetWidth(560) pasteFrame:SetHeight(260)
     pasteFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     pasteFrame:SetMovable(true) pasteFrame:EnableMouse(true)
     pasteFrame:RegisterForDrag("LeftButton")
     pasteFrame:SetScript("OnDragStart", function() pasteFrame:StartMoving() end)
     pasteFrame:SetScript("OnDragStop", function() pasteFrame:StopMovingOrSizing() end)
-    if pasteFrame.SetResizable then pasteFrame:SetResizable(true) end
-    if pasteFrame.SetMinResize then pasteFrame:SetMinResize(420, 320) end
+    -- Fixed-size dialog: no resize grip, no anchors that stretch.
+    -- The sheet box is a static input; the frame never grows it.
     if pasteFrame.SetClampedToScreen then pasteFrame:SetClampedToScreen(true) end
-    if pasteFrame.SetToplevel then pasteFrame:SetToplevel(true) end
-    if pasteFrame.SetFrameStrata then pasteFrame:SetFrameStrata("DIALOG") end
+    -- Above the main window (DIALOG strata + level over the main frame),
+    -- or the sheet slides under the window and cannot be clicked.
+    RaiseImportAboveMain()
     pasteFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
       edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
       insets = { left = 4, right = 4, top = 4, bottom = 4 } })
@@ -371,27 +416,49 @@ function M.ShowPaste()
     local title = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", pasteFrame, "TOP", 0, -10)
     title:SetText("ZugLoot Import")
-    -- Text lives inside a clipping ScrollFrame whose bottom edge stops
-    -- above the button strip, so long pastes scroll instead of painting
-    -- over the buttons (the old fixed-height EditBox drew past its rect).
-    local scroll = CreateFrame("ScrollFrame", "ZugLootImportScroll", pasteFrame)
-    scroll:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 20, -40)
-    scroll:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", -38, 55)
+    -- Static sheet box: the BORDER lives on its own backdrop frame
+    -- (NOT on the EditBox: InputBoxTemplate is a single-line skin and
+    -- smears when stretched tall), and the scroll area sits 10px
+    -- inside that border on all sides. Text insets alone can't contain
+    -- the text: a pasted base64 blob is one unbreakable line, so rows
+    -- can render flush to the scroll child's edges — the 10px moat
+    -- keeps every glyph off the edge decorations regardless. All
+    -- static sizes; long pastes scroll inside, nothing ever grows.
+    -- Clicking anywhere (text or moat ring) focuses the box for Ctrl+V.
+    local borderF = CreateFrame("Frame", "ZugLootImportBorder", pasteFrame)
+    borderF:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 20, -40)
+    borderF:SetWidth(M.IMPORT_BOX_W)
+    borderF:SetHeight(M.IMPORT_BOX_H)
+    borderF:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+      edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
+      insets = { left = 4, right = 4, top = 4, bottom = 4 } })
+    borderF:SetBackdropColor(0.05, 0.05, 0.05, 1)
+    borderF:EnableMouse(true)
+    importBorder = borderF
+    local scroll = CreateFrame("ScrollFrame", "ZugLootImportScroll", borderF)
+    scroll:SetPoint("TOPLEFT", borderF, "TOPLEFT", 10, -10)
+    scroll:SetWidth(M.IMPORT_BOX_W - 20)
+    scroll:SetHeight(M.IMPORT_BOX_H - 20)
+    scroll:EnableMouse(true)
     scroll:EnableMouseWheel(true)
-    scroll:SetBackdrop({ bgFile = "Interface/ChatFrame/ChatFrameBackground", edgeSize = 1 })
     editBox = CreateFrame("EditBox", "ZugLootImportBox", scroll)
-    editBox:SetMultiLine(true) editBox:SetAutoFocus(false)
+    if editBox.SetMultiLine then editBox:SetMultiLine(true) end
+    if editBox.SetAutoFocus then editBox:SetAutoFocus(false) end
     if editBox.EnableMouse then editBox:EnableMouse(true) end
     if editBox.SetFontObject and GameFontHighlightSmall then editBox:SetFontObject(GameFontHighlightSmall) end
     if editBox.SetJustifyH then editBox:SetJustifyH("LEFT") end
-    if editBox.SetJustifyV then editBox:SetJustifyV("TOP") end
-    editBox:SetWidth(480) editBox:SetHeight(200)
+    -- Belt and braces inside the moat: the scroll frame owns the
+    -- scroll child's position (SetPoint on it is ignored), so inner
+    -- padding comes from text insets.
+    editBox:SetWidth(M.IMPORT_BOX_W - 24) editBox:SetHeight(M.IMPORT_BOX_H - 20)
+    if editBox.SetTextInsets then editBox:SetTextInsets(6, 6, 6, 6) end
     editBox:SetText("")
     if editBox.SetMaxLetters then editBox:SetMaxLetters(0) end
     scroll:SetScrollChild(editBox)
-    local sb = CreateFrame("Slider", "ZugLootImportBar", pasteFrame, "UIPanelScrollBarTemplate")
-    sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 4, -16)
-    sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 4, 16)
+    importScroll = scroll
+    local sb = CreateFrame("Slider", "ZugLootImportBar", borderF, "UIPanelScrollBarTemplate")
+    sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", -14, -16)
+    sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", -14, 16)
     local upB = getglobal and getglobal("ZugLootImportBarScrollUpButton")
     local dnB = getglobal and getglobal("ZugLootImportBarScrollDownButton")
     if upB and upB.Hide then upB:Hide() end
@@ -417,7 +484,17 @@ function M.ShowPaste()
     sb:SetScript("OnValueChanged", function()
       if scroll.SetVerticalScroll and sb.GetValue then scroll:SetVerticalScroll(sb:GetValue()) end
     end)
+    if borderF.SetScript then
+      -- Click-to-focus on the moat ring around the scroll area.
+      borderF:SetScript("OnMouseDown", function()
+        if editBox.SetFocus then editBox:SetFocus() end
+      end)
+    end
     if scroll.SetScript then
+      -- Click-to-focus: the whole box is one big click target.
+      scroll:SetScript("OnMouseDown", function()
+        if editBox.SetFocus then editBox:SetFocus() end
+      end)
       scroll:SetScript("OnVerticalScroll", function()
         if sb.SetValue and scroll.GetVerticalScroll then sb:SetValue(scroll:GetVerticalScroll()) end
       end)
@@ -461,35 +538,13 @@ function M.ShowPaste()
     closeBtn:SetText("Close")
     if closeBtn.SetFrameLevel then closeBtn:SetFrameLevel(baseLvl) end
     closeBtn:SetScript("OnClick", function() pasteFrame:Hide() end)
-    -- Resize grip: drag the corner to grow/shrink; the scroll rect
-    -- follows via anchors and the edit width follows the scroll.
-    local grip = CreateFrame("Button", nil, pasteFrame)
-    grip:SetWidth(16) grip:SetHeight(16)
-    grip:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", -4, 4)
-    grip:EnableMouse(true)
-    if grip.SetNormalTexture then
-      grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
-    end
-    grip:SetScript("OnMouseDown", function()
-      if pasteFrame.StartSizing then pasteFrame:StartSizing("BOTTOMRIGHT") end
-    end)
-    grip:SetScript("OnMouseUp", function()
-      if pasteFrame.StopMovingOrSizing then pasteFrame:StopMovingOrSizing() end
-    end)
-    if grip.SetFrameLevel then grip:SetFrameLevel(baseLvl) end
-    pasteFrame:SetScript("OnSizeChanged", function()
-      if scroll.GetWidth and editBox.SetWidth then
-        local w = scroll:GetWidth()
-        if w and w > 40 then editBox:SetWidth(w) end
-      end
-      SyncImportScroll()
-    end)
-    if scroll.GetWidth and editBox.SetWidth then
-      local w0 = scroll:GetWidth()
-      if w0 and w0 > 40 then editBox:SetWidth(w0) end
-    end
     SyncImportScroll()
   end
   -- Non-privileged users may still open the frame to inspect, but Import is gated.
+  -- Re-pin on every show: the main window rebuilds on size changes, and a
+  -- fresh main frame would otherwise reclaim the top spot.
+  RaiseImportAboveMain()
   pasteFrame:Show()
+  -- Focus the box on open so Ctrl+V pastes immediately.
+  if editBox and editBox.SetFocus then editBox:SetFocus() end
 end

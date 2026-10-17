@@ -36,6 +36,26 @@ local function newObj(kind)
   function o:EnableMouseWheel() end
   function o:SetScrollChild() end
   function o:SetVerticalScroll() end
+  function o:GetVerticalScroll() return 0 end
+  function o:GetVerticalScrollRange() return 0 end
+  function o:UpdateScrollChildRect() end
+  function o:SetMultiLine() end
+  function o:SetAutoFocus() end
+  function o:SetFontObject() end
+  function o:SetJustifyH() end
+  function o:SetJustifyV() end
+  function o:SetMaxLetters() end
+  function o:GetText() return self.label or "" end
+  function o:SetFocus() self.focused=true end
+  function o:SetTextInsets(l,r,t,b) self.insets={l,r,t,b} end
+  function o:SetToplevel(t) self.toplevel=t end
+  function o:StartMoving() end
+  function o:StopMovingOrSizing() end
+  function o:SetResizable() end
+  function o:SetMinResize() end
+  function o:StartSizing() end
+  function o:SetNormalTexture() end
+  function o:GetWidth() return self.w or 0 end
   function o:GetHeight() return self.h or 10 end
   function o:Raise() end
   function o:SetFrameStrata(s) self.strata=s end
@@ -78,7 +98,7 @@ dofile("SRSecurity.lua");
 dofile("RollList.lua")
 dofile("Comm.lua");
 dofile("Pysanka.lua");
-ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
+dofile("SRImport.lua");
 ZugLoot.AutoRoll = { Set=function() end };
 ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, GridNames=function() return {{name="A",inGroup=true},{name="B",inGroup=true}} end, StatusFor=function() return "GREEN" end, ColorFor=function() return "GREEN" end, Request=function() end };
 dofile("MainWindow.lua");
@@ -448,6 +468,65 @@ assert((drop.flevel or 0) > 5, "picker level above window, got: " .. tostring(dr
 tankClick();
 assert(Z.MainWindow.DebugPysankaPicker().open == false, "second click closes picker");
 assert(Z.MainWindow.DebugPysankaDrop() == nil, "picker frame torn down");
+-- Import sheet paints ABOVE the main window (DIALOG strata + higher
+-- level), or it slides under the window and cannot be clicked.
+Z.SRImport.ShowPaste();
+local impF = Z.SRImport.DebugImportFrame();
+assert(impF ~= nil, "import frame built");
+assert(impF.strata == "DIALOG", "import strata above window, got: " .. tostring(impF.strata));
+assert((impF.flevel or 0) > (Z.MainWindow.frame and Z.MainWindow.frame:GetFrameLevel() or 5),
+  "import level above main window, got: " .. tostring(impF.flevel));
+-- Re-show after a main-window rebuild (size change path) re-pins above.
+-- Force the rebuild: move the stored size off the live size first.
+Z.MainWindow.winW, Z.MainWindow.winH = -1, -1;
+assert(Z.MainWindow.EnsureSize() == true, "main window rebuilt");
+Z.SRImport.ShowPaste();
+local impF2 = Z.SRImport.DebugImportFrame();
+assert((impF2.flevel or 0) > (Z.MainWindow.frame and Z.MainWindow.frame:GetFrameLevel() or 5),
+  "import re-pinned after main rebuild, got: " .. tostring(impF2 and impF2.flevel));
+print("import sheet above main window OK");
+-- Static sheet box: fixed width + height, bordered like a standard
+-- Blizzard input. Neither the box nor the dialog resizes; long pastes
+-- scroll inside. Clicking the box focuses it for Ctrl+V; opening the
+-- dialog focuses it.
+local impBox = Z.SRImport.DebugImportBox();
+assert(impBox ~= nil and impBox.GetText, "import box tracked");
+assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 24, "box width static, got: " .. tostring(impBox.w));
+assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 20, "box height static, got: " .. tostring(impBox.h));
+local impBorder = Z.SRImport.DebugImportBorder();
+assert(impBorder ~= nil, "import border tracked");
+assert(impBorder.w == Z.SRImport.IMPORT_BOX_W, "border width static, got: " .. tostring(impBorder.w));
+assert(impBorder.h == Z.SRImport.IMPORT_BOX_H, "border height static, got: " .. tostring(impBorder.h));
+local impScroll = Z.SRImport.DebugImportScroll();
+assert(impScroll ~= nil, "import scroll tracked");
+assert(impScroll.w == Z.SRImport.IMPORT_BOX_W - 20, "scroll width static, got: " .. tostring(impScroll.w));
+assert(impScroll.h == Z.SRImport.IMPORT_BOX_H - 20, "scroll height static, got: " .. tostring(impScroll.h));
+-- No expand path: the box/scroll carry no BOTTOMRIGHT anchor and no
+-- resize grip may stretch them.
+for _, p in ipairs(impScroll.points or {}) do
+  assert(p[1] ~= "BOTTOMRIGHT", "scroll must not stretch-anchor");
+end
+-- Text stays clear of the border: 10px moat (scroll inset inside the
+-- border frame) plus text insets inside the box. Either alone can be
+-- defeated (insets by an unbreakable base64 line, the moat by nothing).
+assert(impBox.insets ~= nil, "box carries text insets");
+assert((impBox.insets[1] or 0) >= 6 and (impBox.insets[3] or 0) >= 6,
+  "insets pad the box, got: " .. tostring(impBox.insets and table.concat(impBox.insets, ",")));
+local moatTL = false;
+for _, p in ipairs(impScroll.points or {}) do
+  if p[1] == "TOPLEFT" and p[4] == 10 and p[5] == -10 then moatTL = true end
+end
+assert(moatTL, "scroll sits 10px inside the border");
+assert(impBorder:GetScript("OnMouseDown"), "moat click-to-focus wired");
+impBorder:GetScript("OnMouseDown")();
+assert(impBox.focused == true, "moat click focuses the box");
+assert(impScroll:GetScript("OnMouseDown"), "box click-to-focus wired");
+impScroll:GetScript("OnMouseDown")();
+assert(impBox.focused == true, "click focuses the box");
+impBox.focused = nil;
+Z.SRImport.ShowPaste();
+assert(Z.SRImport.DebugImportBox().focused == true, "dialog open focuses the box");
+print("import compact input box OK");
 -- Kill order renders the 8 real raid-target icons in order.
 Z.MainWindow.SelectTab("sheet");
 Z.MainWindow.SelectTab("pysanka");
