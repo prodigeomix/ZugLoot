@@ -42,6 +42,7 @@ local wow = {
   "GetTime", "GetCursorPosition", "GetScreenWidth", "GetScreenHeight",
   "DressUpItemLink", "CheckInteractDistance",
   "IsRaidLeader", "IsRaidOfficer", "IsPartyLeader",
+  "GetClipboardText",
   "getglobal", "event", "arg1", "arg2", "arg3", "arg4",
   -- Nampower custom-file lib + its `date` global (Turtle WoW).
   "ReadCustomFile", "WriteCustomFile", "CustomFileExists", "date",

@@ -1,5 +1,6 @@
 -- ZugLoot/SRImport.lua
--- Import UI: paste frame + Load-from-File button (CustomData/ZugLoot_SR.txt).
+-- Import UI: paste frame (Paste button + Load-from-File) for sheets
+-- (CustomData/ZugLoot_SR.txt).
 -- Broadcast gated to ML / raid leader+assistant.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
@@ -8,10 +9,46 @@ Z.SRImport = M
 
 local pasteFrame = nil
 local editBox = nil
+local pasteBtn = nil
 
 -- Test hook: live import frame (for the strata/level assert).
 function M.DebugImportFrame()
   return pasteFrame
+end
+
+-- Test hook: tracked buttons of the import dialog.
+function M.DebugImportButtons()
+  return { paste = pasteBtn }
+end
+
+-- Test hook: live sheet edit box (for the paste assert).
+function M.DebugImportBox()
+  return editBox
+end
+
+-- Focus the sheet box (so Ctrl+V pastes natively) and, when a client
+-- clipboard hook is present, drop the clipboard text in directly.
+-- Nil-safe / headless-safe so tests can exercise the full path
+-- without the client. Always focuses; empty clipboard leaves the
+-- box text untouched. Returns the pasted text ("" when none).
+function M.PasteClipboard()
+  if editBox and editBox.SetFocus then pcall(editBox.SetFocus, editBox) end
+  local clip = nil
+  for i = 1, 2 do
+    local probe = (i == 1) and Z.ClipboardText or GetClipboardText
+    if probe then
+      local ok, txt = pcall(probe)
+      if ok and txt ~= nil then clip = txt break end
+    end
+  end
+  clip = tostring(clip or "")
+  if editBox and clip ~= "" and editBox.SetText then
+    editBox:SetText(clip)
+    if editBox.HighlightText then
+      pcall(editBox.HighlightText, editBox, 0, -1)
+    end
+  end
+  return clip
 end
 
 -- Keep the import sheet above the main window: same DIALOG strata the
@@ -485,6 +522,17 @@ function M.ShowPaste()
     closeBtn:SetText("Close")
     if closeBtn.SetFrameLevel then closeBtn:SetFrameLevel(baseLvl) end
     closeBtn:SetScript("OnClick", function() pasteFrame:Hide() end)
+    -- Paste lives top-right, above the scroll rect: the bottom strip
+    -- (Import! / Load from File / Close) is already full, and a fourth
+    -- button there crowds the resize grip. Click focuses the box (so
+    -- Ctrl+V pastes natively) and drops the clipboard text in when a
+    -- client hook provides it; empty clipboard leaves text untouched.
+    pasteBtn = CreateFrame("Button", nil, pasteFrame, "UIPanelButtonTemplate")
+    pasteBtn:SetWidth(80) pasteBtn:SetHeight(20)
+    pasteBtn:SetPoint("TOPRIGHT", pasteFrame, "TOPRIGHT", -20, -8)
+    pasteBtn:SetText("Paste")
+    if pasteBtn.SetFrameLevel then pasteBtn:SetFrameLevel(baseLvl) end
+    pasteBtn:SetScript("OnClick", function() M.PasteClipboard() end)
     -- Resize grip: drag the corner to grow/shrink; the scroll rect
     -- follows via anchors and the edit width follows the scroll.
     local grip = CreateFrame("Button", nil, pasteFrame)
