@@ -13,6 +13,7 @@ local M = {}
 Z.VersionGrid = M
 
 M.seen = {} -- [name] = { version=..., auto=bool, online=bool }
+M.warned = {} -- ["sender@stream"] = true (one console line per stream)
 
 function M.Announce()
   if Z.Comm then Z.Comm.AnnounceVersion() end
@@ -23,6 +24,7 @@ end
 -- this the grid would forever claim we lack the addon).
 function M.Request()
   M.seen = {}
+  M.warned = {}
   local me = M.MyName and M.MyName() or nil
   if me and Z.VERSION then
     M.seen[me] = { version = Z.VERSION, online = true }
@@ -38,8 +40,31 @@ local function cmpVersion(a, b)
   return (tostring(a) < tostring(b)) and -1 or 1
 end
 
+-- Release stream ("major.minor"): versions on different streams may
+-- speak different protocols — that is the mismatch worth a console
+-- line. Patch releases on the same stream stay silent (the grid still
+-- shows them as AMBER via cmpVersion).
+function M.StreamOf(v)
+  local x, y = string.match(tostring(v or ""), "^(%d+)%.(%d+)")
+  if x then return x .. "." .. y end
+  return nil
+end
+
 function M.OnVersion(sender, version)
-  if sender then M.seen[sender] = { version = Z.Util.Trim(version or "?"), online = true } end
+  if not sender then return end
+  version = Z.Util.Trim(version or "?")
+  M.seen[sender] = { version = version, online = true }
+  local mine, theirs = M.StreamOf(Z.VERSION), M.StreamOf(version)
+  if mine and theirs and mine ~= theirs then
+    local key = tostring(sender) .. "@" .. theirs
+    if not M.warned[key] then
+      M.warned[key] = true
+      Z.Print("Version mismatch: " .. tostring(sender) .. " runs v"
+        .. tostring(version) .. " (stream " .. theirs
+        .. "), you run v" .. tostring(Z.VERSION) .. " (stream " .. mine
+        .. "). Update so the raid matches.")
+    end
+  end
 end
 
 -- SR sheet roster: every player holding a reserve anywhere on the sheet.

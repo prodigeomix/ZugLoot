@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ['v*.*.*']
 
 jobs:
   # Headless suite: pure-logic tests + mock-client UI run + Lua 5.0 gate.
@@ -39,3 +40,38 @@ jobs:
           sudo luarocks install luacheck
       - run: luacheck --version
       - run: luacheck .
+
+  # Release zips (only runs on version tags like v0.2.0): the zip holds
+  # exactly what the client loads — toc + shipped lua + Media assets.
+  # Left out: tests/, CustomData_example/ (test fixtures only),
+  # .luacheckrc, docs, .github, and (by construction) all .git* files.
+  # The zip extracts to a single ZugLoot/ folder (drop into Interface/AddOns).
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches addon version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          grep -q "^## Version: $TAG$" ZugLoot.toc || { echo "toc version != tag $TAG"; exit 1; }
+          grep -q "^ZugLoot.VERSION = \"$TAG\"$" Constants.lua || { echo "Constants VERSION != tag $TAG"; exit 1; }
+          echo "version $TAG ok"
+      - name: Stage addon files
+        run: |
+          rm -rf pkg "ZugLoot-${GITHUB_REF_NAME}.zip"
+          mkdir -p pkg/ZugLoot/Media
+          cp ZugLoot.toc ./*.lua pkg/ZugLoot/
+          cp Media/*.tga Media/*.ttf pkg/ZugLoot/Media/
+          echo "--- staged:"; find pkg | sort
+      - name: Build zip
+        run: |
+          cd pkg && zip -r "../ZugLoot-${GITHUB_REF_NAME}.zip" ZugLoot
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" --title "ZugLoot $GITHUB_REF_NAME" \
+            --generate-notes "ZugLoot-${GITHUB_REF_NAME}.zip"

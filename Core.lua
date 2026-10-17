@@ -92,6 +92,7 @@ function Z.DoResetAllSettings()
   if ZugLootCharDB then for k in pairs(ZugLootCharDB) do ZugLootCharDB[k] = nil end end
   Z.InitDB()
   if Z.VersionGrid and Z.VersionGrid.seen then Z.VersionGrid.seen = {} end
+  if Z.VersionGrid and Z.VersionGrid.warned then Z.VersionGrid.warned = {} end
   if Z.MainWindow then Z.MainWindow.Refresh() end
   if Z.SRView then Z.SRView.Refresh() end
 end

@@ -127,4 +127,28 @@ local backOK, backNames = pcall(VG.RosterNames)
 ok(backOK, "solo again does not error")
 eq(#(backNames or {}), 1, "solo again shows only me")
 
+-- 9. StreamOf: major.minor of a version; unparseable -> nil.
+eq(VG.StreamOf("0.2.0"), "0.2", "stream of 0.2.0 is 0.2")
+eq(VG.StreamOf("0.2.7"), "0.2", "patch stays on its stream")
+eq(VG.StreamOf("1.0"), "1.0", "two-part version is its own stream")
+eq(VG.StreamOf("abc"), nil, "garbage version has no stream")
+eq(VG.StreamOf(nil), nil, "nil version has no stream")
+
+-- 10. Stream mismatch warns on the console, once per sender+stream;
+-- same-stream (patch) answers stay silent. Ours is "1.0" here.
+VG.warned = {}
+local before = #printed
+VG.OnVersion("StreamStranger", "9.9")
+eq(#printed, before + 1, "other stream prints a mismatch warning")
+ok(string.find(printed[#printed], "9.9") ~= nil,
+  "warning names the other version")
+VG.OnVersion("StreamStranger", "9.9")
+eq(#printed, before + 1, "repeat from same stream does not re-warn")
+VG.OnVersion("StreamOther", "9.9")
+eq(#printed, before + 2, "new sender on other stream warns again")
+VG.OnVersion("StreamPal", "1.0.3")
+eq(#printed, before + 2, "same-stream patch is silent")
+VG.OnVersion("Garbled", "???")
+eq(#printed, before + 2, "unparseable version is silent")
+
 return T
