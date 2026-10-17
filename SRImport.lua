@@ -9,6 +9,7 @@ Z.SRImport = M
 local pasteFrame = nil
 local editBox = nil
 local importScroll = nil
+local importBorder = nil
 
 -- Static sheet box geometry: fixed width, ~10 lines tall. Neither
 -- the box nor the dialog ever resizes; long pastes scroll inside.
@@ -20,12 +21,16 @@ function M.DebugImportFrame()
   return pasteFrame
 end
 
--- Test hook: live sheet edit box + its scroll frame (geometry/focus asserts).
+-- Test hook: live sheet edit box + its scroll frame + the border frame
+-- (geometry/focus asserts).
 function M.DebugImportBox()
   return editBox
 end
 function M.DebugImportScroll()
   return importScroll
+end
+function M.DebugImportBorder()
+  return importBorder
 end
 
 -- Keep the import sheet above the main window: same DIALOG strata the
@@ -408,20 +413,29 @@ function M.ShowPaste()
     local title = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", pasteFrame, "TOP", 0, -10)
     title:SetText("ZugLoot Import")
-    -- Static sheet box: fixed width + ~10-line height, bordered like
-    -- a standard Blizzard input. The border lives on the scroll frame,
-    -- NOT on the EditBox: InputBoxTemplate is a single-line skin and
-    -- smears when stretched tall (garbled bar). Long pastes scroll
-    -- inside; the box itself never grows. Clicking anywhere focuses
-    -- the box for Ctrl+V.
-    local scroll = CreateFrame("ScrollFrame", "ZugLootImportScroll", pasteFrame)
-    scroll:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 20, -40)
-    scroll:SetWidth(M.IMPORT_BOX_W)
-    scroll:SetHeight(M.IMPORT_BOX_H)
-    scroll:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
+    -- Static sheet box: the BORDER lives on its own backdrop frame
+    -- (NOT on the EditBox: InputBoxTemplate is a single-line skin and
+    -- smears when stretched tall), and the scroll area sits 10px
+    -- inside that border on all sides. Text insets alone can't contain
+    -- the text: a pasted base64 blob is one unbreakable line, so rows
+    -- can render flush to the scroll child's edges — the 10px moat
+    -- keeps every glyph off the edge decorations regardless. All
+    -- static sizes; long pastes scroll inside, nothing ever grows.
+    -- Clicking anywhere (text or moat ring) focuses the box for Ctrl+V.
+    local borderF = CreateFrame("Frame", "ZugLootImportBorder", pasteFrame)
+    borderF:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 20, -40)
+    borderF:SetWidth(M.IMPORT_BOX_W)
+    borderF:SetHeight(M.IMPORT_BOX_H)
+    borderF:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
       edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
       insets = { left = 4, right = 4, top = 4, bottom = 4 } })
-    scroll:SetBackdropColor(0.05, 0.05, 0.05, 1)
+    borderF:SetBackdropColor(0.05, 0.05, 0.05, 1)
+    borderF:EnableMouse(true)
+    importBorder = borderF
+    local scroll = CreateFrame("ScrollFrame", "ZugLootImportScroll", borderF)
+    scroll:SetPoint("TOPLEFT", borderF, "TOPLEFT", 10, -10)
+    scroll:SetWidth(M.IMPORT_BOX_W - 20)
+    scroll:SetHeight(M.IMPORT_BOX_H - 20)
     scroll:EnableMouse(true)
     scroll:EnableMouseWheel(true)
     editBox = CreateFrame("EditBox", "ZugLootImportBox", scroll)
@@ -430,21 +444,18 @@ function M.ShowPaste()
     if editBox.EnableMouse then editBox:EnableMouse(true) end
     if editBox.SetFontObject and GameFontHighlightSmall then editBox:SetFontObject(GameFontHighlightSmall) end
     if editBox.SetJustifyH then editBox:SetJustifyH("LEFT") end
-    if editBox.SetJustifyV then editBox:SetJustifyV("TOP") end
-    -- Text clear of the border: the scroll frame owns the scroll
-    -- child's position (SetPoint on it is ignored), so the padding must
-    -- come from text insets — left/top keep pasted lines off the edge
-    -- decorations. Slightly narrower/taller box keeps the text rect
-    -- inside the border on all sides.
-    editBox:SetWidth(M.IMPORT_BOX_W - 24) editBox:SetHeight(M.IMPORT_BOX_H - 16)
-    if editBox.SetTextInsets then editBox:SetTextInsets(12, 8, 10, 10) end
+    -- Belt and braces inside the moat: the scroll frame owns the
+    -- scroll child's position (SetPoint on it is ignored), so inner
+    -- padding comes from text insets.
+    editBox:SetWidth(M.IMPORT_BOX_W - 24) editBox:SetHeight(M.IMPORT_BOX_H - 20)
+    if editBox.SetTextInsets then editBox:SetTextInsets(6, 6, 6, 6) end
     editBox:SetText("")
     if editBox.SetMaxLetters then editBox:SetMaxLetters(0) end
     scroll:SetScrollChild(editBox)
     importScroll = scroll
-    local sb = CreateFrame("Slider", "ZugLootImportBar", pasteFrame, "UIPanelScrollBarTemplate")
-    sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 4, -16)
-    sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 4, 16)
+    local sb = CreateFrame("Slider", "ZugLootImportBar", borderF, "UIPanelScrollBarTemplate")
+    sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", -14, -16)
+    sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", -14, 16)
     local upB = getglobal and getglobal("ZugLootImportBarScrollUpButton")
     local dnB = getglobal and getglobal("ZugLootImportBarScrollDownButton")
     if upB and upB.Hide then upB:Hide() end
@@ -470,6 +481,12 @@ function M.ShowPaste()
     sb:SetScript("OnValueChanged", function()
       if scroll.SetVerticalScroll and sb.GetValue then scroll:SetVerticalScroll(sb:GetValue()) end
     end)
+    if borderF.SetScript then
+      -- Click-to-focus on the moat ring around the scroll area.
+      borderF:SetScript("OnMouseDown", function()
+        if editBox.SetFocus then editBox:SetFocus() end
+      end)
+    end
     if scroll.SetScript then
       -- Click-to-focus: the whole box is one big click target.
       scroll:SetScript("OnMouseDown", function()

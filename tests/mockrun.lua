@@ -492,22 +492,34 @@ print("import sheet above main window OK");
 local impBox = Z.SRImport.DebugImportBox();
 assert(impBox ~= nil and impBox.GetText, "import box tracked");
 assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 24, "box width static, got: " .. tostring(impBox.w));
-assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 16, "box height static, got: " .. tostring(impBox.h));
+assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 20, "box height static, got: " .. tostring(impBox.h));
+local impBorder = Z.SRImport.DebugImportBorder();
+assert(impBorder ~= nil, "import border tracked");
+assert(impBorder.w == Z.SRImport.IMPORT_BOX_W, "border width static, got: " .. tostring(impBorder.w));
+assert(impBorder.h == Z.SRImport.IMPORT_BOX_H, "border height static, got: " .. tostring(impBorder.h));
 local impScroll = Z.SRImport.DebugImportScroll();
 assert(impScroll ~= nil, "import scroll tracked");
-assert(impScroll.w == Z.SRImport.IMPORT_BOX_W, "scroll width static, got: " .. tostring(impScroll.w));
-assert(impScroll.h == Z.SRImport.IMPORT_BOX_H, "scroll height static, got: " .. tostring(impScroll.h));
+assert(impScroll.w == Z.SRImport.IMPORT_BOX_W - 20, "scroll width static, got: " .. tostring(impScroll.w));
+assert(impScroll.h == Z.SRImport.IMPORT_BOX_H - 20, "scroll height static, got: " .. tostring(impScroll.h));
 -- No expand path: the box/scroll carry no BOTTOMRIGHT anchor and no
 -- resize grip may stretch them.
 for _, p in ipairs(impScroll.points or {}) do
   assert(p[1] ~= "BOTTOMRIGHT", "scroll must not stretch-anchor");
 end
--- Text stays clear of the border via text insets (the scroll frame
--- owns the scroll child's position, so insets are the padding
--- mechanism). Left/top must clear the edge decorations.
+-- Text stays clear of the border: 10px moat (scroll inset inside the
+-- border frame) plus text insets inside the box. Either alone can be
+-- defeated (insets by an unbreakable base64 line, the moat by nothing).
 assert(impBox.insets ~= nil, "box carries text insets");
-assert((impBox.insets[1] or 0) >= 10 and (impBox.insets[3] or 0) >= 8,
-  "insets clear the border, got: " .. tostring(impBox.insets and table.concat(impBox.insets, ",")));
+assert((impBox.insets[1] or 0) >= 6 and (impBox.insets[3] or 0) >= 6,
+  "insets pad the box, got: " .. tostring(impBox.insets and table.concat(impBox.insets, ",")));
+local moatTL = false;
+for _, p in ipairs(impScroll.points or {}) do
+  if p[1] == "TOPLEFT" and p[4] == 10 and p[5] == -10 then moatTL = true end
+end
+assert(moatTL, "scroll sits 10px inside the border");
+assert(impBorder:GetScript("OnMouseDown"), "moat click-to-focus wired");
+impBorder:GetScript("OnMouseDown")();
+assert(impBox.focused == true, "moat click focuses the box");
 assert(impScroll:GetScript("OnMouseDown"), "box click-to-focus wired");
 impScroll:GetScript("OnMouseDown")();
 assert(impBox.focused == true, "click focuses the box");
