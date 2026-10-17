@@ -33,7 +33,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install luacheck
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq luacheck
+      - name: Install luacheck via LuaRocks
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1 luarocks liblua5.1-0-dev
+          sudo luarocks install luacheck
       - run: luacheck --version
       - run: luacheck .
