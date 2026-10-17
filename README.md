@@ -62,8 +62,12 @@ Only ML / raid leader / assistant can import or broadcast.
 
 ```
 cd ZugLoot
-lua tests/run_tests.lua
+lua tests/run_tests.lua   # stock lua 5.1+ (CI runs 5.1 and 5.4)
+luacheck .                # WoW-aware lint, see .luacheckrc
 ```
+
+PRs run both as required checks (`.github/workflows/ci.yml`) —
+merge is blocked until tests + lint pass.
 
 ## Commands
 

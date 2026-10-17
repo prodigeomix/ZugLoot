@@ -288,7 +288,7 @@ function M.IsCoinSlot(slot)
   end
   if LootSlotIsItem then
     local ok, v = pcall(LootSlotIsItem, slot)
-    if ok then return not (v == 1) end
+    if ok then return v ~= 1 end
   end
   if GetLootSlotType then
     local ok, t = pcall(GetLootSlotType, slot)
@@ -422,7 +422,7 @@ function M.HideBlizzardFallback() end
 -- the slot-keyed rescan drops exactly that row and keeps the rest.
 -- LOOT_CLOSED with an empty tracked list hides the window.
 -- Nil-safe headless (no corpse APIs -> no-op).
-function M.OnEvent(event, arg1)
+function M.OnEvent(event, _arg1)
   if event == "LOOT_CLOSED" then
     -- Walk-away with leftovers: park the rows so re-looting resumes the
     -- list. An open roll keeps collecting (its window is open); a closed
@@ -653,7 +653,7 @@ end
 
 -- Apply a LayoutBarRows result to live buttons: row 1 sits on the bar
 -- bottom (BOTTOM + margin), higher rows stack above it.
-function M.PlaceBarRows(f, rows, barW)
+function M.PlaceBarRows(f, rows, _barW)
   if not (f and rows) then return 0 end
   local bh = M.BTN_HEIGHT
   for r = 1, Z.Util.ArrayCount(rows) do
@@ -813,8 +813,9 @@ function M.Refresh()
               -- modifiers never roll/loot (OnRowClick diverts them to
               -- dress-up / link first). Overwrites Wire's click so a
               -- plain icon click opens the detail instead of printing.
+              local iconSlot = it.slot -- same slot the row body captured
               btn:SetScript("OnClick", function()
-                M.OnRowClick(id, clickSlot)
+                M.OnRowClick(id, iconSlot)
               end)
             end
             iconBtn = btn
@@ -885,7 +886,7 @@ end
 -- (like the raider client rebuilds from M.rolls): a missed or doubled
 -- feed can never desync the window, because no feed carries state.
 -- Returns true when the window shows the roll.
-function M.DetailOnRoll(itemID, player, roll, rollType, effective, minR, maxR)
+function M.DetailOnRoll(itemID, _player, _roll, _rollType, _effective, _minR, _maxR)
   local MLUI = Z.MasterLootUI
   local live = MLUI and MLUI.roll
   if live and live.itemID == itemID then
@@ -1363,7 +1364,7 @@ function M.doAction(itemID, actionID, extra)
     if MLUI and MLUI.roll then return "roll failed" end
     -- Starters report by return (roll table / true = rolling). The
     -- window flips only on a real start — never on a refusal.
-    local started = false
+    local started
     -- Rehearsal rows roll invented raiders through the same live path.
     if d.source ~= "sim" and Z.Sim and Z.Sim.RequestRoll
         and Z.Sim.Rehearsing and Z.Sim.Rehearsing() then
@@ -1508,18 +1509,23 @@ function M.MoreLines(d)
     for i = 1, Z.Util.ArrayCount(d.rolls or {}) do
       if d.rolls[i] and d.rolls[i].name then seen[d.rolls[i].name] = true end
     end
-    for _, g in ipairs(M.MoreClassGroups(d, seen)) do
-      local names = {}
-      for m = 1, Z.Util.ArrayCount(g.members) do
-        if g.members[m] then table.insert(names, PName(g.members[m].name)) end
-      end
-      if Z.Util.ArrayCount(names) > 0 then
-        table.insert(lines, "  " .. tostring(g.class) .. ": " .. table.concat(names, ", "))
+    if (d.phase or "pick") ~= "award" or not d.menu then
+      -- Pick/rolling phase: class groups of everyone reachable (landed
+      -- rollers + live raid roster) — so pre-roll the ... menu still
+      -- reaches every raider for a direct award. Empty classes omitted;
+      -- members never duplicate the labeled top-level rows.
+      -- (Award phase: the bar buttons own re-rolls; list stays awardable
+      -- names only, i.e. nothing more to add here.)
+      for _, g in ipairs(M.MoreClassGroups(d, seen)) do
+        local names = {}
+        for m = 1, Z.Util.ArrayCount(g.members) do
+          if g.members[m] then table.insert(names, PName(g.members[m].name)) end
+        end
+        if Z.Util.ArrayCount(names) > 0 then
+          table.insert(lines, "  " .. tostring(g.class) .. ": " .. table.concat(names, ", "))
+        end
       end
     end
-  else
-    -- Award phase: the bar buttons (Roll again / Raid roll) own
-    -- re-rolls; this list stays awardable names only.
   end
   table.insert(lines, "  Anyone: /zl award <name> after the roll, or award now")
   return lines
@@ -2091,7 +2097,7 @@ function M.MoreClassGroups(d, skip)
   if not d then return groups end
   local sheet = Z.DB and Z.DB.sheet
   local inAward = (d.phase or "pick") == "award" and d.menu
-  local roster = nil
+  local roster
   if inAward then
     roster = (d.menu or {}).candidates
   elseif Z.MasterLootUI and Z.MasterLootUI.BuildCandidates then

@@ -283,15 +283,6 @@ function M.TransformRaidRes(data)
   sheet.meta.raidID = metaId
   sheet.meta.raidName = raidName
   sheet.meta.importedAt = exportAt or 0 -- 0 = unknown: ApplySheet stamps now
-  local function xform(items, name, role, quality)
-    for i = 1, Util.ArrayCount(items) do
-      local it = items[i]
-      if type(it) == "table" and it.id then
-        addRoller(sheet, tonumber(it.id), it.quality or quality or 4, name, 1, M.ExtractSRPlus(it) or M.ExtractSRPlus({ sr_plus = nil }))
-        -- also check player-level bonus: handled by caller merging; keep simple:
-      end
-    end
-  end
   -- New format: reservations[] { character={name,class}, raidItemId|id, srPlus }
   if type(data.reservations) == "table" then
     for i = 1, Util.ArrayCount(data.reservations) do

@@ -93,7 +93,7 @@ end
 -- Sort rows for display: SR > MS > OS > TMOG, best roll first within a
 -- group, name tiebreak. Pure: returns a new array, input untouched.
 function M.SortedRolls(rolls)
-  local order = { SR = 1, MS = 2, OS = 3, TMOG = 4 }
+  -- Kind order lives on M.GROUP_ORDER (single source of truth).
   local normed = {}
   for i = 1, Z.Util.ArrayCount(rolls or {}) do
     if rolls[i] then table.insert(normed, M.Normalize(rolls[i])) end

@@ -1,0 +1,40 @@
+-- ZugLoot CI: stock-lua test suite + luacheck, PR-gated via branch protection.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  # Headless suite: pure-logic tests + mock-client UI run + Lua 5.0 gate.
+  # 5.1 tracks the 1.12 client most closely; 5.4 keeps us honest on modern
+  # interpreters. Must run from the repo root (tests dofile() siblings).
+  test-5-1:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.1
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
+      - run: lua5.1 -v
+      - run: lua5.1 tests/run_tests.lua
+
+  test-5-4:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Lua 5.4
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.4
+      - run: lua5.4 -v
+      - run: lua5.4 tests/run_tests.lua
+
+  # WoW-aware lint (see .luacheckrc): undefined globals stay strict —
+  # a typo'd global is a silent nil on the client.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install luacheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq luacheck
+      - run: luacheck --version
+      - run: luacheck .

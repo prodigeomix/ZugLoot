@@ -55,7 +55,7 @@ function M.SerializeSheet(sheet)
   if sheet.players then
     local pl = {}
     for name, p in pairs(sheet.players) do
-      local c = nil
+      local c
       if type(p) == "table" then c = p.raw or p.class else c = p end
       if name and name ~= "" and c and c ~= "" then
         table.insert(pl, tostring(name) .. "=" .. tostring(c))

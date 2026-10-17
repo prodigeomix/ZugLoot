@@ -28,7 +28,6 @@ ZugLoot.Print = function(m) table.insert(printed, tostring(m)) end
 time = time or os.time
 CreateFrame = nil -- headless: data layer only
 
-local awarded = {}
 ZugLoot.SRSecurity = { AmML = function() return true end,
   IsInRaid = function() return false end, IsInGroup = function() return false end,
   IsSolo = function() return true end }
@@ -113,7 +112,7 @@ eq(LW.BuildLink(17063, "Thunderfury", 5), builtHex .. "|Hitem:17063:0:0:0|h[Thun
 eq(LW.BuildLink(8, nil, 4), nil, "no name, no link")
 -- ResolveItemInfo upgrades bare ids to full links when the name is known.
 -- (Cache cold: stub misses 17063, so no full link comes from GetItemInfo.)
-local bn, bl = LW.ResolveItemInfo(17063, "item:17063:0:0:0", 5, nil, "Thunderfury")
+local _bn, bl = LW.ResolveItemInfo(17063, "item:17063:0:0:0", 5, nil, "Thunderfury")
 ok(bl and string.find(bl, "|Hitem:17063", 1, true) ~= nil, "bare id upgraded to full link, got: " .. tostring(bl))
 
 -- 2. Rows: icon/name/badge (no numbers), RowText mirrors the paint.
@@ -285,12 +284,12 @@ eq(#LW.detail.rolls, 3, "window lists every roll")
 LW.OpenDetail(1001)
 ok(LW.DetailOnRoll(1002, "Eve", 50, "MS", 50, 1, 100) == false, "other-item roll refused")
 LW.OpenDetail(1001)
-local rl = LW.DetailLines()
+local rl2 = LW.DetailLines()
 local sawSR, sawMS, sawTM = false, false, false
-for i = 1, #rl do
-  if string.find(rl[i], "SR: Aaa 90", 1, true) then sawSR = true end
-  if string.find(rl[i], "MS: Stranger 80", 1, true) then sawMS = true end
-  if string.find(rl[i], "TMOG: Oz 97", 1, true) then sawTM = true end
+for i = 1, #rl2 do
+  if string.find(rl2[i], "SR: Aaa 90", 1, true) then sawSR = true end
+  if string.find(rl2[i], "MS: Stranger 80", 1, true) then sawMS = true end
+  if string.find(rl2[i], "TMOG: Oz 97", 1, true) then sawTM = true end
 end
 ok(sawSR and sawMS and sawTM, "roll list shows every roll with its kind")
 -- Each roll shows the max of the /roll command used (56/98 TMOG style).
@@ -460,9 +459,9 @@ local midCh = LW.MoreChoices()
 local midRaid = false
 for i = 1, #midCh do if midCh[i].id == "raidroll" then midRaid = true break end end
 ok(not midRaid, "... no longer offers raid-roll")
-local arc = LW.MoreRollControls()
-eq(#arc, 1, "mid-roll controls mirror the raid button")
-eq(arc[1].id, "raidroll", "raid-roll control")
+local arc2 = LW.MoreRollControls()
+eq(#arc2, 1, "mid-roll controls mirror the raid button")
+eq(arc2[1].id, "raidroll", "raid-roll control")
 local realRaidRoll = ML.StartRaidRoll
 ML.StartRaidRoll = function(id)
   ML.roll = { itemID = id, mode = "RAIDROLL", rolls = {},

@@ -386,7 +386,6 @@ end
 function M.OnRollReq(msg, sender)
   -- ROLL_REQ:<itemID>:<link>:<mode>; verify sender is ML (LootBlare rule).
   local link = string.match(msg, "ROLL_REQ:%d+:(.+):%w+$")
-  local mode = string.match(msg, ":(%w+)$")
   if Z.SRSecurity.IsML(sender) or sender == nil then
     M.ShowItem(link or msg, (Z.DB and Z.DB.rollTime) or 15)
   end

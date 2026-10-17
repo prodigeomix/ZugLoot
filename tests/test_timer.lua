@@ -6,7 +6,7 @@ local function eq(a, b, msg)
   if a ~= b then T.fail = T.fail + 1 table.insert(T.errors, "FAIL " .. (msg or "") .. ": expected " .. tostring(b) .. ", got " .. tostring(a))
   else T.pass = T.pass + 1 end
 end
-local function ok(v, msg)
+local function _ok(v, msg)
   if not v then T.fail = T.fail + 1 table.insert(T.errors, "FAIL " .. (msg or "expected truthy"))
   else T.pass = T.pass + 1 end
 end

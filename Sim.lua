@@ -489,7 +489,7 @@ function M.AfterAward()
   end
 end
 
-function M.OnSimAwarded(itemID) M.AfterAward() end
+function M.OnSimAwarded(_itemID) M.AfterAward() end
 function M.SyncLootWindow() syncWindow() end
 
 if ZugLoot then ZugLoot.Sim = M end

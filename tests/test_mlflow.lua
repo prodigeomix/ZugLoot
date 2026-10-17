@@ -276,7 +276,7 @@ ok(SRData.HasWon(ZugLoot.DB.sheet, 1002, "Ccc"), "named award won-marks")
 -- 9. Corpse take: master loot hands to the winner by candidate index;
 -- non-candidates refuse; slot resolved live at award time.
 resetHarness()
-local lootedSlots, masterGiven = {}, {}
+local masterGiven = {}
 GetLootMethod = function() return "master" end
 LootSlot = function() error("must not plain-loot under master loot") end
 GiveMasterLoot = function(slot, who) table.insert(masterGiven, { slot, who }) end

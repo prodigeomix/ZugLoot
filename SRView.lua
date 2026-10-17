@@ -7,7 +7,6 @@ Z.SRView = M
 
 local frame = nil
 local content = nil
-local lines = {}
 
 local function classColor(name)
   if Z.ClassColors and Z.ClassColors.ColoredName then

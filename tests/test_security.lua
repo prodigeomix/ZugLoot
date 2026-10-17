@@ -85,7 +85,7 @@ UnitIsPartyLeader = function(unit)
   if unit == "party1" then return 1 end
   return nil
 end
-local partyRosterP = { "PartyMe", "LeadGal" }
+local _partyRosterP = { "PartyMe", "LeadGal" }
 UnitName = function(unit)
   if unit == "player" then return "PartyMe" end
   if unit == "party1" then return "LeadGal" end
@@ -138,7 +138,7 @@ ZugLoot.Print = function() end
 -- .sheet in place, never rebind).
 ZugLoot.DB = { sheet = nil }
 ZugLoot.SRImport = { SerializeSheet = function() return "A;1:1" end }
-local meIsML = false
+local _meIsML = false
 GetLootMethod = function() return "master" end
 GetLootMaster = function() return "MasterLou" end
 -- Raid of 3: ML present, me plain raider, leader present.
