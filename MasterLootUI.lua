@@ -1294,8 +1294,13 @@ function M.Award(itemID, winnerName, source, tradeTo)
   -- Boss fully looted after OUR auto-switch? Flip back to group loot.
   M.MaybeGroupAfterBoss(source)
   -- Test queue bookkeeping: an awarded sim row must not stay rollable.
+  -- Drop its queue entry FIRST: awards without a roll (lone-holder
+  -- direct award, pre-roll ... award) never consumed it, and the
+  -- award-time re-sync below would re-list the row straight back from
+  -- the stale entry. Rolled awards already consumed theirs (no-op).
   if Z.Sim then
     if source == "sim" then
+      if Z.Sim.DropSim then Z.Sim.DropSim(itemID) end
       if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
       if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
     end

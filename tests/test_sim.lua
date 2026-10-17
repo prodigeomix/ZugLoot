@@ -354,4 +354,23 @@ ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "survivor awards")
 ok(Sim.running == false, "run ends when drained")
 
+-- 11. Lone-holder direct award (no roll): the row leaves the sim
+-- window. The queue entry was never consumed (no roll started), so
+-- the award-time re-sync must not re-list it from the stale entry —
+-- while the untouched drop stays queued and listed.
+resetHarness()
+ZugLoot.DB.sheet.items[1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } }
+math.random = rigged({ 2, 90, 80, 2, 99, 50 })
+Sim.SimBoss("Test Boss")
+math.random = realRandom
+eq(#Sim.pending, 2, "direct-award setup queues two drops")
+LW.OpenDetail(1001)
+ok(LW.detail.single, "lone SR holder takes the fast path")
+eq(LW.doAction(1001, "award"), "awarded Aaa", "lone holder awarded without rolling")
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "direct award won-marks")
+ok(LW.Find(1001) == nil, "awarded row leaves the sim window")
+eq(#Sim.pending, 1, "direct award consumed its queue entry")
+ok(LW.Find(1002) ~= nil, "untouched drop stays listed")
+ok(Sim.RequestRoll(1002), "untouched drop still rolls")
+
 return T
