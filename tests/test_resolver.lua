@@ -246,4 +246,34 @@ eq(#rollsO, 1, "one roller")
 eq(rollsO[1].type, "OS", "drawn kind kept")
 eq(rollsO[1].roll, 42, "OS roll in range")
 
+-- 9. Multi-SR allowance: a player who SR'd the item N times may roll up
+-- to N times; their best stands; a player's own rolls never tie.
+local sX = sheetWith(900, {
+  { name = "A", rolls = 2, sr_plus = nil },
+  { name = "B", rolls = 1, sr_plus = nil },
+})
+local resX = R.ResolveItem(sX, 900, {
+  { name = "A", roll = 20, type = "SR" },
+  { name = "A", roll = 90, type = "SR" },
+  { name = "B", roll = 80, type = "SR" },
+}, { cap = 100 })
+eq(resX.winners[1].name, "A", "multi-sr best stands")
+eq(resX.winners[1].base, 90, "best of the two rolls wins")
+eq(#resX.tied, 0, "own rolls never force a re-roll")
+-- ...unless another player matches the best (a real cross-player tie).
+local resX2 = R.ResolveItem(sX, 900, {
+  { name = "A", roll = 20, type = "SR" },
+  { name = "A", roll = 90, type = "SR" },
+  { name = "B", roll = 90, type = "SR" },
+}, { cap = 100 })
+eq(#resX2.tied, 2, "cross-player tie still re-rolls")
+-- Sim fakes honor the allowance (x2 holder rolls twice within budget).
+math.random = kindRig({ 90, 80, 70 })
+local rollsX = R.FakeRolls(sX, 900, { count = 3 })
+math.random = realRandom
+eq(#rollsX, 3, "budget kept")
+eq(rollsX[1].name, "A", "first roll holder A")
+eq(rollsX[2].name, "A", "second roll still A (x2)")
+eq(rollsX[3].name, "B", "then B")
+
 return T

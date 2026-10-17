@@ -27,13 +27,34 @@ function M.PlayerSRd(itemID)
   return false
 end
 
+-- How many times the local player reserved this item (x2 = two rolls).
+function M.PlayerAllowance(itemID)
+  local sheet = Z.DB and Z.DB.sheet
+  if not sheet then return 1 end
+  local me = UnitName("player")
+  local rollers = Z.SRData.GetRollers(sheet, itemID)
+  for i = 1, Z.Util.ArrayCount(rollers) do
+    if rollers[i].name == me then
+      local n = tonumber(rollers[i].rolls) or 1
+      if n < 1 then n = 1 end
+      return n
+    end
+  end
+  return 1
+end
+
 function M.MaybeAutoRoll(itemLink)
   if not M.IsOn() then return end
   local itemID = Z.Util.ItemID(itemLink)
   if not itemID then return end
   if M.PlayerSRd(itemID) then
-    Z.Print("Auto-rolling SR (" .. itemLink .. ")")
-    RandomRoll(1, Z.Caps.SR)
+    local n = M.PlayerAllowance(itemID)
+    local k = 1
+    while k <= n do
+      Z.Print("Auto-rolling SR (" .. itemLink .. ")")
+      RandomRoll(1, Z.Caps.SR)
+      k = k + 1
+    end
   end
 end
 

@@ -127,7 +127,12 @@ Sheet = {
   (one-win-per-item; excluded SR rolls stay visible with `[already won]`,
   never silently dropped). MS/OS/TMOG stay contestable after a win (e.g.
   rolling transmog after winning mainspec).
-- Off-sheet rolls (no holders on the item): same single path — kind
+- Multi-SR allowance: a player who SR'd the item N times (`rolls`, e.g.
+  `x2`) may roll up to N times in one session; their best roll stands.
+  Extra rolls are extra chances, never extra winners: a player's own
+  rolls never tie against each other, and anything past the allowance is
+  ignored. Non-holders roll once.
+- Off-sheet rolls (no holders on the item): same single path - kind
   priority SR > MS > OS, with an empty SR contest. An MS 33 beats an
   OS 76 even with nobody holding SR; OS wins only with no MS contest.
 - Two-copies drops (`2x<link>`): winner + runner-up (same kind first, then
@@ -273,7 +278,8 @@ Sheet = {
 Rolls start from the loot-window Roll / Raid roll buttons only. Announce via
 RAID_WARNING (LootBlare trigger compatibility) + `ROLL_REQ` addon message.
 Accept chat `CHAT_MSG_SYSTEM` rolls (`X rolls Y (1-Z)`) while the roll
-window is open, first-roll-only per player; over-rolls flagged, ties
+window is open, up to the player's SR allowance (one roll, or N rolls
+for N reservations of the item); over-rolls flagged, ties
 re-roll fresh. Exactly one roll at a time — closing its window ends it.
 Raider clients pop their roll window off the ML/RL's RAID_WARNING roll
 call ONLY (`MatchRollCall`: `Roll for X: /roll ...` dice line or full
@@ -386,7 +392,7 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   when something is wrong with the rolls), Close. **Continue rolling**
   reopens intake on the finished round with the landed rolls kept
   (unlike **Roll again**, which starts fresh); newcomers roll in,
-  re-rollers are first-roll-only. Awarding ends any open
+  re-rollers are allowance-capped. Awarding ends any open
   roll first, then hands out the item and closes the window; the row
   leaves the list (done = gone). Ties stay open for a fresh re-roll round.
   Cancel ends the roll and drops the window back to pick (re-roll /
@@ -445,7 +451,8 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   and tooltips, plus a top-screen huge-text **winner banner** (5s fade, winner
   in class color). Roll-list class resolution is roster-first with the SR
   sheet as fallback (see §4.8).
-- First-roll-only; extra rolls ignored with notice. Auto-close timer configurable
+- Rolls up to the SR allowance (one roll, or N for N reservations of
+the item); extra rolls ignored with notice. Auto-close timer configurable
   (`/zl time N`, `/zl autoclose on|off`).
 - Draggable; `/zl show|hide`.
 

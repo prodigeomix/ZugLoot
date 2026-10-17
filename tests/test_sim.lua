@@ -141,6 +141,32 @@ ok(LW.Find(1001) == nil, "awarded row gone")
 ok(LW.detail == nil, "window closed after award")
 ok(Sim.running == false, "run ended when drained")
 
+-- 1c. Multi-SR allowance: Bbb SR'd 1001 twice (rolls = 2), so a second
+-- roll lands; a third is past the allowance and ignored. Aaa (rolls = 1)
+-- still gets one roll only.
+resetHarness()
+ML.roll = { itemID = 1001, mode = "SR", rolls = {} }
+ML.IntakeChatRoll("Bbb rolls 80 (1-100)")
+ML.IntakeChatRoll("Bbb rolls 90 (1-100)")
+ML.IntakeChatRoll("Bbb rolls 95 (1-100)") -- past allowance: ignored
+ML.IntakeChatRoll("Aaa rolls 70 (1-100)")
+ML.IntakeChatRoll("Aaa rolls 71 (1-100)") -- past allowance: ignored
+eq(#ML.roll.rolls, 3, "x2 holder rolls twice, single holder once")
+local bbbBest, bbbN = 0, 0
+for i = 1, #ML.roll.rolls do
+  if ML.roll.rolls[i].name == "Bbb" then
+    bbbN = bbbN + 1
+    if ML.roll.rolls[i].roll > bbbBest then bbbBest = ML.roll.rolls[i].roll end
+  end
+end
+eq(bbbN, 2, "two Bbb rolls kept")
+eq(bbbBest, 90, "third Bbb roll ignored")
+eq(ML.RollAllowance(1001, "Bbb"), 2, "allowance reads the sheet count")
+eq(ML.RollAllowance(1001, "Aaa"), 1, "single SR rolls once")
+eq(ML.RollAllowance(1001, "Stranger"), 1, "non-holder rolls once")
+local resAllow = ZugLoot.Resolver.ResolveItem(ZugLoot.DB.sheet, 1001, ML.roll.rolls, { cap = 100 })
+eq(resAllow.winners[1].name, "Bbb", "best of the allowance wins (90 over 70+10)")
+ML.roll = nil
 -- 1b. Continue rolling on a finished sim round: landed fakes kept, a
 -- manual /roll joins (no auto re-fakes: the queue entry was consumed).
 resetHarness()

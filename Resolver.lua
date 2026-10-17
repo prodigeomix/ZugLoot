@@ -144,7 +144,9 @@ function M.TypeWinners(entries)
       local m = 1
       while entries[m] ~= nil do
         local e = entries[m]
-        if e ~= b and e.rollType == t and not e.missroll
+        -- Ties are BETWEEN players: a player's own extra rolls (multi-SR
+        -- allowance) never force a re-roll against themselves.
+        if e ~= b and e.name ~= b.name and e.rollType == t and not e.missroll
             and not e.excludedWon and not e.overCap
             and (e.effective or 0) == (b.effective or 0) then
           table.insert(row.tied, e)
@@ -391,16 +393,24 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
   end
   local rolls = {}
   local skip = {}
-  -- SR holders roll SR (their reserve); a tmog-forced holder rolls TMOG.
+  -- SR holders roll SR (their reserve) up to their allowance: a player
+  -- who SR'd the item N times may roll N times (their best stands).
+  -- A tmog-forced holder rolls TMOG instead.
   if sheetLike and sheetLike.items and sheetLike.items[itemID] then
     local rollers = sheetLike.items[itemID].rollers or {}
     local i = 1
     while rollers[i] ~= nil and count(rolls) < total do
       local nm = rollers[i].name
+      local times = tonumber(rollers[i].rolls) or 1
+      if times < 1 then times = 1 end
       if nm and nm ~= "" then
         local kind = tmogSet[nm] and "TMOG" or "SR"
-        table.insert(rolls, { name = nm, roll = rollFor(kind), type = kind })
-        skip[nm] = true
+        local k = 1
+        while k <= times and count(rolls) < total do
+          table.insert(rolls, { name = nm, roll = rollFor(kind), type = kind })
+          skip[nm] = true
+          k = k + 1
+        end
       end
       i = i + 1
     end
