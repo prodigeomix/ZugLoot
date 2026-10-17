@@ -47,6 +47,7 @@ local function newObj(kind)
   function o:SetMaxLetters() end
   function o:GetText() return self.label or "" end
   function o:SetFocus() self.focused=true end
+  function o:SetTextInsets(l,r,t,b) self.insets={l,r,t,b} end
   function o:SetToplevel(t) self.toplevel=t end
   function o:StartMoving() end
   function o:StopMovingOrSizing() end
@@ -490,8 +491,8 @@ print("import sheet above main window OK");
 -- dialog focuses it.
 local impBox = Z.SRImport.DebugImportBox();
 assert(impBox ~= nil and impBox.GetText, "import box tracked");
-assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 28, "box width static, got: " .. tostring(impBox.w));
-assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 20, "box height static, got: " .. tostring(impBox.h));
+assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 24, "box width static, got: " .. tostring(impBox.w));
+assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 16, "box height static, got: " .. tostring(impBox.h));
 local impScroll = Z.SRImport.DebugImportScroll();
 assert(impScroll ~= nil, "import scroll tracked");
 assert(impScroll.w == Z.SRImport.IMPORT_BOX_W, "scroll width static, got: " .. tostring(impScroll.w));
@@ -501,13 +502,12 @@ assert(impScroll.h == Z.SRImport.IMPORT_BOX_H, "scroll height static, got: " .. 
 for _, p in ipairs(impScroll.points or {}) do
   assert(p[1] ~= "BOTTOMRIGHT", "scroll must not stretch-anchor");
 end
--- Text stays clear of the border: box inset 10px inside the scroll on
--- the top-left (text insets pad the rest).
-local insetTL = false;
-for _, p in ipairs(impBox.points or {}) do
-  if p[1] == "TOPLEFT" and p[4] == 10 and p[5] == -10 then insetTL = true end
-end
-assert(insetTL, "box inset clear of the border");
+-- Text stays clear of the border via text insets (the scroll frame
+-- owns the scroll child's position, so insets are the padding
+-- mechanism). Left/top must clear the edge decorations.
+assert(impBox.insets ~= nil, "box carries text insets");
+assert((impBox.insets[1] or 0) >= 10 and (impBox.insets[3] or 0) >= 8,
+  "insets clear the border, got: " .. tostring(impBox.insets and table.concat(impBox.insets, ",")));
 assert(impScroll:GetScript("OnMouseDown"), "box click-to-focus wired");
 impScroll:GetScript("OnMouseDown")();
 assert(impBox.focused == true, "click focuses the box");
