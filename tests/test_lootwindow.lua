@@ -520,7 +520,26 @@ for i = 1, #printed do
   end
 end
 ok(tradeSaid, "tmog award tells chat to trade to the normal winner")
--- TMOG-only rolls: no normal winner, no note.
+-- TMOG-only rolls: one trade only, so the note names the runner-up.
+ZugLoot.DB = { sheet = makeSheet() }
+table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+LW.doAction(1001, "roll")
+ML.IntakeChatRoll("Tmog rolls 15 (1-98)")
+ML.IntakeChatRoll("Oz rolls 10 (1-98)")
+LW.doAction(1001, "finish")
+printed = {}
+eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "tmog-only award")
+local tradeSecond = false
+for i = 1, #printed do
+  if string.find(printed[i], "Tmog wins ", 1, true)
+      and string.find(printed[i], "Trade to Oz after equipping.", 1, true) then
+    tradeSecond = true break
+  end
+end
+ok(tradeSecond, "tmog-only award names the runner-up")
+-- Lone TMOG roller: nobody to trade to, no note.
 ZugLoot.DB = { sheet = makeSheet() }
 table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
 LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
@@ -529,12 +548,12 @@ LW.doAction(1001, "roll")
 ML.IntakeChatRoll("Tmog rolls 15 (1-98)")
 LW.doAction(1001, "finish")
 printed = {}
-eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "tmog-only award")
+eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "lone tmog award")
 local tradeOmitted = true
 for i = 1, #printed do
   if string.find(printed[i], "Trade to ", 1, true) then tradeOmitted = false break end
 end
-ok(tradeOmitted, "tmog-only award omits the trade note")
+ok(tradeOmitted, "lone tmog award omits the trade note")
 -- Plain line builder: note only with a trade recipient.
 ok(string.find(ML.AwardLine(1001, "item:1001", "Tmog", "Aaa"), "Trade to Aaa after equipping.", 1, true) ~= nil, "AwardLine appends the trade note")
 ok(string.find(ML.AwardLine(1001, "item:1001", "Aaa"), "Trade to ", 1, true) == nil, "AwardLine plain without trade recipient")

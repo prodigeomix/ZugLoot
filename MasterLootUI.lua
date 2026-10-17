@@ -1696,9 +1696,11 @@ function M.AwardDirect(itemID, winnerName, source, tradeTo)
   return M.Award(itemID, winnerName, source, tradeTo)
 end
 -- Trade note for TMOG awards: the choice carries via = "tmog" on the
--- TMOG kind row; the normal (SR/MS/OS) winner comes off the open
--- window's menu (menu.winners is SR > MS > OS priority, TMOG never
--- lands there). TMOG-only rolls have no normal winner: no note.
+-- TMOG kind row. Trade target is the normal (SR/MS/OS) winner off the
+-- open window's menu (menu.winners is SR > MS > OS priority, TMOG never
+-- lands there). TMOG-only rolls: the item trades exactly once, so the
+-- target is the second-highest TMOG roll (the group is ranked
+-- best-first); a lone TMOG roller has nobody to trade to: no note.
 function M.TradeToFor(choice, itemID)
   if not choice or choice.via ~= "tmog" then return nil end
   local d = Z.LootWindow and Z.LootWindow.detail
@@ -1706,6 +1708,13 @@ function M.TradeToFor(choice, itemID)
   local w = d.menu and d.menu.winners and d.menu.winners[1]
   if w and w.name and w.name ~= "" and w.name ~= choice.name then
     return w.name
+  end
+  local tg = d.menu and d.menu.groups and d.menu.groups.TMOG
+  for i = 1, Z.Util.ArrayCount(tg or {}) do
+    local e = tg[i]
+    if e and e.name and e.name ~= "" and e.name ~= choice.name then
+      return e.name
+    end
   end
   return nil
 end
