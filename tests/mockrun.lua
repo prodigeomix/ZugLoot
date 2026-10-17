@@ -47,7 +47,6 @@ local function newObj(kind)
   function o:SetMaxLetters() end
   function o:GetText() return self.label or "" end
   function o:SetFocus() self.focused=true end
-  function o:HighlightText(a,b) self.hi={a,b} end
   function o:SetToplevel(t) self.toplevel=t end
   function o:StartMoving() end
   function o:StopMovingOrSizing() end
@@ -485,34 +484,22 @@ local impF2 = Z.SRImport.DebugImportFrame();
 assert((impF2.flevel or 0) > (Z.MainWindow.frame and Z.MainWindow.frame:GetFrameLevel() or 5),
   "import re-pinned after main rebuild, got: " .. tostring(impF2 and impF2.flevel));
 print("import sheet above main window OK");
--- Paste button: clipboard text lands in the sheet box. Empty
--- clipboard: click is a no-op, box text untouched.
-local impBtns = Z.SRImport.DebugImportButtons();
-assert(impBtns and impBtns.paste ~= nil, "paste button built");
-assert(impBtns.paste.label == "Paste", "paste button labeled, got: " .. tostring(impBtns.paste.label));
-assert(impBtns.paste:GetScript("OnClick"), "paste click wired");
+-- Compact sheet box: fixed ~10-line height, full dialog width, with a
+-- border (standard Blizzard input-box look, never a bare white slab).
+-- Clicking the box focuses it for Ctrl+V; opening the dialog focuses it.
 local impBox = Z.SRImport.DebugImportBox();
 assert(impBox ~= nil and impBox.GetText, "import box tracked");
-Z.ClipboardText = function() return "Clippy; 17063:1" end;
-impBtns.paste:GetScript("OnClick")();
-assert(Z.SRImport.PasteClipboard() == "Clippy; 17063:1", "paste returns the clipboard");
-assert(impBox:GetText() == "Clippy; 17063:1", "click drops clipboard into the box, got: " .. tostring(impBox:GetText()));
--- Empty paste (no hook) leaves the box text untouched but still
--- focuses the box, so Ctrl+V pastes natively.
-Z.ClipboardText = nil;
-GetClipboardText = nil;
+assert(impBox.h == Z.SRImport.IMPORT_BOX_H, "box is ~10 lines, got: " .. tostring(impBox.h));
+local impScroll = Z.SRImport.DebugImportScroll();
+assert(impScroll ~= nil, "import scroll tracked");
+assert(impScroll.h == Z.SRImport.IMPORT_BOX_H, "scroll clips to the box, got: " .. tostring(impScroll.h));
+assert(impScroll:GetScript("OnMouseDown"), "box click-to-focus wired");
+impScroll:GetScript("OnMouseDown")();
+assert(impBox.focused == true, "click focuses the box");
 impBox.focused = nil;
-assert(Z.SRImport.PasteClipboard() == "", "no hook: empty paste");
-assert(impBox.focused == true, "empty paste still focuses the box");
-impBtns.paste:GetScript("OnClick")();
-assert(impBox:GetText() == "Clippy; 17063:1", "empty paste keeps box text, got: " .. tostring(impBox:GetText()));
--- Top-right anchor: clear of the crowded bottom button strip.
-local pasteTopRight = false;
-for _, p in ipairs(impBtns.paste.points or {}) do
-  if p[1] == "TOPRIGHT" then pasteTopRight = true end
-end
-assert(pasteTopRight, "paste button anchored top-right");
-print("import paste button OK");
+Z.SRImport.ShowPaste();
+assert(Z.SRImport.DebugImportBox().focused == true, "dialog open focuses the box");
+print("import compact input box OK");
 -- Kill order renders the 8 real raid-target icons in order.
 Z.MainWindow.SelectTab("sheet");
 Z.MainWindow.SelectTab("pysanka");

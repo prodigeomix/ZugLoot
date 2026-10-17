@@ -1,6 +1,5 @@
 -- ZugLoot/SRImport.lua
--- Import UI: paste frame (Paste button + Load-from-File) for sheets
--- (CustomData/ZugLoot_SR.txt).
+-- Import UI: paste frame + Load-from-File button (CustomData/ZugLoot_SR.txt).
 -- Broadcast gated to ML / raid leader+assistant.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
@@ -9,46 +8,23 @@ Z.SRImport = M
 
 local pasteFrame = nil
 local editBox = nil
-local pasteBtn = nil
+local importScroll = nil
+
+-- Compact sheet box height: ~10 lines of GameFontHighlightSmall. The box
+-- stays small and clickable (focus + Ctrl+V); long pastes scroll inside.
+M.IMPORT_BOX_H = 150
 
 -- Test hook: live import frame (for the strata/level assert).
 function M.DebugImportFrame()
   return pasteFrame
 end
 
--- Test hook: tracked buttons of the import dialog.
-function M.DebugImportButtons()
-  return { paste = pasteBtn }
-end
-
--- Test hook: live sheet edit box (for the paste assert).
+-- Test hook: live sheet edit box + its scroll frame (geometry/focus asserts).
 function M.DebugImportBox()
   return editBox
 end
-
--- Focus the sheet box (so Ctrl+V pastes natively) and, when a client
--- clipboard hook is present, drop the clipboard text in directly.
--- Nil-safe / headless-safe so tests can exercise the full path
--- without the client. Always focuses; empty clipboard leaves the
--- box text untouched. Returns the pasted text ("" when none).
-function M.PasteClipboard()
-  if editBox and editBox.SetFocus then pcall(editBox.SetFocus, editBox) end
-  local clip = nil
-  for i = 1, 2 do
-    local probe = (i == 1) and Z.ClipboardText or GetClipboardText
-    if probe then
-      local ok, txt = pcall(probe)
-      if ok and txt ~= nil then clip = txt break end
-    end
-  end
-  clip = tostring(clip or "")
-  if editBox and clip ~= "" and editBox.SetText then
-    editBox:SetText(clip)
-    if editBox.HighlightText then
-      pcall(editBox.HighlightText, editBox, 0, -1)
-    end
-  end
-  return clip
+function M.DebugImportScroll()
+  return importScroll
 end
 
 -- Keep the import sheet above the main window: same DIALOG strata the
@@ -412,14 +388,14 @@ end
 function M.ShowPaste()
   if not pasteFrame then
     pasteFrame = CreateFrame("Frame", "ZugLootImportFrame", UIParent)
-    pasteFrame:SetWidth(560) pasteFrame:SetHeight(460)
+    pasteFrame:SetWidth(560) pasteFrame:SetHeight(260)
     pasteFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     pasteFrame:SetMovable(true) pasteFrame:EnableMouse(true)
     pasteFrame:RegisterForDrag("LeftButton")
     pasteFrame:SetScript("OnDragStart", function() pasteFrame:StartMoving() end)
     pasteFrame:SetScript("OnDragStop", function() pasteFrame:StopMovingOrSizing() end)
     if pasteFrame.SetResizable then pasteFrame:SetResizable(true) end
-    if pasteFrame.SetMinResize then pasteFrame:SetMinResize(420, 320) end
+    if pasteFrame.SetMinResize then pasteFrame:SetMinResize(420, 240) end
     if pasteFrame.SetClampedToScreen then pasteFrame:SetClampedToScreen(true) end
     -- Above the main window (DIALOG strata + level over the main frame),
     -- or the sheet slides under the window and cannot be clicked.
@@ -431,25 +407,28 @@ function M.ShowPaste()
     local title = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", pasteFrame, "TOP", 0, -10)
     title:SetText("ZugLoot Import")
-    -- Text lives inside a clipping ScrollFrame whose bottom edge stops
-    -- above the button strip, so long pastes scroll instead of painting
-    -- over the buttons (the old fixed-height EditBox drew past its rect).
+    -- Compact sheet box: a fixed ~10-line bordered input (standard
+    -- Blizzard InputBoxTemplate look, full dialog width) under the
+    -- title. Long pastes scroll inside the box; the frame itself stays
+    -- small. Clicking anywhere in the box focuses it for Ctrl+V.
     local scroll = CreateFrame("ScrollFrame", "ZugLootImportScroll", pasteFrame)
     scroll:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 20, -40)
-    scroll:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", -38, 55)
+    scroll:SetPoint("TOPRIGHT", pasteFrame, "TOPRIGHT", -38, -40)
+    scroll:SetHeight(M.IMPORT_BOX_H)
+    scroll:EnableMouse(true)
     scroll:EnableMouseWheel(true)
-    scroll:SetBackdrop({ bgFile = "Interface/ChatFrame/ChatFrameBackground", edgeSize = 1 })
-    editBox = CreateFrame("EditBox", "ZugLootImportBox", scroll)
+    editBox = CreateFrame("EditBox", "ZugLootImportBox", scroll, "InputBoxTemplate")
     if editBox.SetMultiLine then editBox:SetMultiLine(true) end
     if editBox.SetAutoFocus then editBox:SetAutoFocus(false) end
     if editBox.EnableMouse then editBox:EnableMouse(true) end
     if editBox.SetFontObject and GameFontHighlightSmall then editBox:SetFontObject(GameFontHighlightSmall) end
     if editBox.SetJustifyH then editBox:SetJustifyH("LEFT") end
     if editBox.SetJustifyV then editBox:SetJustifyV("TOP") end
-    editBox:SetWidth(480) editBox:SetHeight(200)
+    editBox:SetWidth(480) editBox:SetHeight(M.IMPORT_BOX_H)
     editBox:SetText("")
     if editBox.SetMaxLetters then editBox:SetMaxLetters(0) end
     scroll:SetScrollChild(editBox)
+    importScroll = scroll
     local sb = CreateFrame("Slider", "ZugLootImportBar", pasteFrame, "UIPanelScrollBarTemplate")
     sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 4, -16)
     sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 4, 16)
@@ -479,6 +458,10 @@ function M.ShowPaste()
       if scroll.SetVerticalScroll and sb.GetValue then scroll:SetVerticalScroll(sb:GetValue()) end
     end)
     if scroll.SetScript then
+      -- Click-to-focus: the whole box is one big click target.
+      scroll:SetScript("OnMouseDown", function()
+        if editBox.SetFocus then editBox:SetFocus() end
+      end)
       scroll:SetScript("OnVerticalScroll", function()
         if sb.SetValue and scroll.GetVerticalScroll then sb:SetValue(scroll:GetVerticalScroll()) end
       end)
@@ -522,17 +505,6 @@ function M.ShowPaste()
     closeBtn:SetText("Close")
     if closeBtn.SetFrameLevel then closeBtn:SetFrameLevel(baseLvl) end
     closeBtn:SetScript("OnClick", function() pasteFrame:Hide() end)
-    -- Paste lives top-right, above the scroll rect: the bottom strip
-    -- (Import! / Load from File / Close) is already full, and a fourth
-    -- button there crowds the resize grip. Click focuses the box (so
-    -- Ctrl+V pastes natively) and drops the clipboard text in when a
-    -- client hook provides it; empty clipboard leaves text untouched.
-    pasteBtn = CreateFrame("Button", nil, pasteFrame, "UIPanelButtonTemplate")
-    pasteBtn:SetWidth(80) pasteBtn:SetHeight(20)
-    pasteBtn:SetPoint("TOPRIGHT", pasteFrame, "TOPRIGHT", -20, -8)
-    pasteBtn:SetText("Paste")
-    if pasteBtn.SetFrameLevel then pasteBtn:SetFrameLevel(baseLvl) end
-    pasteBtn:SetScript("OnClick", function() M.PasteClipboard() end)
     -- Resize grip: drag the corner to grow/shrink; the scroll rect
     -- follows via anchors and the edit width follows the scroll.
     local grip = CreateFrame("Button", nil, pasteFrame)
@@ -567,4 +539,6 @@ function M.ShowPaste()
   -- fresh main frame would otherwise reclaim the top spot.
   RaiseImportAboveMain()
   pasteFrame:Show()
+  -- Focus the box on open so Ctrl+V pastes immediately.
+  if editBox and editBox.SetFocus then editBox:SetFocus() end
 end
