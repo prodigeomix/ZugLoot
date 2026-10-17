@@ -11,6 +11,7 @@ if not string.match then
   -- string.match(s, pat [, init]): like string.find but returns the
   -- captures (or the whole match when the pattern has none), nil on miss.
   local unpack_ = table.unpack or unpack
+  -- luacheck: push ignore 122 (intentional 5.0-client polyfill).
   function string.match(s, pat, init)
     local res = { string.find(s, pat, init) }
     if res[1] == nil then return nil end
@@ -21,10 +22,13 @@ if not string.match then
     end
     return string.sub(s, res[1], res[2])
   end
+  -- luacheck: pop
 end
 
 if not string.gmatch then
+  -- luacheck: push ignore 122 (intentional 5.0-client polyfill).
   string.gmatch = string.gfind
+  -- luacheck: pop
 end
 
 -- 5.0 (client) uses string.gfind, 5.1+ uses string.gmatch.
@@ -86,7 +90,6 @@ local B64REV = nil
 local function b64rev()
   if B64REV then return B64REV end
   B64REV = {}
-  local n = M.ArrayCount({}) -- noop, keep 5.0-safe style
   for i = 1, 64 do
     local c = string.sub(B64, i, i)
     B64REV[c] = i - 1

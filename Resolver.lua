@@ -326,20 +326,6 @@ end
 M.SIM_ROLLERS_MIN = 3
 M.SIM_ROLLERS_MAX = 7
 
--- Pick n distinct names from a list (order-preserving, 5.0-safe).
-local function takeNames(names, n, skip)
-  local out = {}
-  local i = 1
-  while names[i] ~= nil and count(out) < n do
-    local nm = names[i]
-    if nm and nm ~= "" and not (skip and skip[nm]) then
-      table.insert(out, nm)
-    end
-    i = i + 1
-  end
-  return out
-end
-
 -- THE fake-roll generator: sim AND rehearsal share this (one code path).
 -- Every roll is math.random(1-100) for the number; the KIND (MS/OS/TMOG)
 -- is drawn at random per roller. SR holders roll SR (their reserve),
@@ -374,7 +360,7 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
       end
     end
   else
-    local SRD = (Z and Z.SRData) or ZugLoot.SRData
+    local SRD = ZugLoot.SRData
     if SRD and SRD.AllPlayerNames then
       players = SRD.AllPlayerNames(sheetLike) or {}
     end

@@ -708,29 +708,6 @@ function M.DisplayItemLink(itemID, itemLink)
   return "item:" .. tostring(itemID)
 end
 
--- Award popup text helper (pre-formatted: the client must not fill %s).
-local function showAwardPopup(itemLink, winnerName, onAccept)
-  if not (StaticPopupDialogs and StaticPopup_Show) then return false end
-  StaticPopupDialogs["ZUGLOOT_AWARD"] = StaticPopupDialogs["ZUGLOOT_AWARD"] or {
-    text = "",
-    button1 = "Award", button2 = "Cancel",
-    OnAccept = function() end, timeout = 0, whileDead = 1,
-  }
-  -- Confirm shows the ITEM NAME (regression: bare item:id here). The full
-  -- link stays on the dialog for shift-click/insert parity.
-  local display = tostring(itemLink)
-  if Z.MasterLootUI and Z.MasterLootUI.DisplayItemLink then
-    local id = Z.Util.ItemID(itemLink)
-    display = Z.MasterLootUI.DisplayItemLink(id, itemLink)
-  end
-  StaticPopupDialogs["ZUGLOOT_AWARD"].text =
-    string.format("Award %s to %s?", display, PName(winnerName))
-  StaticPopupDialogs["ZUGLOOT_AWARD"].itemLink = itemLink
-  StaticPopupDialogs["ZUGLOOT_AWARD"].OnAccept = onAccept or function() end
-  StaticPopup_Show("ZUGLOOT_AWARD")
-  return true
-end
-
 -- Loot one corpse slot through Blizzard's loot frame (nil-safe: no-ops
 -- headless and when the slot can't be resolved). Master loot hands the
 -- corpse item to the winner; any other method loots it to us. Either way
@@ -804,11 +781,11 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
     if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
     local liveQ = nil
     if GetLootSlotInfo then
-      local ok, a, b, c, d = pcall(GetLootSlotInfo, slot)
+      local ok, _a, _b, _c, d = pcall(GetLootSlotInfo, slot)
       liveQ = ok and tonumber(d) or nil
     end
     if liveQ == nil and GetItemInfo and link then
-      local ok, n, l, q = pcall(GetItemInfo, link)
+      local ok, _n, _l, q = pcall(GetItemInfo, link)
       if ok then liveQ = tonumber(q) end
     end
     if liveQ == nil then
@@ -1523,11 +1500,11 @@ end
 function M.SandReset()
   local ledger = M.SandLedger()
   local nNames, nUnits = 0, 0
-  for nm, c in pairs(ledger) do
+  for _, c in pairs(ledger) do
     nNames = nNames + 1
     nUnits = nUnits + (tonumber(c) or 0)
   end
-  for nm in pairs(ledger) do ledger[nm] = nil end
+  for _nm in pairs(ledger) do ledger[_nm] = nil end
   return { names = nNames, units = nUnits }
 end
 function M.SandCommand(argText)
@@ -2066,7 +2043,7 @@ function M.OnLootOpened()
   end
 end
 
-function M.OnEvent(event, a1, a2)
+function M.OnEvent(event, a1, _a2)
   if event == "CHAT_MSG_SYSTEM" and M.roll then
     -- "Name rolls 42 (1-100)" lands on the open roll, or nowhere.
     M.IntakeChatRoll(a1)

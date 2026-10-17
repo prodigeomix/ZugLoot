@@ -11,15 +11,6 @@ local function eq(a, b, msg)
   end
 end
 
-local function ok(v, msg)
-  if not v then
-    T.fail = T.fail + 1
-    table.insert(T.errors, "FAIL " .. (msg or "expected truthy"))
-  else
-    T.pass = T.pass + 1
-  end
-end
-
 -- 1. Whitelist of allowed globals for WoW 1.12.1 + ZugLoot test environment
 local allowedGlobals = {
   -- Lua core

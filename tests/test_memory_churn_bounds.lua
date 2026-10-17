@@ -36,7 +36,6 @@ local DropLog = ZugLoot.DropLog
 local RaidArchive = ZugLoot.RaidArchive
 local SRData = ZugLoot.SRData
 local Resolver = ZugLoot.Resolver
-local Util = ZugLoot.Util
 
 -- 1. Idle Timer.Update Zero-Allocation Invariant
 Timer.CancelAll()
@@ -44,7 +43,7 @@ collectgarbage("collect")
 local m0 = collectgarbage("count")
 
 -- Simulate 1,000 frames (approx 16 seconds at 60 FPS) with empty timer queue
-for i = 1, 1000 do
+for _ = 1, 1000 do
   Timer.Update(0.016)
 end
 
@@ -56,12 +55,12 @@ local fired = 0
 Timer.After(1.0, function() fired = fired + 1 end)
 Timer.After(2.0, function() fired = fired + 1 end)
 
-for i = 1, 60 do
+for _ = 1, 60 do
   Timer.Update(0.02) -- 1.2s advanced
 end
 eq(fired, 1, "first timer fired at 1.2s")
 
-for i = 1, 60 do
+for _ = 1, 60 do
   Timer.Update(0.02) -- 2.4s advanced
 end
 eq(fired, 2, "second timer fired at 2.4s")

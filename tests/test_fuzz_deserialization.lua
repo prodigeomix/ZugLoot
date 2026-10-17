@@ -132,7 +132,7 @@ for i = 1, fuzzCount do
   if rand(1, 3) == 1 then payload = mutate(payload) end -- double mutation
 
   -- Fuzz DeserializeSheet
-  local okD, res, err = pcall(Import.DeserializeSheet, payload)
+  local okD, res = pcall(Import.DeserializeSheet, payload)
   if not okD then
     unhandledErrors = unhandledErrors + 1
     table.insert(T.errors, "CRASH in DeserializeSheet on iteration " .. i .. ": " .. tostring(res))
@@ -140,7 +140,7 @@ for i = 1, fuzzCount do
   end
 
   -- Fuzz ParseLineFormat
-  local okP, resP, errP = pcall(SRData.ParseLineFormat, payload)
+  local okP, resP = pcall(SRData.ParseLineFormat, payload)
   if not okP then
     unhandledErrors = unhandledErrors + 1
     table.insert(T.errors, "CRASH in ParseLineFormat on iteration " .. i .. ": " .. tostring(resP))

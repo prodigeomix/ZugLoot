@@ -531,8 +531,8 @@ print("setup loot toggles OK");
 for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   local sliderState = Z.MainWindow.DebugSliderState();
-  for other, vis in pairs(sliderState) do
-    assert(not vis or other == tab, "slider of hidden tab " .. other .. " visible while on " .. tab);
+  for other, _vis in pairs(sliderState) do
+    assert(not _vis or other == tab, "slider of hidden tab " .. other .. " visible while on " .. tab);
   end
 end
 print("slider invariant OK");
@@ -653,7 +653,7 @@ print("roll icon tooltip OK");
 -- Shift-click inserts a FULL link even when the window opened on a bare
 -- id (click-time cache resolve + upgrade).
 local inserted = {};
-ChatFrameEditBox = { IsVisible = function() return true end, Insert = function(self, s) table.insert(inserted, s) end };
+ChatFrameEditBox = { IsVisible = function() return true end, Insert = function(_self, s) table.insert(inserted, s) end };
 IsShiftKeyDown = function() return true end;
 IsControlKeyDown = function() return false end;
 Z.RaiderLootUI.ShowItem("item:17063:0:0:0", 15);

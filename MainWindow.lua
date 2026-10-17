@@ -756,9 +756,12 @@ local function PYEdit(parent, w, h, get, set, desc)
   else
     label = PYLabel(box, get and get() or "", w - 8, "LEFT")
     if label.SetPoint then label:SetPoint("LEFT", box, "LEFT", 4, 0) end
-    local hl = nil
+    -- Highlight texture is owned by the frame; stash the handle on the
+    -- box so the assignment reads as intentional (W311 would flag a
+    -- write-only local).
     if box.CreateTexture then
-      hl = box:CreateTexture(nil, "BACKGROUND")
+      box.zlHlTex = box:CreateTexture(nil, "BACKGROUND")
+      local hl = box.zlHlTex
       if hl.SetTexture then hl:SetTexture(0.12, 0.13, 0.16, 1) end
       if hl.SetAllPoints then hl:SetAllPoints(box) end
     end
@@ -817,9 +820,11 @@ local function PYPlayer(parent, w, get, set, desc)
   b:SetWidth(w) b:SetHeight(PY_FIELD_H)
   local label = PYLabel(b, "", w - 8, "LEFT")
   if label.SetPoint then label:SetPoint("LEFT", b, "LEFT", 4, 0) end
-  local bg = nil
+  -- Background texture is owned by the frame; stash the handle on the
+  -- button so the assignment reads as intentional.
   if b.CreateTexture then
-    bg = b:CreateTexture(nil, "BACKGROUND")
+    b.zlBgTex = b:CreateTexture(nil, "BACKGROUND")
+    local bg = b.zlBgTex
     if bg.SetTexture then bg:SetTexture(0.14, 0.15, 0.18, 1) end
     if bg.SetAllPoints then bg:SetAllPoints(b) end
   end
@@ -978,7 +983,7 @@ function M.PysankaPick(anchor)
     M.pysAnchor = nil
     M.zlPysPicker = { anchor = anchor, names = names, open = false }
   end
-  local function choiceRow(text, value, first)
+  local function choiceRow(text, value, _first)
     local b = CreateFrame("Button", nil, dd)
     if b.SetWidth then b:SetWidth(134) end
     if b.SetHeight then b:SetHeight(16) end

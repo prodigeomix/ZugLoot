@@ -189,7 +189,7 @@ ok(trunc == nil and truncErr ~= nil, "truncated base64 refused")
 ok(string.find(tostring(truncErr), "truncated", 1, true) ~= nil, "truncated message")
 -- Valid-length but JSON-cut payload also refuses cleanly.
 local cutJson = "eyJhIjox" -- base64("{") + junk -> decodes, tail isn't }/]
-local cut, cutErr = SRData.ParseRaidResExport(cutJson)
+local cut = SRData.ParseRaidResExport(cutJson)
 ok(cut == nil, "cut JSON refused (no hang, no sheet)")
 
 return T

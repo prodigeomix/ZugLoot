@@ -199,7 +199,7 @@ function M.WarnGroup(msg)
   M.Say(msg, true, false)
 end
 
-function M.ApplyReceivedSheet(ver, raidID, payload, sender)
+function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
   -- A sheet landed: cancel any pending leader reply (the ML answered
   -- first — the group must never get two competing sheets).
   if Z.SRSecurity and Z.SRSecurity.NoteSheetArrived then
@@ -259,7 +259,7 @@ function M.OnMessage(msg, sender, channel)
   -- answer arrive first; a SHEET landing meanwhile cancels the leader's
   -- reply so the client never gets two competing sheets. Nobody else
   -- answers, ever — receivers only trust ML/leader sheets (CanAcceptFrom).
-  if msg == "SHEET_REQ" or string.sub(msg, 1, 10) == "SHEET_REQ:" then
+  if msg == "SHEET_REQ" or tag == "SHEET_REQ" then
     -- Targeted form "SHEET_REQ:<name>": only answer when WE are the
     -- named player (exact name match after link-strip). Anyone may be
     -- asked (imports are open); trust is enforced on RECEIVE.

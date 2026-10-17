@@ -3,7 +3,6 @@
 -- (In-game only; tests load pure files directly.)
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
-local frame = nil
 
 Z.DB = nil
 Z.CharDB = nil
@@ -156,9 +155,11 @@ function Z.Init()
   frame:RegisterEvent("PARTY_MEMBERS_CHANGED")
   frame:RegisterEvent("PLAYER_TARGET_CHANGED")
   frame:SetScript("OnEvent", function() Z.OnEvent(event, arg1, arg2, arg3, arg4) end)
+  -- luacheck: push ignore 131 (WoW client reads SLASH_* + SlashCmdList).
   SLASH_ZUGLOOT1 = "/zl"
   SLASH_ZUGLOOT2 = "/zugloot"
   SlashCmdList["ZUGLOOT"] = function(msg) Z.Slash(msg) end
+  -- luacheck: pop
   -- Timer driver: advances ZugLoot.Timer on every frame (vanilla 1.12 has
   -- no C_Timer). Guarded so Core loads even if Timer.lua is absent.
   if Z.Timer then

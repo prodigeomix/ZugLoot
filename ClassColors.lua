@@ -90,14 +90,14 @@ function M.RosterMap()
     local me = UnitName("player")
     if me and me ~= "" then
       local cls = nil
-      if UnitClass then _, cls = UnitClass("player") end
+      if UnitClass then local _, c = UnitClass("player") cls = c end
       if cls then map[me] = cls end
     end
     for i = 1, GetNumPartyMembers() do
       local n = UnitName("party" .. i)
       if n and n ~= "" then
         local cls = nil
-        if UnitClass then _, cls = UnitClass("party" .. i) end
+        if UnitClass then local _, c = UnitClass("party" .. i) cls = c end
         if cls then map[n] = cls end
       end
     end
@@ -106,7 +106,7 @@ function M.RosterMap()
     local me = UnitName("player")
     if me and me ~= "" and not map[me] then
       local cls = nil
-      if UnitClass then _, cls = UnitClass("player") end
+      if UnitClass then local _, c = UnitClass("player") cls = c end
       if cls then map[me] = cls end
     end
   end
@@ -132,9 +132,8 @@ function M.ClassOf(name, sheet, roster)
   local sh = sheetOf(sheet)
   if sh and sh.players and sh.players[name] then
     local p = sh.players[name]
-    local raw = nil
-    if type(p) == "table" then raw = p.class else raw = p end
-    return M.NormalizeClass(raw)
+    if type(p) ~= "table" then return M.NormalizeClass(p) end
+    return M.NormalizeClass(p.class)
   end
   return nil
 end

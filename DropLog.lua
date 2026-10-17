@@ -18,9 +18,7 @@ function M.Add(itemID, itemLink, source, outcome, winner)
   while Z.Util.ArrayCount(Z.DB.drops) > Z.Limits.DROP_LOG_MAX do
     table.remove(Z.DB.drops, 1)
   end
-  if Z.Comm and outcome == "award" then
-    -- awards already broadcast by MasterLootUI; log-only here.
-  end
+  -- Awards already broadcast by MasterLootUI; log-only here (no extra send).
 end
 
 function M.Clear()

@@ -126,8 +126,9 @@ end
 
 -- Click: ctrl tries the item on; otherwise resolve to a full link and
 -- insert it into an open chat box (print it when none is open).
+-- _name keeps signature parity with Hover/Wire (callers pass st.name).
 -- Returns "dressup" / "insert" / "print", or nil when nothing applied.
-function M.HandleClick(itemID, link, name, onLink)
+function M.HandleClick(itemID, link, _name, onLink)
   local id = tonumber(itemID)
   if not id and link then
     id = tonumber(string.match(tostring(link), "item:(%d+)"))

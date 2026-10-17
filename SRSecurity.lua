@@ -185,7 +185,7 @@ M._pendingSheetReply = nil -- leader-delayed reply handle (Timer)
 -- targeted = true for "/zl sync <name>" requests: the named player
 -- answers DIRECTLY when they hold a sheet (anyone may hold one) — no
 -- role check, no delay. Trust stays on RECEIVE (CanAcceptFrom).
-function M.ShouldAnswerSheetReq(requester, targeted, channel)
+function M.ShouldAnswerSheetReq(_requester, targeted, channel)
   if targeted then
     if M.AnySheet() == nil then return nil end
     M.AnswerSheetReq("direct", channel)
