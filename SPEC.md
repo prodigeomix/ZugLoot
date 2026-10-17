@@ -540,10 +540,33 @@ the item); extra rolls ignored with notice. Auto-close timer configurable
   `%P` → `%` last.
 - Raid identity envelope: `SerializeSheet` leads with a
   `META;raidID=…,name=…,by=…,at=…,src=…` line (commas escaped `%C`), so a
-  synced sheet shows the raid name in the header/archive instead of “—”.
+  synced sheet shows the raid name in the header/archive instead of "—".
   `ParseLineFormat` skips META; `ExtractMeta` strips + parses it on
   receive; legacy senders without META still get message-raidID + trusted
   sender stamped. `DeserializeSheet` applies META only where non-empty.
+- Drop progress rides along: `SerializeSheet` appends `UNSR;<id>:q<quality>…`
+  (unreserved stubs — rolled but never SR'd, which carry no rollers so
+  the item loop emits nothing for them), `WON;<id>=<name>…` (won marks)
+  + one `ROLLH;<itemID>,<t>,<mode>,<winners>,<entries…>` line per recorded
+  roll session, so every SHEET sync carries what was rolled and who won
+  — raiders see the same sheet as the ML. Names escape `%X`-style
+  (`%`→`%P`, `|`→`%B`, `,`→`%C`, `;`→`%S`, `:`→`%N`, `+`→`%A`).
+  `ParseLineFormat` parses all three heads without eating hand-written
+  player lines: WON needs `=` in the tail, UNSR needs the `:q` marker
+  (colon-count stays player syntax), ROLLH strict-decodes and falls back
+  to the player path on failure (genuine modes always contain a letter,
+  so bare-id reservations can never decode). Malformed WON/UNSR parts
+  skip quietly, never nuking a sync.
+- Live session deltas: at finish time the ML's client records the session
+  (`RecordRolls`) and immediately sends
+  `ROLLLOG:<ver>:<raidID>:<itemID>:<tail>` (same tail encoding as ROLLH,
+  chunked as `ROLLLOG_C:…:<seq>:<total>:<chunk>` past 160 bytes) — the
+  raid learns what was rolled the moment it is recorded. Won marks
+  follow at award time via the existing `AWARD:<itemID>:<winner>`.
+  Send-side: `CanBroadcast` (ML/leader) + non-solo channel; receive-side:
+  `CanAcceptFrom` trust + live sheet of the SAME raidID (anything else
+  ignored — the next full SHEET recovers), appended via `RecordRolls`
+  with views refreshed underneath.
 - Grid of **rectangles**: group first, then SR-sheet players not in the
   group. Full name in class color (outlined). Colors (muted):
   green = in group + on the sheet, red = in group + no SR,

@@ -72,6 +72,42 @@ end
 -- 5.0 (client) uses string.gfind, 5.1+ uses string.gmatch.
 local Gfind = string.gmatch or string.gfind
 
+-- Progress escaping for the ROLLH/WON line tails below. Player names are
+-- letters-only on the client, but the tails split on , ; : + — so names
+-- carrying any of those (hand-made tests, fuzz) are escaped %X-style.
+-- Encode: % first, then the delimiters. Decode: reverse (single-letter
+-- codes, %P -> % LAST — a literal "%C" arrived as "%PC").
+-- Layers with the outer ESC escape (% -> %P, | -> %B): inner "%C"
+-- becomes "%PC" on the wire, outer decode restores "%C" first, then
+-- the inner decode below restores "," — same layering META relies on.
+local function pesc(s)
+  s = tostring(s or "")
+  s = string.gsub(s, "%%", "%%P")
+  s = string.gsub(s, "|", "%%B")
+  s = string.gsub(s, ",", "%%C")
+  s = string.gsub(s, ";", "%%S")
+  s = string.gsub(s, ":", "%%N")
+  s = string.gsub(s, "%+", "%%A")
+  return s
+end
+local function punesc(s)
+  s = tostring(s or "")
+  s = string.gsub(s, "%%A", "+")
+  s = string.gsub(s, "%%N", ":")
+  s = string.gsub(s, "%%S", ";")
+  s = string.gsub(s, "%%C", ",")
+  s = string.gsub(s, "%%B", "|")
+  s = string.gsub(s, "%%P", "%%")
+  return s
+end
+
+local ROLLTYPE_LETTER = { SR = "S", MS = "M", OS = "O", TMOG = "T" }
+local LETTER_ROLLTYPE = { S = "SR", M = "MS", O = "OS", T = "TMOG" }
+
+-- Single progress-name unescape for the WON line parser (SRData owns
+-- the sheet, SRImport owns the wire escaping).
+function M.DecodeSessionName(s) return punesc(s) end
+
 -- Serialize normalized sheet to a compact string for SHEET broadcast.
 -- Format: line format (lossless for our model) — no JSON lib needed in client.
 -- First line is META (raid identity for the receiver's header/archive):
@@ -126,6 +162,68 @@ function M.SerializeSheet(sheet)
       table.insert(lines, "PLAYERS;" .. table.concat(pl, ","))
     end
   end
+  -- Unreserved stubs (rolled but never SR'd): UNSR;<id>:q<quality>,...
+  -- (ids numeric ascending). Stubs carry no rollers, so the item loop
+  -- above emits nothing for them — without this line they (and their
+  -- sessions/marks) would land invisibly on receivers. The :q marker
+  -- keeps stub parts unambiguous against player id:count entries.
+  -- Quality rides along for the card color (q0 = unknown, default).
+  do
+    local ids = {}
+    for id, item in pairs(sheet.items or {}) do
+      if type(item) == "table" and item.unsr == true then
+        table.insert(ids, tonumber(id) or id)
+      end
+    end
+    if Z.Util.ArrayCount(ids) > 0 then
+      table.sort(ids)
+      local up = {}
+      for i = 1, Z.Util.ArrayCount(ids) do
+        local id = ids[i]
+        local q = sheet.items[id] and sheet.items[id].quality or nil
+        table.insert(up, tostring(id) .. ":q" .. tostring(tonumber(q) or 0))
+      end
+      table.insert(lines, "UNSR;" .. table.concat(up, ","))
+    end
+  end
+  -- Won marks: WON;<id>=<name>+<name>,... (ids numeric ascending).
+  -- Receivers mirror them straight onto sheet.won (the sender already
+  -- applied the log floor, so no quality check on receive).
+  if sheet.won then
+    local ids = {}
+    for id in pairs(sheet.won) do table.insert(ids, tonumber(id) or id) end
+    table.sort(ids)
+    local wp = {}
+    for i = 1, Z.Util.ArrayCount(ids) do
+      local id = ids[i]
+      local names = {}
+      for nm in pairs(sheet.won[id] or {}) do
+        if nm and nm ~= "" then table.insert(names, pesc(nm)) end
+      end
+      if Z.Util.ArrayCount(names) > 0 then
+        table.sort(names)
+        table.insert(wp, tostring(id) .. "=" .. table.concat(names, "+"))
+      end
+    end
+    if Z.Util.ArrayCount(wp) > 0 then
+      table.insert(lines, "WON;" .. table.concat(wp, ","))
+    end
+  end
+  -- Roll history: one ROLLH;<session tail> line per recorded session
+  -- (ids numeric ascending, sessions in record order) so a synced sheet
+  -- shows what was rolled, not just the reservations.
+  if sheet.rolls then
+    local ids = {}
+    for id in pairs(sheet.rolls) do table.insert(ids, tonumber(id) or id) end
+    table.sort(ids)
+    for i = 1, Z.Util.ArrayCount(ids) do
+      local hist = sheet.rolls[ids[i]]
+      for s = 1, Z.Util.ArrayCount(hist or {}) do
+        local tail = M.EncodeSession(ids[i], hist[s])
+        if tail then table.insert(lines, "ROLLH;" .. tail) end
+      end
+    end
+  end
   -- NOTE: SerializeSheet lines are "Name;id:count+plus" single-entry lines.
   return table.concat(lines, "|")
 end
@@ -136,6 +234,85 @@ local function munesc(s)
   s = string.gsub(tostring(s or ""), "%%C", ",")
   s = string.gsub(s, "%%P", "%%")
   return s
+end
+
+
+
+-- Encode one roll session to its wire tail (shared by the ROLLH sheet
+-- lines and the ROLLLOG delta message):
+--   <itemID>,<t>,<mode>,<w1>+<w2>,<name>:<base>:<eff>:<T>:<plus>:<flags>,...
+-- T is the single-letter kind; flags concatenate m (missroll),
+-- x (won-excluded), o (over cap). No winners encodes as "-" (a bare
+-- name can never be "-", and Split drops empty fields — positions
+-- must never go missing). Numbers fall back to 0 on decode.
+function M.EncodeSession(itemID, sess)
+  if not itemID or not sess then return nil end
+  local winners = sess.winners or {}
+  local wtxt = "-"
+  if Z.Util.ArrayCount(winners) > 0 then
+    local w = {}
+    for i = 1, Z.Util.ArrayCount(winners) do
+      table.insert(w, pesc(winners[i]))
+    end
+    wtxt = table.concat(w, "+")
+  end
+  local parts = { tostring(itemID), tostring(sess.t or 0),
+    pesc(sess.mode or "SR"), wtxt }
+  for i = 1, Z.Util.ArrayCount(sess.entries or {}) do
+    local e = sess.entries[i]
+    if e and e.name and e.name ~= "" then
+      local flags = (e.missroll and "m" or "")
+        .. (e.excludedWon and "x" or "")
+        .. (e.overCap and "o" or "")
+      local base = tonumber(e.base) or 0
+      local eff = tonumber(e.effective) or base
+      table.insert(parts, pesc(e.name) .. ":" .. base .. ":" .. eff .. ":"
+        .. (ROLLTYPE_LETTER[e.rollType] or "M") .. ":"
+        .. (tonumber(e.sr_plus) or 0) .. ":" .. flags)
+    end
+  end
+  return table.concat(parts, ",")
+end
+
+-- Inverse of EncodeSession: tail -> itemID, session table (shape matches
+-- Resolver.ToHistoryEntry minus missrolls/excluded counts, which the
+-- item log never displays). STRICT: malformed tails return nil, so the
+-- line-format parser can fall back to the player path (a hand-written
+-- line for someone named "Rollh" must never be eaten — e.g.
+-- Rollh;1001,1002,1003,1004 is four bare reservations, not a session:
+-- field 3 is numeric, while genuine modes always contain a letter).
+function M.DecodeSession(tail)
+  local parts = Z.Util.Split(tostring(tail or ""), ",")
+  if Z.Util.ArrayCount(parts) < 4 then return nil end
+  local itemID = tonumber(parts[1])
+  if not itemID then return nil end
+  if not string.find(tostring(parts[3] or ""), "%a") then return nil end
+  if (parts[4] or "") == "" then return nil end
+  local winners = {}
+  if parts[4] ~= "-" and parts[4] ~= "" then
+    for _, w in ipairs(Z.Util.Split(parts[4], "+")) do
+      local nm = punesc(w)
+      if nm ~= "" then table.insert(winners, nm) end
+    end
+  end
+  local entries = {}
+  for i = 5, Z.Util.ArrayCount(parts) do
+    local f = Z.Util.Split(parts[i], ":")
+    local nm = punesc(f[1] or "")
+    if nm ~= "" then
+      local base = tonumber(f[2]) or 0
+      local flags = tostring(f[6] or "")
+      table.insert(entries, { name = nm, base = base,
+        effective = tonumber(f[3]) or base,
+        rollType = LETTER_ROLLTYPE[f[4]] or "MS",
+        sr_plus = tonumber(f[5]) or 0,
+        missroll = string.find(flags, "m", 1, true) and true or nil,
+        excludedWon = string.find(flags, "x", 1, true) and true or nil,
+        overCap = string.find(flags, "o", 1, true) and true or nil })
+    end
+  end
+  return itemID, { t = tonumber(parts[2]) or 0, mode = punesc(parts[3]),
+    winners = winners, entries = entries, missrolls = 0, excluded = {} }
 end
 
 -- Pull the META line out of a decoded sheet text. Returns meta table +

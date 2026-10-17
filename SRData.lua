@@ -114,6 +114,52 @@ function M.RecordRolls(sheet, itemID, entry)
   return Util.ArrayCount(sheet.rolls[itemID])
 end
 
+-- Stable identity for one recorded session: timestamp + mode + winners +
+-- every entry's name/base/effective/kind. Used on receive to drop
+-- redelivered sessions (double event frames, retried sends): the same
+-- bytes carry the same signature, so a match means "already have it".
+function M.SessionSignature(sess)
+  if not sess then return "" end
+  local w = {}
+  for i = 1, Util.ArrayCount(sess.winners or {}) do
+    table.insert(w, tostring(sess.winners[i]))
+  end
+  local e = {}
+  for i = 1, Util.ArrayCount(sess.entries or {}) do
+    local en = sess.entries[i] or {}
+    table.insert(e, tostring(en.name) .. ":" .. tostring(en.base) .. ":"
+      .. tostring(en.effective) .. ":" .. tostring(en.rollType))
+  end
+  return tostring(sess.t or 0) .. "|" .. tostring(sess.mode or "")
+    .. "|" .. table.concat(w, "+") .. "|" .. table.concat(e, ",")
+end
+
+-- Try one ROLLH wire tail: strict-decode + record. Returns true when
+-- consumed. False leaves the line to the caller (the line-format
+-- player path) — hand-written player lines are never eaten.
+function M.ConsumeRollLine(sheet, tail)
+  local SRImport = ZugLoot and ZugLoot.SRImport
+  if not (sheet and SRImport and SRImport.DecodeSession) then return false end
+  local id, sess = SRImport.DecodeSession(tail)
+  if not id or not sess then return false end
+  M.RecordRolls(sheet, id, sess)
+  return true
+end
+
+-- True when this exact session is already in the item's history.
+-- Receive-side dedup (ApplyRollSession): redelivery must never stack
+-- a second copy next to the first.
+function M.SessionKnown(sheet, itemID, sess)
+  if not sheet or not itemID or not sess then return false end
+  local hist = (sheet.rolls or {})[itemID]
+  if not hist then return false end
+  local sig = M.SessionSignature(sess)
+  for i = 1, Util.ArrayCount(hist) do
+    if M.SessionSignature(hist[i]) == sig then return true end
+  end
+  return false
+end
+
 function M.GetRolls(sheet, itemID)
   if not sheet or not sheet.rolls or not sheet.rolls[itemID] then return {} end
   return sheet.rolls[itemID]
@@ -212,6 +258,56 @@ function M.ParseLineFormat(text)
         for i = 1, Util.ArrayCount(parts) do
           local nm, cls = string.match(Util.Trim(parts[i]), "^([^=]+)=([^=]+)$")
           if nm and cls then M.SetPlayerClass(sheet, Util.Trim(nm), Util.Trim(cls)) end
+        end
+      elseif string.upper(head) == "UNSR" and string.match(tail, "^%d+:q%d+") then
+        -- Unreserved stubs off the wire (SerializeSheet UNSR line):
+        -- recreate the rolled-but-never-SR'd card so its sessions and
+        -- marks have a row to land on. Never touches existing items.
+        -- The :q marker is unambiguous against player id:count parts,
+        -- so a hand-written line for someone named "Unsr" stays on
+        -- the player path below. Malformed parts skip quietly.
+        for i = 1, Util.ArrayCount(parts) do
+          local id, q = string.match(Util.Trim(parts[i]), "^(%d+):q(%d+)$")
+          id = tonumber(id)
+          q = tonumber(q)
+          if id and not sheet.items[id] then
+            M.EnsureUnreserved(sheet, id, (q ~= 0 and q) or nil)
+          end
+        end
+      elseif string.upper(head) == "WON" and string.find(tail, "=", 1, true) then
+        -- Won marks off the wire (SerializeSheet WON line). The sender
+        -- already applied the log floor, so marks mirror straight onto
+        -- sheet.won with no quality check. The = guard keeps a
+        -- hand-written player line for someone named "Won" on the
+        -- player path below.
+        for i = 1, Util.ArrayCount(parts) do
+          local id, names = string.match(Util.Trim(parts[i]), "^(%d+)=(.+)$")
+          id = tonumber(id)
+          if id and names then
+            local SRImport = ZugLoot and ZugLoot.SRImport
+            for _, w in ipairs(Util.Split(names, "+")) do
+              local nm = (SRImport and SRImport.DecodeSessionName
+                and SRImport.DecodeSessionName(w)) or w
+              nm = Util.Trim(nm)
+              if nm ~= "" then
+                sheet.won[id] = sheet.won[id] or {}
+                sheet.won[id][nm] = true
+              end
+            end
+          end
+        end
+      elseif string.upper(head) == "ROLLH" then
+        -- One recorded roll session off the wire (SerializeSheet ROLLH
+        -- line / ROLLLOG delta): strict-decode + record. Decode failure
+        -- (not a genuine tail) runs the player path instead —
+        -- hand-written lines for someone named "Rollh" are never eaten.
+        if not M.ConsumeRollLine(sheet, tail) then
+          if head == "" then return nil, "line " .. lineNo .. ": missing player name" end
+          for i = 1, Util.ArrayCount(parts) do
+            local itemID, count, plus, err = M.ParseEntry(parts[i])
+            if err then return nil, "line " .. lineNo .. ": " .. err end
+            addRoller(sheet, itemID, 4, head, count, (plus > 0) and plus or nil)
+          end
         end
       else
         if head == "" then return nil, "line " .. lineNo .. ": missing player name" end

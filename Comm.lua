@@ -162,6 +162,80 @@ function M.BroadcastAward(itemID, winner)
   send("AWARD:" .. tostring(itemID) .. ":" .. tostring(winner), c)
 end
 
+-- Roll-session progress: one recorded session (what was rolled) to the
+-- raid, right when the ML's client records it at finish time.
+-- ROLLLOG:<ver>:<raidID>:<itemID>:<tail> (tail shares the ROLLH session
+-- encoding), chunked as ROLLLOG_C:<ver>:<raidID>:<itemID>:<seq>:<total>:
+-- <chunk> past CHUNK_SIZE. Won marks ride the existing AWARD message;
+-- full history rides the SHEET payload — this covers the live record.
+-- Send-side gate mirrors the sheet broadcast path (ML/leader only,
+-- never solo); receivers trust ML/leader only (CanAcceptFrom) and only
+-- apply to the live sheet of the SAME raid.
+M.rollChunkBuffers = {}
+function M.BroadcastRollSession(sheet, itemID, sess)
+  if not sheet or not sess or not itemID then return end
+  if Z.SRSecurity and Z.SRSecurity.CanBroadcast
+      and not Z.SRSecurity.CanBroadcast() then return end
+  local channel = M.Channel()
+  if not channel then return end
+  local raidID = sheet.meta and sheet.meta.raidID
+  if not raidID or raidID == "" then return end
+  local tail = Z.SRImport and Z.SRImport.EncodeSession(itemID, sess)
+  if not tail or tail == "" then return end
+  local ver = 1
+  if string.len(tail) <= M.CHUNK_SIZE then
+    send("ROLLLOG:" .. ver .. ":" .. tostring(raidID) .. ":"
+      .. tostring(itemID) .. ":" .. tail, channel)
+  else
+    local total = math.floor((string.len(tail) + M.CHUNK_SIZE - 1) / M.CHUNK_SIZE)
+    for seq = 1, total do
+      local startIdx = (seq - 1) * M.CHUNK_SIZE + 1
+      local chunk = string.sub(tail, startIdx, startIdx + M.CHUNK_SIZE - 1)
+      send("ROLLLOG_C:" .. ver .. ":" .. tostring(raidID) .. ":"
+        .. tostring(itemID) .. ":" .. seq .. ":" .. total .. ":" .. chunk, channel)
+    end
+  end
+end
+
+-- One session landed: append it to the live sheet of the same raid.
+-- Anything else (wrong raid, no sheet, untrusted sender, bad tail) is
+-- ignored — the next full SHEET sync recovers. Redelivery drops via
+-- the session signature (same bytes = same session). Unknown items
+-- stub first (EnsureUnreserved) so non-SR sessions have a card.
+-- Silent: the finish and award lines already printed; views refresh
+-- underneath.
+function M.ApplyRollSession(raidID, itemID, tail, sender)
+  if not Z.SRSecurity.CanAcceptFrom(sender) then
+    Z.Print("Ignored roll session from " .. tostring(sender) .. " (not ML/leader).")
+    return
+  end
+  local sheet = Z.DB and Z.DB.sheet
+  if not sheet or not sheet.meta
+      or tostring(sheet.meta.raidID or "") ~= tostring(raidID or "") then
+    return
+  end
+  if not Z.SRImport or not Z.SRImport.DecodeSession then return end
+  local id, sess = Z.SRImport.DecodeSession(tail)
+  if not id or not sess or id ~= tonumber(itemID) then return end
+  if not Z.SRData then return end
+  -- Redelivered session (double event frame, retried send): the same
+  -- bytes carry the same signature — drop it instead of stacking a
+  -- duplicate next to the recorded one.
+  if Z.SRData.SessionKnown and Z.SRData.SessionKnown(sheet, id, sess) then return end
+  -- Non-SR item (unreserved stub on the sender): no item row exists
+  -- here yet, so the session would land invisibly. Stub it first —
+  -- same artifact the recorder created — so raiders see the card.
+  -- Quality refines on the next full SHEET (UNSR line carries it).
+  if not (sheet.items or {})[id] and Z.SRData.EnsureUnreserved then
+    Z.SRData.EnsureUnreserved(sheet, id, nil)
+  end
+  if Z.SRData.RecordRolls then
+    Z.SRData.RecordRolls(sheet, id, sess)
+  end
+  if Z.MainWindow then Z.MainWindow.Refresh() end
+  if Z.SRView then Z.SRView.Refresh() end
+end
+
 -- Single chat router for ALL roll traffic — sim AND live share it.
 -- One policy, channel only: solo -> the ZugLoot log (local chat frame),
 -- party -> PARTY, raid -> RAID (RAID_WARNING when warn=true). No loot-
@@ -305,6 +379,45 @@ function M.OnMessage(msg, sender, channel)
   end
   if string.sub(msg, 1, 9) == "ROLL_REQ:" then
     if Z.RaiderLootUI then Z.RaiderLootUI.OnRollReq(msg, sender) end
+    return
+  end
+  if string.sub(msg, 1, 8) == "ROLLLOG:" then
+    local _ver, raidID, itemID, tail = string.match(msg, "^ROLLLOG:(%d+):([^:]+):(%d+):(.*)$")
+    if not tail then Z.Print("Bad roll session from " .. tostring(sender)) return end
+    M.ApplyRollSession(raidID, tonumber(itemID), tail, sender)
+    return
+  end
+  if string.sub(msg, 1, 10) == "ROLLLOG_C:" then
+    local _ver, raidID, itemID, seqStr, totStr, chunk =
+      string.match(msg, "^ROLLLOG_C:(%d+):([^:]+):(%d+):(%d+):(%d+):(.*)$")
+    local seq = tonumber(seqStr)
+    local total = tonumber(totStr)
+    if not (seq and total and chunk) then
+      Z.Print("Bad roll session chunk from " .. tostring(sender))
+      return
+    end
+    if not Z.SRSecurity.CanAcceptFrom(sender) then
+      Z.Print("Ignored roll session chunk from " .. tostring(sender) .. " (not ML/leader).")
+      return
+    end
+    local now = (GetTime and GetTime()) or (time and time()) or 0
+    M.rollChunkBuffers = M.rollChunkBuffers or {}
+    local key = tostring(raidID) .. "#" .. tostring(itemID)
+    local buf = M.rollChunkBuffers[key]
+    if not buf or (now - (buf.t or 0) > 15) then
+      buf = { total = total, chunks = {}, count = 0, t = now }
+      M.rollChunkBuffers[key] = buf
+    end
+    if not buf.chunks[seq] then
+      buf.chunks[seq] = chunk
+      buf.count = buf.count + 1
+    end
+    if buf.count == total then
+      local parts = {}
+      for i = 1, total do table.insert(parts, buf.chunks[i] or "") end
+      M.rollChunkBuffers[key] = nil
+      M.ApplyRollSession(raidID, tonumber(itemID), table.concat(parts, ""), sender)
+    end
     return
   end
   if string.sub(msg, 1, 6) == "AWARD:" then

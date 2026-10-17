@@ -694,8 +694,15 @@ function M.AnnounceResult(roll, res)
           Z.Print("Note: " .. tostring(roll.itemLink or roll.itemID) .. " was not on the SR sheet — added below, marked not SR'd.")
         end
       end
-      Z.SRData.RecordRolls(Z.DB.sheet, roll.itemID,
-        Z.Resolver.ToHistoryEntry(res, roll.mode, (time and time()) or 0))
+      local entry = Z.Resolver.ToHistoryEntry(res, roll.mode, (time and time()) or 0)
+      Z.SRData.RecordRolls(Z.DB.sheet, roll.itemID, entry)
+      -- The record just landed on our sheet: push the session to the
+      -- raid now (what was rolled), so raiders see the same sheet.
+      -- Won marks follow at award time via the AWARD message; full
+      -- history rides every SHEET sync. Gate + channel inside.
+      if Z.Comm and Z.Comm.BroadcastRollSession then
+        Z.Comm.BroadcastRollSession(Z.DB.sheet, roll.itemID, entry)
+      end
       if Z.MainWindow then Z.MainWindow.Refresh() end
     end
   end
