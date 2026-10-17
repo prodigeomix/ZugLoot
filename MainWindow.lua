@@ -1629,6 +1629,13 @@ function M.DebugHeaderButtons()
   return out
 end
 
+-- Setup-tab toggle buttons (headless-testable): the auto loot-method
+-- switching pair. Returns { mlOnBoss, backToGroup } (nil before first
+-- Setup render).
+function M.DebugSetupToggles()
+  local sb = M.setupBtns or {}
+  return { mlOnBoss = sb.mlOnBoss, backToGroup = sb.backToGroup }
+end
 -- Boss-threshold dropdown (Setup tab): one row per threshold
 -- (Common 1 .. Epic 4). Picking stores the preference via
 -- MasterLootUI.SetBossThreshold and relabels the button. Toggle-shut

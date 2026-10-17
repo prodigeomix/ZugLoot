@@ -3,6 +3,7 @@
 -- (In-game only; tests load pure files directly.)
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
+local frame = nil
 
 Z.DB = nil
 Z.CharDB = nil
@@ -138,6 +139,7 @@ function Z.OnEvent(event, arg1, arg2, arg3, arg4)
 end
 
 function Z.Init()
+  if not CreateFrame then return end
   frame = CreateFrame("Frame", "ZugLootFrame")
   frame:RegisterEvent("ADDON_LOADED")
   frame:RegisterEvent("CHAT_MSG_ADDON")

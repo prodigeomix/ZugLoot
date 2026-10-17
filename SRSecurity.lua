@@ -185,15 +185,15 @@ M._pendingSheetReply = nil -- leader-delayed reply handle (Timer)
 -- targeted = true for "/zl sync <name>" requests: the named player
 -- answers DIRECTLY when they hold a sheet (anyone may hold one) — no
 -- role check, no delay. Trust stays on RECEIVE (CanAcceptFrom).
-function M.ShouldAnswerSheetReq(requester, targeted)
+function M.ShouldAnswerSheetReq(requester, targeted, channel)
   if targeted then
     if M.AnySheet() == nil then return nil end
-    M.AnswerSheetReq("direct")
+    M.AnswerSheetReq("direct", channel)
     return "direct"
   end
   local role = M.SheetReqAnswer()
   if role == "ml" then
-    M.AnswerSheetReq("ml")
+    M.AnswerSheetReq("ml", channel)
   elseif role == "leader" then
     -- Delay the leader reply; cancel any earlier pending one first.
     if Z.Timer and Z.Timer.Cancel and M._pendingSheetReply then
@@ -202,10 +202,10 @@ function M.ShouldAnswerSheetReq(requester, targeted)
     if Z.Timer and Z.Timer.After then
       M._pendingSheetReply = Z.Timer.After(5, function()
         M._pendingSheetReply = nil
-        M.AnswerSheetReq("leader")
+        M.AnswerSheetReq("leader", channel)
       end)
     else
-      M.AnswerSheetReq("leader")
+      M.AnswerSheetReq("leader", channel)
     end
   end
   return role
@@ -213,13 +213,13 @@ end
 
 -- Perform the approved answer: broadcast our sheet to the group.
 -- role "direct" = named /zl sync answer (no role needed, sheet only).
-function M.AnswerSheetReq(role)
+function M.AnswerSheetReq(role, channel)
   local sheet = M.AnySheet()
   if not sheet then return false end
   if role ~= "ml" and role ~= "leader" and role ~= "direct" then return false end
   if Z.Comm and Z.Comm.BroadcastSheet then
     local raidID = sheet.meta and sheet.meta.raidID or "sheet"
-    Z.Comm.BroadcastSheet(sheet, raidID)
+    Z.Comm.BroadcastSheet(sheet, raidID, channel)
     local me = (UnitName and UnitName("player")) or "?"
     Z.Print("Sheet sent to the group by " .. tostring(me)
       .. " (" .. tostring(role) .. ").")

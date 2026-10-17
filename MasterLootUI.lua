@@ -860,6 +860,7 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
       local idx = M.MasterLootIndex(slot, winnerName)
       trace(dbgLine("MASTER") .. " idx=" .. tostring(idx)
         .. " selfTake=" .. tostring(selfTake and true or false))
+      local giveML = GiveMasterLoot or GiveMasterLootCandidate
       if not idx then
         if selfTake then
           -- Not on the candidate list (or list unreadable): fall back
@@ -867,11 +868,11 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
           -- below; a dead call un-dims via the watchdog.
           if dbg then trace(dbgLine("MASTER-FALLBACK")) end
         else
-          Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.")
+          if Z.Print then Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.") end
           return false
         end
-      elseif GiveMasterLoot then
-        local okM, errM = pcall(GiveMasterLoot, slot, idx)
+      elseif giveML then
+        local okM, errM = pcall(giveML, slot, idx)
         trace(dbgLine("MASTER-ISSUED") .. " ok=" .. tostring(okM)
           .. " err=" .. tostring(errM))
         -- Self-take handoff that the client rejects (non-ML caller,
@@ -884,7 +885,7 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
         -- Corpse open, handoff certain, but no API: never fake the award
         -- (won-mark + vanished row while the item sits on the corpse).
         -- Refuse with the row kept.
-        Z.Print("Can't award " .. tostring(winnerName) .. ": master loot unavailable.")
+        if Z.Print then Z.Print("Can't award " .. tostring(winnerName) .. ": master loot unavailable.") end
         return false
       end
       -- selfTake with no usable handoff: plain LootSlot below.
@@ -1114,10 +1115,11 @@ function M.Award(itemID, winnerName, source, invented)
   -- corpse. Live always has the APIs, so live always takes.
   if source ~= "sim" and row0 and row0.slot ~= nil
       and GetNumLootItems and GetLootSlotLink then
-    local rc = M.LootCorpseSlot(link, itemID, winnerName)
+    local rc = M.LootCorpseSlot(link, itemID, winnerName, row0.slot)
     if rc == false then return false end
   end
-  if not Z.DB.sheet then Z.DB.sheet = Z.SRData.NewSheet() end
+  if not Z.DB then Z.DB = {} end
+  if not Z.DB.sheet then Z.DB.sheet = (Z.SRData and Z.SRData.NewSheet and Z.SRData.NewSheet()) or {} end
   source = source or "raid"
   local skipWon = false
   if invented then

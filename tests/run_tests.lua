@@ -43,6 +43,11 @@ run("test_sand.lua")
 run("test_lootwindow.lua")
 run("test_threshold.lua")
 run("test_atlasloot.lua")
+run("test_network_mtu_throttle.lua")
+run("test_corpse_slot_shift.lua")
+run("test_fuzz_deserialization.lua")
+run("test_memory_churn_bounds.lua")
+run("test_global_guard.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
 -- fake 1.12 frame API to catch typos/nil-globals outside the client.
