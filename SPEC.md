@@ -120,7 +120,18 @@ Sheet = {
    ID,Item,Boss,Attendee,Class,Specialization,SR+
    18814,"Choker of the Fire Lord",Ragnaros,Pysanka,Paladin,Protection,70
    ```
+   STRICT, all-or-nothing: every data row must carry a numeric item ID +
+   non-empty attendee. ONE bad row blocks the WHOLE import with its line
+   number (e.g. `CSV line 4: missing numeric item ID (got 'Choker ...'
+   for attendee 'Pysanka')`) — never half-imports, never a silent
+   0-item sheet. Header with zero data rows below it is likewise a loud
+   error. Blank lines / `#` comments are ignored, not rows.
 5. Anything else → import error naming the first bad line (never half-imports).
+6. **Empty-content sheets never move.** A sheet with 0 items and no hard
+   reserves is refused at every boundary, live data kept: `ApplySheet`
+   (import) refuses before stamping/archiving, `BroadcastSheet` refuses
+   before sending, `ApplyReceivedSheet` ignores an empty wire, and
+   `AnySheet` treats an empty holder as sheetless (no sync answer).
 
 ### 3.2 Roll types (normative): each kind judged by itself
 

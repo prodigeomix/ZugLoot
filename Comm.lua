@@ -54,6 +54,13 @@ end
 
 function M.BroadcastSheet(sheet, raidID, targetChannel)
   if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return end
+  -- Never broadcast an empty sheet: a bare-META wire would blank every
+  -- receiver's sheet tab ("(sheet is empty)") for no gain.
+  if Z.SRData and Z.SRData.SheetIsEmpty and Z.SRData.SheetIsEmpty(sheet) then
+    Z.Print("Sheet NOT broadcast — it has no reservations (0 items, no hard reserves). "
+      .. "Fix the import first so the raid never sees an empty sheet.")
+    return
+  end
   local channel = targetChannel or M.Channel()
   if not channel then return end
   local now = (GetTime and GetTime()) or (time and time()) or 0
@@ -212,6 +219,15 @@ function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
   end
   local sheet, err = Z.SRImport.DeserializeSheet(payload)
   if not sheet then Z.Print("Sheet import failed: " .. tostring(err)) return end
+  -- Never let an empty sheet clobber the live one: when the sender's
+  -- import held nothing (thin CSV, blank paste), the wire is a bare
+  -- META line — keep our progress and say so.
+  if Z.SRData and Z.SRData.SheetIsEmpty and Z.SRData.SheetIsEmpty(sheet) then
+    Z.Print("Ignored empty sheet from " .. tostring(sender)
+      .. " (no reservations — their import likely has no numeric item IDs). "
+      .. "Live sheet kept.")
+    return
+  end
   -- Envelope (META line) carries the raid identity; the message raidID
   -- and the trusted sender fill gaps it leaves (legacy senders send no
   -- META at all). Sender always wins: we know who pushed it.

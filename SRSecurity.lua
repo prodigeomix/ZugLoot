@@ -120,8 +120,14 @@ end
 -- Do we hold a sheet worth answering a SHEET_REQ with? Any loaded sheet
 -- counts (imported or received — both passed the trust rules on the way
 -- in, so re-serving them is safe).
+-- Do we hold a sheet worth answering a SHEET_REQ with? Empty sheets
+-- (thin import, blank paste) are never shared: answering with one would
+-- blank every requester's sheet tab for no gain.
 function M.AnySheet()
-  return Z.DB and Z.DB.sheet or nil
+  local s = Z.DB and Z.DB.sheet or nil
+  if not s then return nil end
+  if Z.SRData and Z.SRData.SheetIsEmpty and Z.SRData.SheetIsEmpty(s) then return nil end
+  return s
 end
 
 -- Name of the group's master looter (nil when loot isn't master loot or

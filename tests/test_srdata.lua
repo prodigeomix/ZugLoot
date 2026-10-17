@@ -122,12 +122,19 @@ if cf then
     eq(cs.players["Akiruy"].class, "Warlock", "csv warlock class")
     -- Dispatch: CSV reaches ParseAnyImport; preamble above it is dropped.
     -- (SRImport loads in section 8 below; dispatch checked there.)
-    -- Minimum fields: rows without ID/Attendee skipped, header aliases ok.
-    local mn = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n,1002\nBbb,\n")
+    -- STRICT: any row missing its numeric ID / attendee blocks the whole
+    -- import (never half-imports). Header aliases still ok.
+    local mn = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n")
     ok(mn ~= nil, "csv min-fields header ok")
     local names = SRData.AllPlayerNames(mn)
-    eq(#names, 1, "csv min-fields skips bad rows")
-    eq(names[1], "Aaa", "csv min-fields keeps good row")
+    eq(#names, 1, "csv min-fields keeps good row")
+    eq(names[1], "Aaa", "csv min-fields keeps good name")
+    local badId, badIdErr = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n,1002\n")
+    ok(badId == nil and badIdErr ~= nil, "csv row missing attendee blocks import")
+    ok(string.find(tostring(badIdErr), "CSV line 3", 1, true) ~= nil, "csv block names the line")
+    local badNm, badNmErr = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\nBbb,\n")
+    ok(badNm == nil and badNmErr ~= nil, "csv row missing ID blocks import")
+    ok(string.find(tostring(badNmErr), "CSV line 3", 1, true) ~= nil, "csv ID block names the line")
     -- Preamble above base64 is dropped; garbage still rejected.
     local b64pre = "copy below this line:\neyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119\n"
     local pb, pberr = SRData.ParseRaidResExport(b64pre)
@@ -218,6 +225,7 @@ eq(ZugLoot.DB.sheet.meta.raidID, "R1", "refresh keeps the raid id")
 eq(ZugLoot.DB.sheet.meta.importedAt, 5000, "refresh stamped now")
 -- Different raid always applies (no stale comparison across raids).
 local other = SRData.NewSheet()
+other.items[1002] = { quality = 4, rollers = { { name = "Bbb", rolls = 1 } } }
 other.meta = { raidID = "R2", raidName = "BWL", importedAt = 100, source = "paste" }
 ok(not RI.SheetIsStale(ZugLoot.DB.sheet, other), "other raid never stale")
 local okOther = RI.ApplySheet(other, "paste", "ML")
@@ -235,5 +243,46 @@ ok(string.find(tostring(truncErr), "truncated", 1, true) ~= nil, "truncated mess
 local cutJson = "eyJhIjox" -- base64("{") + junk -> decodes, tail isn't }/]
 local cut = SRData.ParseRaidResExport(cutJson)
 ok(cut == nil, "cut JSON refused (no hang, no sheet)")
+
+-- 11. Empty-content guards (regression: a thin CSV import — header OK
+-- but every row skipped, e.g. names instead of numeric IDs — applied a
+-- 0-item sheet, broadcast it, and receivers landed on "(sheet is
+-- empty)" while printing "Sheet received").
+-- Thin CSV fails LOUD at parse, naming the real cause + line.
+local thin = "ID,Item,Attendee\nChoker of the Fire Lord,Choker,Pysanka\nBoots,Boots,Joblesspally\n"
+local thinS, thinErr = ZugLoot.SRImport.ParseAnyImport(thin)
+ok(thinS == nil and thinErr ~= nil, "thin CSV refused")
+ok(string.find(tostring(thinErr), "CSV line 2", 1, true) ~= nil, "thin CSV error names the bad line")
+ok(string.find(tostring(thinErr), "missing numeric item ID", 1, true) ~= nil, "thin CSV error names the missing ID")
+-- (not the confusing line-format fallthrough).
+ok(string.find(tostring(thinErr), "missing ';'", 1, true) == nil, "thin CSV error is not the line-format fallthrough")
+-- Good CSV still parses through the same dispatch.
+ok(SRData.HasCSVHeader(thin), "thin CSV still recognized as CSV")
+ok(not SRData.HasCSVHeader("Aaa;1001:1\n"), "line format is not CSV")
+-- SheetIsEmpty: items or hardres count as content.
+ok(SRData.SheetIsEmpty(SRData.NewSheet()), "blank sheet is empty")
+local hrOnly = SRData.NewSheet()
+hrOnly.hardres[17782] = { quality = 5 }
+ok(not SRData.SheetIsEmpty(hrOnly), "hardres-only sheet is content")
+-- ApplySheet refuses empties BEFORE archiving/stamping: live kept.
+local liveBefore = ZugLoot.DB.sheet
+local printed = {}
+ZugLoot.Print = function(m) table.insert(printed, tostring(m)) end
+local okEmpty = RI.ApplySheet(SRData.NewSheet(), "paste", "ML")
+eq(okEmpty, false, "empty apply refused")
+ok(ZugLoot.DB.sheet == liveBefore, "live sheet kept on empty import")
+ok(string.find(printed[#printed] or "", "no reservations", 1, true) ~= nil, "empty apply explains itself")
+-- Broadcast side: empty sheets never go on the wire.
+local sentWire = {}
+ZugLoot.Comm = { BroadcastSheet = function() table.insert(sentWire, true) end }
+ZugLoot.SRSecurity = { CanBroadcast = function() return true end }
+RI.ApplySheet(hrOnly, "paste", "ML") -- hardres-only applies + broadcasts
+ok(#sentWire == 1, "content sheet broadcasts")
+sentWire = {}
+local empty2 = SRData.NewSheet()
+empty2.meta = { raidID = "Rempty", importedAt = 99999 }
+RI.ApplySheet(empty2, "paste", "ML")
+ok(#sentWire == 0, "empty sheet never broadcasts")
+eq(ZugLoot.DB.sheet.meta.raidID, hrOnly.meta.raidID, "empty import kept live raid")
 
 return T

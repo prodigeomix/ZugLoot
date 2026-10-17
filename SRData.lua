@@ -23,6 +23,15 @@ function M.NewSheet()
   return { meta = { raidID = nil, importedAt = 0, importedBy = "?", source = "?" }, items = {}, hardres = {}, won = {}, rolls = {}, players = {} }
 end
 
+-- Empty-content check: no reserved items AND no hard reserves. Such a
+-- sheet carries nothing to roll — importing, broadcasting, or applying
+-- one only ever clobbers a good sheet with "(sheet is empty)".
+function M.SheetIsEmpty(sheet)
+  if not sheet then return true end
+  if Util.TableCount(sheet.hardres) > 0 then return false end
+  return Util.TableCount(sheet.items) == 0
+end
+
 -- Class fallback store: players[name] = { class = <canonical> }.
 -- Filled at import from raidres character.class / legacy role strings and
 -- used whenever the live party/raid roster does not know a name.
@@ -317,6 +326,22 @@ local function csvColMap(fields)
   return nil
 end
 
+-- Header scan shared by ParseCSVFormat and HasCSVHeader: the first
+-- non-blank, non-comment line mapping to ID+Attendee wins (preamble
+-- above it is dropped). Returns map, index (nil, nil when absent).
+local function csvFindHeader(lines)
+  local i = 1
+  while lines[i] ~= nil do
+    local t = Util.Trim(lines[i])
+    if t ~= "" and string.sub(t, 1, 1) ~= "#" then
+      local m = csvColMap(M.ParseCSVRow(lines[i]))
+      if m then return m, i end
+    end
+    i = i + 1
+  end
+  return nil, nil
+end
+
 function M.ParseCSVFormat(text)
   local lines = {}
   for line in Gfind(tostring(text or "") .. "\n", "([^\n]*)\n") do
@@ -324,51 +349,77 @@ function M.ParseCSVFormat(text)
   end
   -- Header scan: preamble (tool notes, blanks, # comments) above the
   -- header is dropped — first ID+Attendee header line wins.
-  local map, headerAt = nil, nil
-  local i = 1
-  while lines[i] ~= nil do
-    local t = Util.Trim(lines[i])
-    if t ~= "" and string.sub(t, 1, 1) ~= "#" then
-      local m = csvColMap(M.ParseCSVRow(lines[i]))
-      if m then map, headerAt = m, i break end
-    end
-    i = i + 1
-  end
+  local map, headerAt = csvFindHeader(lines)
   if not map then return nil, "no CSV header (needs ID + Attendee columns)" end
+  local i = headerAt + 1
   local nCols = Util.ArrayCount(M.ParseCSVRow(lines[headerAt]))
   local sheet = M.NewSheet()
   sheet.meta.source = "csv"
-  i = headerAt + 1
+  local nKept = 0
   while lines[i] ~= nil do
     local t = Util.Trim(lines[i])
     if t ~= "" and string.sub(t, 1, 1) ~= "#" then
       local f = M.ParseCSVRow(lines[i])
       while Util.ArrayCount(f) < nCols do table.insert(f, "") end
+      local idRaw = Util.Trim(f[map.id] or "")
       local id = Util.ItemID(f[map.id])
       local nm = Util.Trim(f[map.att] or "")
-      -- Rows without the minimum fields aren't reservations: skip
-      -- (mirrors TransformRaidRes, which skips entries lacking name/id).
-      if id and nm ~= "" then
-        local plusStr = ""
-        if map.plus then plusStr = f[map.plus] or "" end
-        local plus = tonumber(Util.Trim(plusStr))
-        local bonus = (plus and plus > 0) and plus or nil
-        addRoller(sheet, id, 4, nm, 1, bonus)
-        local cls = ""
-        if map.class then cls = Util.Trim(f[map.class] or "") end
-        if cls ~= "" then
-          local spec = ""
-          if map.spec then spec = Util.Trim(f[map.spec] or "") end
-          -- No spaces: "Paladin"+"Protection" -> "PaladinProtection"
-          -- so RoleOf/SpecName see the spec suffix.
-          local raw = string.gsub(cls, "%s+", "") .. string.gsub(spec, "%s+", "")
-          M.SetPlayerClass(sheet, nm, raw)
+      -- STRICT: every data row must carry a numeric item ID + attendee
+      -- name. A single row missing its ID blocks the WHOLE import (never
+      -- half-imports): a partial sheet would silently drop reservations
+      -- and broadcast gaps to the raid. Blank lines / # comments above
+      -- are ignored; anything else malformed fails with its line number.
+      if not id or nm == "" then
+        if not id and nm == "" then
+          return nil, "CSV line " .. i .. ": missing numeric item ID + attendee name — "
+            .. "every row needs both; import blocked, nothing imported"
+        elseif not id then
+          return nil, "CSV line " .. i .. ": missing numeric item ID (got '" .. idRaw .. "' "
+            .. "for attendee '" .. nm .. "') — is the numeric ID column in the export? "
+            .. "Import blocked, nothing imported"
+        else
+          return nil, "CSV line " .. i .. ": missing attendee name (item " .. tostring(id) .. ") — "
+            .. "every row needs both; import blocked, nothing imported"
         end
+      end
+      nKept = nKept + 1
+      local plusStr = ""
+      if map.plus then plusStr = f[map.plus] or "" end
+      local plus = tonumber(Util.Trim(plusStr))
+      local bonus = (plus and plus > 0) and plus or nil
+      addRoller(sheet, id, 4, nm, 1, bonus)
+      local cls = ""
+      if map.class then cls = Util.Trim(f[map.class] or "") end
+      if cls ~= "" then
+        local spec = ""
+        if map.spec then spec = Util.Trim(f[map.spec] or "") end
+        -- No spaces: "Paladin"+"Protection" -> "PaladinProtection"
+        -- so RoleOf/SpecName see the spec suffix.
+        local raw = string.gsub(cls, "%s+", "") .. string.gsub(spec, "%s+", "")
+        M.SetPlayerClass(sheet, nm, raw)
       end
     end
     i = i + 1
   end
+  -- Header matched but no data rows at all: fail LOUD, never a silent
+  -- empty sheet (which would broadcast as "(sheet is empty)").
+  if nKept == 0 then
+    return nil, "CSV header found but no reservation rows below it — "
+      .. "nothing to import (is the export empty?)"
+  end
   return sheet, nil
+end
+
+-- True when the text carries a recognizable CSV header (ID+Attendee).
+-- ParseAnyImport uses it to report a header-matched-but-useless CSV as
+-- a CSV problem instead of a confusing line-format error.
+function M.HasCSVHeader(text)
+  local lines = {}
+  for line in Gfind(tostring(text or "") .. "\n", "([^\n]*)\n") do
+    table.insert(lines, line)
+  end
+  local map = csvFindHeader(lines)
+  return map ~= nil
 end
 
 -- raidres.top / fly.dev / softres.it export: base64(json). Accepts raw json too.

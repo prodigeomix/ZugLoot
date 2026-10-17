@@ -145,7 +145,7 @@ GetLootMaster = function() return "MasterLou" end
 raidMembers = 3
 raidRoster = { { "MasterLou", 0 }, { "SoloPlayer", 0 }, { "LeadGal", 2 } }
 partyMembers = 0
-ZugLoot.DB.sheet = { items = {}, meta = {} }
+ZugLoot.DB.sheet = { items = { [1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } } }, meta = {} }
 -- Plain raider WITH a sheet still never answers.
 eq(Sec.SheetReqAnswer(), nil, "raider never answers sheetreq")
 -- Trust: raider sheet is refused even if one arrived.
@@ -278,7 +278,7 @@ raidRoster = { { "MasterLou", 0 }, { "SoloPlayer", 0 }, { "LeadGal", 2 } }
 partyMembers = 0
 GetLootMethod = function() return "master" end
 GetLootMaster = function() return "MasterLou" end
-ZugLoot.DB.sheet = { items = {}, meta = {} }
+ZugLoot.DB.sheet = { items = { [1001] = { quality = 4, rollers = { { name = "Aaa", rolls = 1 } } } }, meta = {} }
 -- Link-strip: color-coded [Name] links reduce to bare names.
 eq(Comm.StripPlayerLink("|cFFF58CBASoloPlayer|r"), "SoloPlayer", "color link stripped")
 eq(Comm.StripPlayerLink("|cFFF58CBA|Hplayer:SoloPlayer|h[SoloPlayer]|h|r"), "SoloPlayer", "player link stripped")
@@ -306,6 +306,40 @@ ZugLoot.DB.sheet = nil
 sent = {}
 Comm.OnMessage("SHEET_REQ:LeadGal", "SoloPlayer")
 eq(#sent, 0, "sheetless named player stays silent")
+UnitName = oldName
+
+-- 10. Empty-content sync guards (regression: a sender whose import was
+-- a thin CSV broadcast a bare-META wire; receivers printed "Sheet
+-- received" and landed on "(sheet is empty)").
+-- Restore the real modules (section 9 shimmed SRImport) + print tap.
+dofile("SRData.lua")
+dofile("SRImport.lua")
+local RI2 = ZugLoot.SRImport
+local seen = {}
+ZugLoot.Print = function(m) table.insert(seen, tostring(m)) end
+ZugLoot.DB.sheet = nil
+ZugLoot.RaidArchive = { ArchiveActive = function() end, SyncActive = function() end }
+-- Live content sheet lands normally first.
+raidMembers = 3
+raidRoster = { { "SoloPlayer", 0 }, { "LeadGal", 2 }, { "Other", 0 } }
+partyMembers = 0
+GetLootMethod = function() return "master" end
+GetLootMaster = function() return "NobodyHere" end
+UnitName = function() return "SoloPlayer" end
+Comm.OnMessage("SHEET:1:LeadGal-1234:" .. wirePayload, "LeadGal")
+ok(ZugLoot.DB.sheet ~= nil, "live content sync lands")
+-- An EMPTY wire (bare META, thin-CSV sender) is refused: live kept.
+local emptySheet = ZugLoot.SRData.NewSheet()
+emptySheet.meta = { raidID = "Rempty", importedBy = "LeadGal", importedAt = 99999, source = "paste" }
+Comm.OnMessage("SHEET:1:Rempty:" .. RI2.SerializeSheet(emptySheet), "LeadGal")
+eq(ZugLoot.DB.sheet.meta.raidID, "LeadGal-1234", "empty sync keeps live raid")
+ok(string.find(seen[#seen] or "", "empty sheet", 1, true) ~= nil, "empty sync explains itself")
+-- And we never ANSWER a request with an empty sheet either.
+ZugLoot.DB.sheet = ZugLoot.SRData.NewSheet()
+sent = {}
+UnitName = function() return "LeadGal" end
+Comm.OnMessage("SHEET_REQ:LeadGal", "SoloPlayer")
+eq(#sent, 0, "empty holder stays silent on targeted sync")
 UnitName = oldName
 
 return T

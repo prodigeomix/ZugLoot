@@ -212,6 +212,19 @@ function M.SheetIsStale(cur, incoming)
 end
 
 function M.ApplySheet(sheet, source, importer)
+  if not sheet then
+    Z.Print("Import failed: no sheet data.")
+    return false
+  end
+  -- Refuse empty imports BEFORE stamping/archiving: a thin CSV (header
+  -- matched, every row skipped) or blank paste must never clobber the
+  -- live sheet — or broadcast as "(sheet is empty)" to the raid.
+  if Z.SRData and Z.SRData.SheetIsEmpty and Z.SRData.SheetIsEmpty(sheet) then
+    Z.Print("Import failed: sheet has no reservations (0 items, no hard reserves) — "
+      .. "check the export has a numeric item ID column and non-empty attendee names. "
+      .. "Live sheet kept.")
+    return false
+  end
   sheet.meta = sheet.meta or {}
   -- Revision stamp: a known export time (raidres metadata) wins; line
   -- format and timestamp-less exports stamp NOW. Either way the stale
@@ -258,6 +271,12 @@ function M.ParseAnyImport(text)
     sheet, err = Z.SRData.ParseCSVFormat(text)
   end
   if not sheet then
+    -- A CSV whose header matched but whose rows were all unusable must
+    -- report the CSV problem — NOT fall through to a confusing
+    -- line-format error like "line 1: missing ';'".
+    if Z.SRData.HasCSVHeader and Z.SRData.HasCSVHeader(text) then
+      return nil, err
+    end
     sheet, err = Z.SRData.ParseLineFormat(text)
   end
   return sheet, err
