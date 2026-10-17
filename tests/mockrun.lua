@@ -484,15 +484,23 @@ local impF2 = Z.SRImport.DebugImportFrame();
 assert((impF2.flevel or 0) > (Z.MainWindow.frame and Z.MainWindow.frame:GetFrameLevel() or 5),
   "import re-pinned after main rebuild, got: " .. tostring(impF2 and impF2.flevel));
 print("import sheet above main window OK");
--- Compact sheet box: fixed ~10-line height, full dialog width, with a
--- border (standard Blizzard input-box look, never a bare white slab).
--- Clicking the box focuses it for Ctrl+V; opening the dialog focuses it.
+-- Static sheet box: fixed width + height, bordered like a standard
+-- Blizzard input. Neither the box nor the dialog resizes; long pastes
+-- scroll inside. Clicking the box focuses it for Ctrl+V; opening the
+-- dialog focuses it.
 local impBox = Z.SRImport.DebugImportBox();
 assert(impBox ~= nil and impBox.GetText, "import box tracked");
-assert(impBox.h == Z.SRImport.IMPORT_BOX_H, "box is ~10 lines, got: " .. tostring(impBox.h));
+assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 12, "box width static, got: " .. tostring(impBox.w));
+assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 8, "box height static, got: " .. tostring(impBox.h));
 local impScroll = Z.SRImport.DebugImportScroll();
 assert(impScroll ~= nil, "import scroll tracked");
-assert(impScroll.h == Z.SRImport.IMPORT_BOX_H, "scroll clips to the box, got: " .. tostring(impScroll.h));
+assert(impScroll.w == Z.SRImport.IMPORT_BOX_W, "scroll width static, got: " .. tostring(impScroll.w));
+assert(impScroll.h == Z.SRImport.IMPORT_BOX_H, "scroll height static, got: " .. tostring(impScroll.h));
+-- No expand path: the box/scroll carry no BOTTOMRIGHT anchor and no
+-- resize grip may stretch them.
+for _, p in ipairs(impScroll.points or {}) do
+  assert(p[1] ~= "BOTTOMRIGHT", "scroll must not stretch-anchor");
+end
 assert(impScroll:GetScript("OnMouseDown"), "box click-to-focus wired");
 impScroll:GetScript("OnMouseDown")();
 assert(impBox.focused == true, "click focuses the box");
