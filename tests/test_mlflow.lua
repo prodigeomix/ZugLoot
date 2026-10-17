@@ -99,7 +99,6 @@ local function resetHarness(rollTime)
   Sim.pending = {}
   Sim.running = false
   Sim.raid = nil
-  Sim.rehearseRun = false
   ML.roll = nil
   ML.lootOpen = false
   ML.lootKey = nil

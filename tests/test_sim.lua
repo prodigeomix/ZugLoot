@@ -1,8 +1,8 @@
 -- tests/test_sim.lua
--- Sim + rehearsal are ONLY a way to test master looting: they open the
--- SAME roll window through the SAME MasterLootUI roll, with fake rolls
--- landing instantly (no timers, no scheduling). One roll at a time; the
--- window owns everything; closing it ends the roll.
+-- Sim is ONLY a way to test master looting: it opens the SAME roll
+-- window through the SAME MasterLootUI roll, with fake rolls landing
+-- instantly (no timers, no scheduling). One roll at a time; the window
+-- owns everything; closing it ends the roll.
 local T = { pass = 0, fail = 0, errors = {} }
 
 local function eq(a, b, msg)
@@ -99,7 +99,6 @@ local function resetHarness(rollTime)
   Sim.pending = {}
   Sim.running = false
   Sim.raid = nil
-  Sim.rehearseRun = false
   Sim.FakeCount = 2
   ML.roll = nil
   LW.Clear()
@@ -271,37 +270,7 @@ eq(LW.detail.menu.winners[1].name, "Aaa", "re-roll winner")
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "re-roll awards")
 
--- 7. Rehearsal: invented names roll, award fences them off the sheet,
--- corpse take is real.
-resetHarness()
-ZugLoot.DB.rehearse = true
-grouping = "solo"
-LW.SetItems({ { itemID = 1001, link = "item:1001", quality = 4 } }, "loot")
-local nq = Sim.StartRehearsal()
-ok(nq == 1, "rehearsal queues the corpse row")
-ok(Sim.pending[1].rehearse, "queued entry is rehearsal")
-local roster = Sim.pending[1].roster
-ok(roster ~= nil and #roster > 0, "invented roster attached")
-ok(LW.doAction(1001, "roll"), "rolling", "rehearsal rolls")
-eq(ML.roll.mode, "SIM", "rehearsal shares the live path")
-ok(ML.roll.invented == roster, "roll carries the invented roster")
-ok(#ML.roll.rolls > 0, "invented rolls landed instantly")
-eq(LW.doAction(1001, "finish"), "finished", "rehearsal finishes")
-local fakeWinner = LW.detail.menu.winners[1].name
-ML.AwardChosen({ name = fakeWinner, via = "winner" }, 1001)
--- Real people keep real marks; invented names never touch the sheet.
-local fakeWon = SRData.HasWon(ZugLoot.DB.sheet, 1001, fakeWinner)
-local isInvented = false
-for i = 1, #roster do if roster[i] == fakeWinner then isInvented = true break end end
-if isInvented then
-  ok(not fakeWon, "invented winner fenced off the sheet")
-else
-  ok(fakeWon, "real winner won-marks")
-end
-ZugLoot.DB.rehearse = false
-Sim.Stop()
-
--- 8. SimStop: queue dropped, open roll ended, windows closed.
+-- 7. SimStop: queue dropped, open roll ended, windows closed.
 resetHarness()
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
@@ -313,7 +282,7 @@ ok(#Sim.pending == 0, "stop drops the queue")
 ok(LW.detail == nil, "stop closes the window")
 ok(ZugLoot.Timer.Pending() == 0, "stop disarms the clock")
 
--- 9. History: finished rolls record like live ones.
+-- 8. History: finished rolls record like live ones.
 resetHarness()
 math.random = rigged({ 90, 80 })
 Sim.SimItem("1001")
@@ -325,7 +294,7 @@ eq(hist[1].winners[1], "Aaa", "history names the winner")
 eq(hist[1].mode, "SIM", "history mode tagged")
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 
--- 10. Ignored-by-mistake sim item stays operable: ignoring drops the
+-- 9. Ignored-by-mistake sim item stays operable: ignoring drops the
 -- queue entry but the row stays listed; Roll re-queues fresh fakes and
 -- rolls (no "not in the test queue" dead end), clearing the mark.
 resetHarness()
@@ -359,7 +328,7 @@ ok(not Sim.RequestRoll(1001), "awarded-away row refuses")
 ok(string.find(printed[#printed] or "", "not in the test queue", 1, true) ~= nil,
   "gone row keeps the honest error")
 
--- 11. Ignored sim row survives OTHER items' awards (live parity):
+-- 10. Ignored sim row survives OTHER items' awards (live parity):
 -- ignore A, roll + award B, A stays listed and ignored — then A
 -- still rolls on demand.
 resetHarness()

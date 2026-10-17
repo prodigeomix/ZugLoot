@@ -73,7 +73,6 @@ local function reset()
   Sim.pending = {}
   Sim.running = false
   Sim.raid = nil
-  Sim.rehearseRun = false
   Sim.FakeCount = 2
   ML.roll = nil
   ML.lastRound = nil
@@ -115,8 +114,7 @@ local function rollLines(lines)
         and not string.find(l, "^SIM done", 1)
         and not string.find(l, "^SIM raid", 1)
         and not string.find(l, "^SIM boss", 1)
-        and not string.find(l, "^Loot window open", 1)
-        and not string.find(l, "^Rehearsal", 1) then
+        and not string.find(l, "^Loot window open", 1) then
       table.insert(out, l)
     end
   end

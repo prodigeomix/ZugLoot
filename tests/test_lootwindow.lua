@@ -580,7 +580,7 @@ LW.doAction(1001, "finish")
 LW.doAction(1001, "award-name", "Aaa")
 ok(LW.Find(1001) == nil and LW.detail == nil, "awarded item fully gone")
 
--- 9. Starter that lands rolls mid-start (sim/rehearsal fakes feed
+-- 9. Starter that lands rolls mid-start (sim fakes feed
 -- AddRoll -> SyncRoll BEFORE doAction's post-start wipe): the window
 -- must mirror the live rolls, never strand on "waiting for rolls..."
 -- while the winner resolves fine (the reported visual-only bug).

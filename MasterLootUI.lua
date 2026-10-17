@@ -7,9 +7,8 @@ Z.MasterLootUI = M
 
 -- THE roll. Exactly one exists at a time, and only while the ML roll
 -- window for it is OPEN: { itemID, itemLink, mode, rolls={} }.
--- mode: "SR" (live master loot) | "RAIDROLL" | "SIM" (test rolls: sim +
--- rehearsal share the live path, flagged silent so other clients never
--- see them).
+-- mode: "SR" (live master loot) | "RAIDROLL" | "SIM" (test rolls share
+-- the live path, flagged silent so other clients never see them).
 -- Any roll -- fake or real -- lands here while it is set. Closing the
 -- roll window ends the roll: every path that closes/awards/finishes the
 -- window (close, award, timeout) clears M.roll first, so a dead
@@ -19,7 +18,7 @@ M.roll = nil -- THE roll (or nil): { itemID, itemLink, mode, rolls, silent }
 M.lastRound = nil -- last FINISHED round stamp (see FinishRoll)
 
 -- The last FINISHED round, stamped by FinishRoll before the roll clears:
--- { itemID, itemLink, mode, silent, invented, roster, n }. Lets the award
+-- { itemID, itemLink, mode, silent, roster, n }. Lets the award
 -- window "Continue rolling": reopen intake on the same item with the
 -- landed rolls kept. Item-checked on use, so a stale stamp never leaks
 -- across items.
@@ -33,7 +32,7 @@ end
 
 -- Start the one roll. Refuses when a roll is already open (finish,
 -- award, or close it first). silent=true skips the addon-message
--- broadcast (sim/rehearse must not pop other clients' roller windows).
+-- broadcast (sim must not pop other clients' roller windows).
 function M.BeginRoll(itemID, itemLink, mode, silent)
   if M.roll then return nil end
   local roll = { itemID = itemID, itemLink = itemLink, mode = mode,
@@ -318,7 +317,7 @@ end
 -- Continue rolling a FINISHED round: reopen intake on the same window
 -- with the landed rolls kept (unlike "Roll again", which starts fresh).
 -- Only from the award phase: needs the finish stamp (same item) and no
--- live roll. Carries mode/silent/invented/roster over; SIM rounds feed
+-- live roll. Carries mode/silent/roster over; SIM rounds feed
 -- no auto-fakes (the queue entry was consumed at start — the ML collects
 -- manual /rolls from here). Refuses cross-item, mid-roll, and stamps
 -- gone (awarded/closed/cancelled). Returns the reopened roll or nil.
@@ -347,7 +346,6 @@ function M.ContinueRoll(itemID)
   local roll = M.BeginRoll(itemID, stamp.itemLink or ("item:" .. tostring(itemID)),
     stamp.mode or "SR", stamp.silent)
   if not roll then return nil end
-  if stamp.invented then roll.invented = stamp.invented end
   if stamp.roster then roll.roster = stamp.roster end
   if stamp.n then roll.n = stamp.n end
   -- Landed rolls, kept: live truth in the intake's own shape
@@ -448,7 +446,7 @@ end
 -- a re-roll round. The roll ends here either way for intake purposes:
 -- FinishRoll clears M.roll FIRST so no late roll can land mid-resolve;
 -- the window keeps the landed rolls for the award. The finished round
--- is stamped on M.lastRound (mode/silent/invented/roster carried over)
+-- is stamped on M.lastRound (mode/silent/roster carried over)
 -- so "Continue rolling" can reopen intake on the same window with
 -- the landed rolls kept. Returns "tie" (still
 -- open for re-rolls) or "awarded"/"finished".
@@ -457,7 +455,7 @@ function M.FinishRoll(itemID)
   if not roll then Z.Print("No active roll.") return "closed" end
   if itemID and roll.itemID ~= itemID then return "closed" end
   M.lastRound = { itemID = roll.itemID, itemLink = roll.itemLink,
-    mode = roll.mode, silent = roll.silent, invented = roll.invented,
+    mode = roll.mode, silent = roll.silent,
     roster = roll.roster, n = roll.n }
   M.EndRoll()
   local sheet = Z.DB and Z.DB.sheet
@@ -488,7 +486,7 @@ function M.FinishRoll(itemID)
     local nm = winners[1].name
     local row = Z.LootWindow and Z.LootWindow.Find(roll.itemID) or nil
     local source = (row and row.source == "sim") and "sim" or "raid"
-    local ok = M.Award(roll.itemID, nm, source, M.AwardInvented(roll.itemID))
+    local ok = M.Award(roll.itemID, nm, source)
     if ok then return "awarded " .. tostring(nm) end
     -- Handoff failed (non-candidate, walked away, dead call): the row
     -- and window stay up with the winner on it for a manual retry.
@@ -658,17 +656,13 @@ function M.AnnounceResult(roll, res)
     end
   end
   -- Persist the roll into per-item roll history. Same shape the sim
-  -- writes (Resolver.ToHistoryEntry). Rehearsal rolls skip this
-  -- entirely: invented rolls must never enter the real sheet's history
-  -- (or plant unreserved stubs on it). Below rare (known quality < 3)
+  -- writes (Resolver.ToHistoryEntry). Below rare (known quality < 3)
   -- logs nothing at all — no stub, no history: such items never enter
   -- the sheet. Unknown quality proceeds (unclassifiable, no data loss).
   -- Quality 0 counts as unknown: poor items are always free rows and can
   -- never roll, so 0 at finish time means "no data" (sim rows default
   -- to it), not "grey".
-  if roll.invented then
-    if Z.MainWindow then Z.MainWindow.Refresh() end
-  elseif Z.DB and Z.DB.sheet and Z.SRData.RecordRolls then
+  if Z.DB and Z.DB.sheet and Z.SRData.RecordRolls then
     local q = nil
     if GetItemInfo then
       local _, _, qq = GetItemInfo(tonumber(roll.itemID))
@@ -1220,8 +1214,7 @@ end
 -- leaves the list and the window closes. Awarding ends any open roll
 -- for the item FIRST (EndRoll), so deciding off the ... menu can never
 -- leave a roll collecting behind the award.
--- invented (rehearsal): fake roller names that must never hit the sheet.
-function M.Award(itemID, winnerName, source, invented)
+function M.Award(itemID, winnerName, source)
   if not M.RequireML() then return end
   if not itemID or not winnerName or winnerName == "" then
     Z.Print("Pick a recipient first.")
@@ -1264,28 +1257,20 @@ function M.Award(itemID, winnerName, source, invented)
   if not Z.DB then Z.DB = {} end
   if not Z.DB.sheet then Z.DB.sheet = (Z.SRData and Z.SRData.NewSheet and Z.SRData.NewSheet()) or {} end
   source = source or "raid"
-  local skipWon = false
-  if invented then
-    for i = 1, Z.Util.ArrayCount(invented) do
-      if invented[i] == winnerName then skipWon = true break end
-    end
+  -- Sheet log floor: a known below-rare award still loots, broadcasts,
+  -- and clears the row — it just leaves no won mark behind.
+  local wq = nil
+  if row0 then wq = tonumber(row0.quality) end
+  if wq == nil and GetItemInfo then
+    local _, _, qq = GetItemInfo(tonumber(itemID))
+    wq = qq
   end
-  if not skipWon then
-    -- Sheet log floor: a known below-rare award still loots, broadcasts,
-    -- and clears the row — it just leaves no won mark behind.
-    local wq = nil
-    if row0 then wq = tonumber(row0.quality) end
-    if wq == nil and GetItemInfo then
-      local _, _, qq = GetItemInfo(tonumber(itemID))
-      wq = qq
-    end
-    if wq == nil and Z.DB.sheet.items then
-      local it = Z.DB.sheet.items[itemID]
-      if it then wq = tonumber(it.quality) end
-    end
-    if wq == 0 then wq = nil end -- list default, never a rolled quality
-    Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName, wq)
+  if wq == nil and Z.DB.sheet.items then
+    local it = Z.DB.sheet.items[itemID]
+    if it then wq = tonumber(it.quality) end
   end
+  if wq == 0 then wq = nil end -- list default, never a rolled quality
+  Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName, wq)
   if Z.Comm then Z.Comm.BroadcastAward(itemID, winnerName) end
   if Z.DropLog then Z.DropLog.Add(itemID, link, source, "award", winnerName) end
   -- Award line: ONE format for sim and live ("Name wins Item."). The
@@ -1301,12 +1286,6 @@ function M.Award(itemID, winnerName, source, invented)
   M.MaybeGroupAfterBoss(source)
   -- Test queue bookkeeping: an awarded sim row must not stay rollable.
   if Z.Sim then
-    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
-      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
-          and Z.Sim.afterRehearsal then
-        Z.Sim.afterRehearsal()
-      end
-    end
     if source == "sim" then
       if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
       if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
@@ -1519,14 +1498,7 @@ function M.Ignore(itemID, source)
   -- Queue bookkeeping: an ignored sim row must not stay rollable,
   -- so its queue entry drops (the row itself stays listed, ignored).
   if Z.Sim then
-    -- Plain sim entries never rehearse: just drop the queue entry.
     if Z.Sim.DropSim then Z.Sim.DropSim(itemID) end
-    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
-      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
-          and Z.Sim.afterRehearsal then
-        Z.Sim.afterRehearsal()
-      end
-    end
     if source == "sim" then
       if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
     end
@@ -1654,12 +1626,6 @@ function M.SandDistribute(itemID, source)
   M.MaybeGroupAfterBoss(source)
   -- Queue bookkeeping, same as the award path.
   if Z.Sim then
-    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
-      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
-          and Z.Sim.afterRehearsal then
-        Z.Sim.afterRehearsal()
-      end
-    end
     if source == "sim" then
       if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
       if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
@@ -1717,19 +1683,8 @@ function M.SandCommand(argText)
   return false
 end
 
--- Old names, same single award path above. invented resolves off the
--- open roll (rolled rehearsal) or the rehearsal queue (pre-roll award),
--- so fake names never hit the sheet either way.
-function M.AwardInvented(itemID)
-  -- The window owns it: stamped at roll open, survives the finish.
-  local d = Z.LootWindow and Z.LootWindow.detail
-  if d and d.itemID == itemID and d.invented then return d.invented end
-  if M.roll and M.roll.itemID == itemID then return M.roll.invented end
-  if Z.Sim and Z.Sim.InventedFor then return Z.Sim.InventedFor(itemID) end
-  return nil
-end
 function M.AwardDirect(itemID, winnerName, source)
-  return M.Award(itemID, winnerName, source, M.AwardInvented(itemID))
+  return M.Award(itemID, winnerName, source)
 end
 function M.AwardChosen(choice, itemID, source)
   local nm = choice and choice.name
@@ -1742,7 +1697,7 @@ function M.AwardChosen(choice, itemID, source)
     local row = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
     source = (row and row.source == "sim") and "sim" or "raid"
   end
-  return M.Award(itemID, nm, source, M.AwardInvented(itemID))
+  return M.Award(itemID, nm, source)
 end
 -- Award context reads off the OPEN window, not stored state. Item = the
 -- open detail's item (fallback: explicit id).
@@ -2218,12 +2173,6 @@ function M.OnLootOpened()
     Z.LootWindow.Show("Boss loot")
   end
   Z.Print("Loot window open — click a row, then Award / ... / Close.")
-  -- Solo rehearsal takeover: queue every non-coin row for the invented-
-  -- roller pipeline and auto-play the head. No-ops unless the flag is on
-  -- (StartRehearsal guards solo/idle/rows/sheet-module itself).
-  if Z.Sim and Z.Sim.StartRehearsal then
-    pcall(Z.Sim.StartRehearsal)
-  end
 end
 
 function M.OnEvent(event, a1, _a2)

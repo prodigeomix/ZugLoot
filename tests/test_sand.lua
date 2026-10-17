@@ -102,7 +102,6 @@ local function resetHarness()
   Sim.pending = {}
   Sim.running = false
   Sim.raid = nil
-  Sim.rehearseRun = false
   ML.roll = nil
   ML.lastRound = nil
   ML.autoML = false

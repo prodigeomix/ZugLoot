@@ -31,7 +31,7 @@ No dependencies. Interface 11200.
   auto-awards: on completion the award menu offers the kind winners (SR,
   MS, OS, TMOG) and a class-sorted roster — pick with `/zl award <name>`.
   `/zl sim <itemlink>` / `/zl simboss <boss>` / `/zl simraid <raid>`
-  rehearse against the loaded sheet (sheet required): full live replay
+  roll against the loaded sheet (sheet required): full live replay
   with timers, both windows, the shared loot window (simboss/simraid queue
   boss drops + trash batches; you roll each), the award menu, and
   group-routed chat (raid→RAID, party→PARTY, solo→local); results written

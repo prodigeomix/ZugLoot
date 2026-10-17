@@ -328,18 +328,16 @@ end
 M.SIM_ROLLERS_MIN = 3
 M.SIM_ROLLERS_MAX = 7
 
--- THE fake-roll generator: sim AND rehearsal share this (one code path).
--- Every roll is math.random(1-100) for the number; the KIND (MS/OS/TMOG)
--- is drawn at random per roller. SR holders roll SR (their reserve),
--- everyone else rolls a random kind — same as a live mixed roll.
--- Roster: SR holders first, then the rest of the sheet roster; invented
--- names (rehearsal) arrive as an opts.roster override. Off-sheet items
--- (no holders) roll the whole roster with random kinds.
+-- THE fake-roll generator for sims. Every roll is math.random(1-100)
+-- for the number; the KIND (MS/OS/TMOG) is drawn at random per roller.
+-- SR holders roll SR (their reserve), everyone else rolls a random
+-- kind — same as a live mixed roll. Roster: SR holders first, then
+-- the rest of the sheet roster. Off-sheet items (no holders) roll the
+-- whole roster with random kinds.
 -- Group size: 3-7 total (opts.count pins it for tests).
 -- rng: function(lo,hi) default math.random. Returns rolls list.
 -- opts.tmog = {names}: those rollers roll TMOG instead of their draw
 --   (TMOG demos: the player still rolls, just a different die).
--- opts.roster = {names}: use instead of the sheet roster (rehearsal).
 -- opts.count = exact roller total (tests pin the size deterministically).
 -- opts.srOnly = holders roll SR, extras roll MS only (legacy sim shape;
 --   prefer the random-kind default for new callers).
@@ -353,32 +351,24 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
   local function rollFor(kind)
     return rng(1, M.TypeCap(kind))
   end
-  -- Roster: explicit override (rehearsal invented names) else sheet.
+  -- Roster comes off the sheet.
   local players = {}
-  if type(opts.roster) == "table" then
-    for i = 1, count(opts.roster) do
-      if opts.roster[i] and opts.roster[i] ~= "" then
-        table.insert(players, opts.roster[i])
-      end
-    end
-  else
-    local SRD = ZugLoot.SRData
-    if SRD and SRD.AllPlayerNames then
-      players = SRD.AllPlayerNames(sheetLike) or {}
-    end
-    if count(players) == 0 and sheetLike and sheetLike.items then
-      local seen = {}
-      for _, item in pairs(sheetLike.items) do
-        local rr = (item or {}).rollers or {}
-        local j = 1
-        while rr[j] ~= nil do
-          local nm = rr[j].name
-          if nm and nm ~= "" and not seen[nm] then
-            seen[nm] = true
-            table.insert(players, nm)
-          end
-          j = j + 1
+  local SRD = ZugLoot.SRData
+  if SRD and SRD.AllPlayerNames then
+    players = SRD.AllPlayerNames(sheetLike) or {}
+  end
+  if count(players) == 0 and sheetLike and sheetLike.items then
+    local seen = {}
+    for _, item in pairs(sheetLike.items) do
+      local rr = (item or {}).rollers or {}
+      local j = 1
+      while rr[j] ~= nil do
+        local nm = rr[j].name
+        if nm and nm ~= "" and not seen[nm] then
+          seen[nm] = true
+          table.insert(players, nm)
         end
+        j = j + 1
       end
     end
   end

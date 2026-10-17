@@ -1411,23 +1411,6 @@ function M.RenderSetup()
   end)
   Tip(b6, "Loot frame", "Which window handles corpse loot: ZugLoot or Blizzard's.",
     "Auto-switches to Blizzard if ZugLoot clicks stop reaching the server.")
-  -- Solo rehearsal toggle (same as /zl rehearse): every corpse item gets
-  -- a roll window with invented rollers, then a real loot-through award.
-  local b7 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
-  b7:SetWidth(150) b7:SetHeight(24)
-  b7:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -116)
-  local function rehLabel()
-    if Z.DB and Z.DB.rehearse then return "Rehearse: ON" end
-    return "Rehearse: OFF"
-  end
-  b7:SetText(rehLabel())
-  b7:SetScript("OnClick", function()
-    if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(nil) end
-    b7:SetText(rehLabel())
-    M.Refresh()
-  end)
-  Tip(b7, "Rehearse", "Solo master-loot practice: corpse items roll with invented raiders.",
-    "Solo only. Awards really loot the corpse.")
   -- Auto loot-method switching (party-leader boss flow): flip to master
   -- loot when the leader selects a boss, flip back to group loot once
   -- the boss is fully looted. Two independent toggles, off by default.
@@ -1482,7 +1465,7 @@ function M.RenderSetup()
   -- + local preview). Same gate the window enforces at open.
   local b11 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b11:SetWidth(150) b11:SetHeight(24)
-  b11:SetPoint("LEFT", b7, "RIGHT", 8, 0)
+  b11:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -116)
   local function rfLabel()
     if Z.DB and Z.DB.raiderFrame == "all" then return "Roll window: ALL" end
     return "Roll window: ML"

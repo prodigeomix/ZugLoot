@@ -16,7 +16,7 @@ end
 -- Multi-line /zl help: grouped sections, one line per command with a
 -- real description. Headless-testable (returns the lines too).
 -- Slim command set: windows do the rest via buttons/menus. Kept:
--- sheet, import, loadfile, sheetreq, sync, simboss, simraid, simstop, rehearse.
+-- sheet, import, loadfile, sheetreq, sync, simboss, simraid, simstop.
 function Z.HelpLines()
   return {
     "|cFFFFD700ZugLoot v" .. tostring(Z.VERSION or "?") .. " — commands:|r",
@@ -32,7 +32,6 @@ function Z.HelpLines()
     "    simraid <raid> ... condensed full raid: one boss at a time (+ trash), you roll each",
     "    simstop .......... stop the sim, reset everything",
     "    sand [reset] ..... Hourglass Sand ledger (reset clears it)",
-    "    rehearse [on|off]  solo master-loot practice with invented rollers",
     "    rolldebug ........ trace roll feeds (ML window diagnosis)",
     "    lootdebug ........ verbose click-to-loot logging (slot, corpse, link)",
     "    help ............. this list",
@@ -53,10 +52,6 @@ function Z.InitDB()
   ZugLootDB.raidArchive = ZugLootDB.raidArchive or {}
   ZugLootDB.drops = ZugLootDB.drops or {}
   ZugLootDB.rollTime = ZugLootDB.rollTime or Z.Limits.ROLL_TIMEOUT_DEFAULT
-  -- Solo master-loot rehearsal (see /zl rehearse): every corpse item gets
-  -- a roll window with invented rollers, then a real loot-through award.
-  -- Persisted like other options; effect is solo-only. Absent = off.
-  if ZugLootDB.rehearse == nil then ZugLootDB.rehearse = false end
   -- Loot-takeover kill-switch state (see LootWindow.NoteSilentLoot):
   -- once our LootSlot path proves dead, the takeover stays OFF across
   -- corpses and sessions until the user opts back in. Survives reloads
@@ -182,7 +177,7 @@ function Z.Slash(msg)
   cmd = string.lower(cmd or "")
   rest = rest or ""
   -- Slim command set (windows do the rest via buttons/menus):
-  -- sheet, import, loadfile, sheetreq, sync, simboss, simraid, simstop, rehearse.
+  -- sheet, import, loadfile, sheetreq, sync, simboss, simraid, simstop.
   if cmd == "" or cmd == "help" then
     Z.PrintHelp()
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
@@ -198,8 +193,6 @@ function Z.Slash(msg)
   elseif cmd == "simstop" then Z.Sim.Stop()
   elseif cmd == "sand" then
     if Z.MasterLootUI and Z.MasterLootUI.SandCommand then Z.MasterLootUI.SandCommand(rest) end
-  elseif cmd == "rehearse" then
-    if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end
   elseif cmd == "rolldebug" then
     if Z.LootWindow then
       Z.LootWindow.rollDebug = not Z.LootWindow.rollDebug

@@ -565,8 +565,8 @@ the item); extra rolls ignored with notice. Auto-close timer configurable
 ### 4.6 Simulation (`Sim.lua`)
 
 In-game, no raid needed. **Requires the loaded sheet** — without one the
-commands refuse with a pointer to `/zl import`. Sim + rehearsal exist ONLY
-to test master looting: they open the SAME roll window through the SAME
+commands refuse with a pointer to `/zl import`. Sim exists ONLY
+to test master looting: it opens the SAME roll window through the SAME
 `MasterLootUI` roll, with fake rolls landing instantly (no timers, no
 scheduling) alongside any real `/roll`s. One roll at a time; the open
 window owns everything; closing it ends the roll — exactly like live.
@@ -636,16 +636,6 @@ window owns everything; closing it ends the roll — exactly like live.
   `Resolver.ToHistoryEntry`), won marks, and drop-log entries
   (source `sim`). Visible in the Sheet tab right away. The sheet log
   floor applies (rare 3+ only — see §3.3).
-- `/zl rehearse [on|off]` — solo master-loot practice, no sheet needed.
-  While on, every solo corpse's non-coin rows queue with invented rollers
-  (Aldric, Bryn, Cora, ...) and wait for the ML: each item's Roll button
-  starts its roll through the same live path (roll window, instant fake
-  rolls; the ML's own dice work too). Awarding is a REAL live award — the
-  item leaves the solo corpse via the normal `LootSlot(slot, 1)` take —
-  which is the point: the full distribute flow rehearsed end to end.
-  Invented names are fenced off the sheet (won marks + history skip
-  them). `/zl simstop` and flag-off both end the run, keeping
-  already-looted items.
 - `Timer.lua` stays for the roll clock and the click-to-loot watchdog
   (`LootWindow.WatchClick`).
 - Uses the **same** `Resolver` pure module as real sessions and as `tests/`, so
@@ -730,13 +720,8 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl lootdebug       verbose click-to-loot logging (slot, corpse size, link)
 /zl lootframe       toggle corpse-loot window: ZugLoot vs Blizzard's (persisted;
                     auto-stands-down if ZugLoot clicks stop reaching the server)
-/zl rehearse [on|off] solo master-loot practice: corpse items roll with invented
-                    raiders (3-5 rolls), awards loot the corpse for real.
-                    No sheet needed; real sheet stays loaded, invented names
-                    fenced off it.
 /zl rollauto [on|off] auto-start rolls as corpses are looted (default OFF:
-                    the ML picks each item's Roll button). General master-loot
-                    behaviour; rehearsal inherits it.
+                    the ML picks each item's Roll button).
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
                     (Setup tab "Reset all settings" = full factory reset with confirm)
 /zl help

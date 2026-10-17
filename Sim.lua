@@ -1,28 +1,24 @@
 -- ZugLoot/Sim.lua
 -- Test rolls for the master-loot window: /zl sim <item> [n], /zl simboss,
--- /zl simraid, /zl rehearse, /zl simstop. Sim + rehearsal are ONLY a way
--- to test master looting: they open the SAME roll window the raid uses,
--- through the SAME MasterLootUI roll (BeginRoll), with fake rolls landing
--- instantly alongside any real ones. No timers, no queues that outlive
--- the window, no background anything.
+-- /zl simraid, /zl simstop. Sim is ONLY a way to test master looting:
+-- it opens the SAME roll window the raid uses, through the SAME
+-- MasterLootUI roll (BeginRoll), with fake rolls landing instantly
+-- alongside any real ones. No timers, no queues that outlive the window,
+-- no background anything.
 --
 -- How it works: a test entry precomputes fake rolls (Resolver.FakeRolls).
 -- RequestRoll opens the loot-window detail, starts the live roll, and
 -- feeds every fake straight into MasterLootUI.AddRoll — no delay. The ML
--- finishes/awards exactly like a live roll. Rehearsal is the same path
--- with invented names (fenced off the sheet via roll.invented) on solo
--- corpse rows, awarded for real through the normal corpse take.
+-- finishes/awards exactly like a live roll.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
 Z.Sim = M
 
-M.pending = {} -- queued { itemID, link, rolls, roster?, rehearse? } (boss/raid staging)
+M.pending = {} -- queued { itemID, link, rolls } (boss/raid staging)
 M.FakeCount = nil -- tests pin the fake-roll count through here.
 M.running = false -- a staged run is in progress (queue non-empty)
 M.raid = nil -- active simraid staging: { key, instName, stages, at }
-M.rehearseRun = false -- a rehearsal run is in progress
-M.RehearseNames = { "Aldric", "Bryn", "Cora", "Dain", "Elswyth", "Fenna" }
 M.TIE_ROUNDS = 3 -- max tie re-roll rounds before giving up with a note
 
 function M.RequireSheet()
@@ -32,10 +28,6 @@ function M.RequireSheet()
     return nil
   end
   return sheet
-end
-
-function M.Rehearsing()
-  return M.rehearseRun == true
 end
 
 -- Display link for sim lines (never a bare item:id): the clickable
@@ -63,17 +55,10 @@ end
 -- the moment the roll opens (RequestRoll), never on a timer.
 local function queueEntry(sheet, itemID, link, opts)
   opts = opts or {}
-  local rolls
-  if opts.roster then
-    rolls = Z.Resolver.FakeRolls(sheet, nil,
-      { roster = opts.roster, count = opts.count })
-  else
-    rolls = Z.Resolver.FakeRolls(sheet, itemID,
-      { count = M.FakeCount, tmog = opts.tmog, srOnly = opts.srOnly,
-        fillers = opts.fillers })
-  end
-  local entry = { itemID = itemID, link = link, rolls = rolls,
-    roster = opts.roster, rehearse = opts.rehearse }
+  local rolls = Z.Resolver.FakeRolls(sheet, itemID,
+    { count = M.FakeCount, tmog = opts.tmog, srOnly = opts.srOnly,
+      fillers = opts.fillers })
+  local entry = { itemID = itemID, link = link, rolls = rolls }
   table.insert(M.pending, entry)
   M.running = true
   return entry
@@ -180,11 +165,10 @@ function M.RequestRoll(itemID)
   for i = 1, Z.Util.ArrayCount(M.pending) do
     if M.pending[i] and M.pending[i].itemID == itemID then at = i break end
   end
-  -- Roll button on a non-queued row (rehearsal top-up, manual pick):
-  -- rehearse rows build their entry on the spot; sim needs a queue entry.
+  -- Roll button on a non-queued row (manual pick): sim needs a queue
+  -- entry; anything else refuses.
   local entry = at and M.pending[at] or nil
   if not entry then
-    if not (Z.DB and Z.DB.rehearse) then
       -- Ignored-by-mistake sim row: the row is still listed AND flagged
       -- ignored, but Ignore dropped its queue entry. Rebuild standard
       -- fakes from the sheet and roll — Roll, Raid roll, Award, ...
@@ -216,38 +200,17 @@ function M.RequestRoll(itemID)
         Z.Print("SIM: item " .. tostring(itemID) .. " is not in the test queue.")
         return false
       end
-    else
-      local W = Z.LootWindow
-      local row = W and W.Find and W.Find(itemID)
-      if not row then return false end
-      entry = { itemID = itemID, link = row.link or ("item:" .. tostring(itemID)),
-        rolls = Z.Resolver.FakeRolls(nil, nil,
-          { roster = M.RehearseNames, count = 5 }),
-        roster = M.RehearseNames, rehearse = true }
-    end
   else
     table.remove(M.pending, at)
-  end
-  -- Rehearsal entries are corpse-backed: a row that already left the
-  -- corpse (pre-roll award etc.) drops instead of rolling a ghost.
-  if entry.rehearse then
-    local W = Z.LootWindow
-    local row = W and W.Find and W.Find(itemID)
-    if not row then
-      M.afterRehearsal()
-      return false
-    end
   end
   local link = entry.link or ("item:" .. tostring(itemID))
   local roll = MLUI and MLUI.BeginRoll(itemID, link, "SIM", true)
   if not roll then return false end
-  if entry.roster then roll.invented = entry.roster end
   -- The window IS the roll: open it rolling, then land every fake at
   -- once. No timers, no scheduling — the ML finishes when ready.
   if Z.LootWindow and Z.LootWindow.OpenDetail then
     local d = Z.LootWindow.OpenDetail(itemID)
     if d then
-      if entry.roster then d.invented = entry.roster end
       d.phase = "rolling"
       d.rolls = {}
       d.menu = nil
@@ -277,115 +240,18 @@ function M.RequestRoll(itemID)
   return true
 end
 
--- Rehearsal rolls through the same request path.
-function M.RehearseRoll(itemID) return M.RequestRoll(itemID) end
-
--- Rehearsal queue lookup for the award path (fake names stay off the sheet).
-function M.InventedFor(itemID)
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    local e = M.pending[i]
-    if e and e.itemID == itemID and e.rehearse then return e.roster end
-  end
-  return nil
-end
-
 -- Drop a queued entry (pre-roll award AND ignore paths): an ignored
 -- sim row must not stay rollable either. True when dropped.
 function M.DropSim(itemID)
   local dropped = false
   for i = Z.Util.ArrayCount(M.pending), 1, -1 do
     local e = M.pending[i]
-    if e and e.itemID == itemID and not e.rehearse then
+    if e and e.itemID == itemID then
       table.remove(M.pending, i)
       dropped = true
     end
   end
   return dropped
-end
--- Drop a queued rehearsal entry (pre-roll award path). True when dropped.
-function M.DropRehearsal(itemID)
-  local dropped = false
-  for i = Z.Util.ArrayCount(M.pending), 1, -1 do
-    local e = M.pending[i]
-    if e and e.itemID == itemID and e.rehearse then
-      table.remove(M.pending, i)
-      dropped = true
-    end
-  end
-  return dropped
-end
-
--- Queue every non-coin corpse row for rehearsal play. No-ops unless the
--- Z.DB.rehearse flag is on and solo. The ML picks each Roll button.
-function M.StartRehearsal()
-  if not (Z.DB and Z.DB.rehearse) then return 0 end
-  if not (Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo()) then return 0 end
-  local W = Z.LootWindow
-  if not W then return 0 end
-  local n = 0
-  for i = 1, Z.Util.ArrayCount(W.items) do
-    local it = W.items[i]
-    if it and not it.coin and it.itemID and it.source ~= "sim" then
-      local covered = false
-      for j = 1, Z.Util.ArrayCount(M.pending) do
-        if M.pending[j] and M.pending[j].itemID == it.itemID then covered = true break end
-      end
-      if not covered then
-        queueEntry(nil, it.itemID, it.link or ("item:" .. tostring(it.itemID)),
-          { roster = M.RehearseNames, rehearse = true, count = 5 })
-        n = n + 1
-      end
-    end
-  end
-  if n == 0 then return 0 end
-  M.rehearseRun = true
-  M.running = true
-  Z.Print("Rehearsal: " .. n .. " item" .. (n == 1 and "" or "s")
-    .. " queued — roll window + invented rolls, then award to loot.")
-  return n
-end
-
--- Continuation after a rehearsal award: next queued item, or end the run.
-function M.afterRehearsal()
-  for i = 1, Z.Util.ArrayCount(M.pending) do
-    if M.pending[i] and M.pending[i].rehearse then
-      Z.Print("Rehearsal: pick the next item's Roll button.")
-      return
-    end
-  end
-  M.EndRehearsalRun("Rehearsal done — items looted.")
-end
-
-function M.EndRehearsalRun(msg)
-  if not M.rehearseRun then return end
-  for i = Z.Util.ArrayCount(M.pending), 1, -1 do
-    if M.pending[i] and M.pending[i].rehearse then
-      table.remove(M.pending, i)
-    end
-  end
-  M.rehearseRun = false
-  if not M.Busy() then M.running = false end
-  if msg then Z.Print(msg) end
-end
-
-function M.StopRehearsal()
-  if not M.rehearseRun then return false end
-  M.EndRehearsalRun("Rehearsal stopped.")
-  return true
-end
-
-function M.SetRehearse(arg)
-  local want = nil
-  if arg ~= nil then
-    local s = string.lower(Z.Util.Trim(tostring(arg or "")))
-    if s == "on" or s == "1" or s == "true" then want = true
-    elseif s == "off" or s == "0" or s == "false" then want = false end
-  end
-  if want == nil then want = not (Z.DB and Z.DB.rehearse) end
-  if Z.DB then Z.DB.rehearse = want end
-  if not want and M.rehearseRun then M.StopRehearsal() end
-  Z.Print("Solo rehearsal " .. (want and "ON" or "OFF")
-    .. " (corpse items roll with invented raiders, awards loot for real).")
 end
 
 -- Anything staged, live, or rolling counts as busy.
@@ -398,7 +264,6 @@ end
 
 -- Full stop: drop the queue, end any open roll, close the windows.
 function M.Stop()
-  if M.rehearseRun then M.StopRehearsal() end
   local wasRunning = M.running or Z.Util.ArrayCount(M.pending) > 0
     or (Z.MasterLootUI and Z.MasterLootUI.roll ~= nil)
   M.pending = {}

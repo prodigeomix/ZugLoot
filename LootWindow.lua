@@ -1089,13 +1089,6 @@ function M.OnRowClick(itemID, clickSlot)
     and Z.SRSecurity.IsSolo()
   if M.blizzardTakeover == false then return "passthrough" end
   local slot = clickSlot or (it and it.slot)
-  -- Rehearsal: solo non-coin rows open the roll detail instead of
-  -- insta-looting (every corpse item gets its roll window + award flow).
-  local rehearsing = solo and Z.DB and Z.DB.rehearse
-    and not (it and it.coin)
-  if rehearsing then
-    return M.OpenDetail(itemID) and "detail" or nil
-  end
   if it and slot and (it.coin or it.free or solo) then
     local issued = nil
     if Z.MasterLootUI and Z.MasterLootUI.LootCorpseSlot then
@@ -1456,11 +1449,7 @@ function M.doAction(itemID, actionID, extra)
     -- Starters report by return (roll table / true = rolling). The
     -- window flips only on a real start — never on a refusal.
     local started
-    -- Rehearsal rows roll invented raiders through the same live path.
-    if d.source ~= "sim" and Z.Sim and Z.Sim.RequestRoll
-        and Z.Sim.Rehearsing and Z.Sim.Rehearsing() then
-      started = Z.Sim.RequestRoll(d.itemID)
-    elseif d.source == "sim" then
+    if d.source == "sim" then
       started = Z.Sim and Z.Sim.RequestRoll and Z.Sim.RequestRoll(d.itemID)
     else
       started = MLUI and MLUI.StartItemRoll and MLUI.StartItemRoll(d.itemID)
@@ -1471,7 +1460,7 @@ function M.doAction(itemID, actionID, extra)
       d.menu = nil
       d.status = "rolling"
       M.seedCountdown(d)
-      -- Starters that land rolls instantly (sim/rehearsal fakes feed
+      -- Starters that land rolls instantly (sim fakes feed
       -- AddRoll -> SyncRoll mid-start) already filled the mirror — the
       -- wipe above just cleared it, so rebuild off the live roll.
       -- Live starts hold no rolls yet: the rebuild is an empty no-op
