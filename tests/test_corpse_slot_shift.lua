@@ -21,6 +21,7 @@ local function ok(v, msg)
 end
 
 ZugLoot = {}
+ZugLoot.Print = function() end
 dofile("Constants.lua")
 dofile("Util.lua")
 dofile("ClassColors.lua")
