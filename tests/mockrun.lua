@@ -36,6 +36,24 @@ local function newObj(kind)
   function o:EnableMouseWheel() end
   function o:SetScrollChild() end
   function o:SetVerticalScroll() end
+  function o:GetVerticalScroll() return 0 end
+  function o:GetVerticalScrollRange() return 0 end
+  function o:UpdateScrollChildRect() end
+  function o:SetMultiLine() end
+  function o:SetAutoFocus() end
+  function o:SetFontObject() end
+  function o:SetJustifyH() end
+  function o:SetJustifyV() end
+  function o:SetMaxLetters() end
+  function o:GetText() return self.label or "" end
+  function o:SetToplevel(t) self.toplevel=t end
+  function o:StartMoving() end
+  function o:StopMovingOrSizing() end
+  function o:SetResizable() end
+  function o:SetMinResize() end
+  function o:StartSizing() end
+  function o:SetNormalTexture() end
+  function o:GetWidth() return self.w or 0 end
   function o:GetHeight() return self.h or 10 end
   function o:Raise() end
   function o:SetFrameStrata(s) self.strata=s end
@@ -78,7 +96,7 @@ dofile("SRSecurity.lua");
 dofile("RollList.lua")
 dofile("Comm.lua");
 dofile("Pysanka.lua");
-ZugLoot.SRImport = { ShowPaste=function() end, LoadFromFile=function() end, ResetWon=function() end, RequestResetRollLog=function() end };
+dofile("SRImport.lua");
 ZugLoot.AutoRoll = { Set=function() end };
 ZugLoot.VersionGrid = { seen={}, RosterNames=function() return {"A","B"} end, GridNames=function() return {{name="A",inGroup=true},{name="B",inGroup=true}} end, StatusFor=function() return "GREEN" end, ColorFor=function() return "GREEN" end, Request=function() end };
 dofile("MainWindow.lua");
@@ -448,6 +466,23 @@ assert((drop.flevel or 0) > 5, "picker level above window, got: " .. tostring(dr
 tankClick();
 assert(Z.MainWindow.DebugPysankaPicker().open == false, "second click closes picker");
 assert(Z.MainWindow.DebugPysankaDrop() == nil, "picker frame torn down");
+-- Import sheet paints ABOVE the main window (DIALOG strata + higher
+-- level), or it slides under the window and cannot be clicked.
+Z.SRImport.ShowPaste();
+local impF = Z.SRImport.DebugImportFrame();
+assert(impF ~= nil, "import frame built");
+assert(impF.strata == "DIALOG", "import strata above window, got: " .. tostring(impF.strata));
+assert((impF.flevel or 0) > (Z.MainWindow.frame and Z.MainWindow.frame:GetFrameLevel() or 5),
+  "import level above main window, got: " .. tostring(impF.flevel));
+-- Re-show after a main-window rebuild (size change path) re-pins above.
+-- Force the rebuild: move the stored size off the live size first.
+Z.MainWindow.winW, Z.MainWindow.winH = -1, -1;
+assert(Z.MainWindow.EnsureSize() == true, "main window rebuilt");
+Z.SRImport.ShowPaste();
+local impF2 = Z.SRImport.DebugImportFrame();
+assert((impF2.flevel or 0) > (Z.MainWindow.frame and Z.MainWindow.frame:GetFrameLevel() or 5),
+  "import re-pinned after main rebuild, got: " .. tostring(impF2 and impF2.flevel));
+print("import sheet above main window OK");
 -- Kill order renders the 8 real raid-target icons in order.
 Z.MainWindow.SelectTab("sheet");
 Z.MainWindow.SelectTab("pysanka");

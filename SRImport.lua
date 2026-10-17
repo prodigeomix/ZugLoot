@@ -9,6 +9,31 @@ Z.SRImport = M
 local pasteFrame = nil
 local editBox = nil
 
+-- Test hook: live import frame (for the strata/level assert).
+function M.DebugImportFrame()
+  return pasteFrame
+end
+
+-- Keep the import sheet above the main window: same DIALOG strata the
+-- frame already uses, but pinned to a level over the main frame (nil-
+-- safe on mock frames). Called at build time and on every show, since
+-- the main window rebuilds (new frame object/level) on size changes.
+local function RaiseImportAboveMain()
+  if not pasteFrame then return end
+  if pasteFrame.SetToplevel then pcall(pasteFrame.SetToplevel, pasteFrame, true) end
+  if pasteFrame.SetFrameStrata then pcall(pasteFrame.SetFrameStrata, pasteFrame, "DIALOG") end
+  if pasteFrame.SetFrameLevel then
+    local lvl = 100
+    local main = Z.MainWindow and Z.MainWindow.frame
+    if main and main.GetFrameLevel then
+      local ok, ml = pcall(main.GetFrameLevel, main)
+      if ok and tonumber(ml) then lvl = tonumber(ml) + 10 end
+    end
+    pcall(pasteFrame.SetFrameLevel, pasteFrame, lvl)
+  end
+  if pasteFrame.Raise then pcall(pasteFrame.Raise, pasteFrame) end
+end
+
 -- 5.0 (client) uses string.gfind, 5.1+ uses string.gmatch.
 local Gfind = string.gmatch or string.gfind
 
@@ -359,8 +384,9 @@ function M.ShowPaste()
     if pasteFrame.SetResizable then pasteFrame:SetResizable(true) end
     if pasteFrame.SetMinResize then pasteFrame:SetMinResize(420, 320) end
     if pasteFrame.SetClampedToScreen then pasteFrame:SetClampedToScreen(true) end
-    if pasteFrame.SetToplevel then pasteFrame:SetToplevel(true) end
-    if pasteFrame.SetFrameStrata then pasteFrame:SetFrameStrata("DIALOG") end
+    -- Above the main window (DIALOG strata + level over the main frame),
+    -- or the sheet slides under the window and cannot be clicked.
+    RaiseImportAboveMain()
     pasteFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
       edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
       insets = { left = 4, right = 4, top = 4, bottom = 4 } })
@@ -377,7 +403,8 @@ function M.ShowPaste()
     scroll:EnableMouseWheel(true)
     scroll:SetBackdrop({ bgFile = "Interface/ChatFrame/ChatFrameBackground", edgeSize = 1 })
     editBox = CreateFrame("EditBox", "ZugLootImportBox", scroll)
-    editBox:SetMultiLine(true) editBox:SetAutoFocus(false)
+    if editBox.SetMultiLine then editBox:SetMultiLine(true) end
+    if editBox.SetAutoFocus then editBox:SetAutoFocus(false) end
     if editBox.EnableMouse then editBox:EnableMouse(true) end
     if editBox.SetFontObject and GameFontHighlightSmall then editBox:SetFontObject(GameFontHighlightSmall) end
     if editBox.SetJustifyH then editBox:SetJustifyH("LEFT") end
@@ -488,5 +515,8 @@ function M.ShowPaste()
     SyncImportScroll()
   end
   -- Non-privileged users may still open the frame to inspect, but Import is gated.
+  -- Re-pin on every show: the main window rebuilds on size changes, and a
+  -- fresh main frame would otherwise reclaim the top spot.
+  RaiseImportAboveMain()
   pasteFrame:Show()
 end
