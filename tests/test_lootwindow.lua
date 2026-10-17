@@ -391,27 +391,35 @@ ok(LW.Find(1001) == nil, "awarded row left the list")
 ok(LW.detail == nil, "window closed after award")
 ok(ML.roll == nil, "no roll survives the award")
 
--- 6a2. Ignore: drops the row with no award, no won mark, no history —
--- from pick, mid-roll (ends the roll), and the award window.
+-- 6a2. Ignore: marks the row ignored (it STAYS listed) with no award,
+-- no won mark, no history — from pick, mid-roll (ends the roll), and
+-- the award window. The detail stays open on rows that are still
+-- actionable; looting finishes (detail closes) only when nothing
+-- actionable remains (empty list, or only ignored rows).
 ZugLoot.DB = { sheet = makeSheet() }
 LW.SetItems({
   { itemID = 1001, link = "item:1001", badge = "SR:2" },
   { itemID = 1002, link = "item:1002", badge = "SR" },
 }, "loot")
+ok(not LW.LootingFinished(), "open rows: looting not finished")
 LW.OpenDetail(1001)
 eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore from pick")
-ok(LW.Find(1001) == nil, "ignored row gone")
-ok(LW.detail == nil, "window closed after ignore")
+ok(LW.Find(1001) ~= nil and LW.Find(1001).ignored, "ignored row stays listed")
+ok(LW.detail ~= nil and LW.detail.itemID == 1001, "detail stays open (rows actionable)")
+ok(string.find(LW.RowText(LW.Find(1001)), "[ignored]", 1, true) ~= nil, "ignored row flagged")
+ok(not LW.LootingFinished(), "actionable rows left: looting not finished")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "ignore won-marks nobody")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "ignore records no history")
 ok(LW.Find(1002) ~= nil, "other row untouched")
--- Mid-roll ignore ends the live roll.
+-- Mid-roll ignore ends the live roll; the marked row stays listed.
 LW.OpenDetail(1002)
 LW.doAction(1002, "roll")
 ML.IntakeChatRoll("Solo rolls 70 (1-100)")
 eq(LW.doAction(1002, "ignore"), "ignored 1002", "ignore mid-roll")
 ok(ML.roll == nil, "ignore ends the roll")
-ok(LW.detail == nil, "window closed")
+ok(LW.Find(1002) ~= nil and LW.Find(1002).ignored, "mid-roll ignore stays listed")
+ok(LW.detail == nil, "detail closed: only ignored rows left")
+ok(LW.LootingFinished(), "only ignored rows: looting finished")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 0, "unfinished roll logs nothing")
 -- Award-phase ignore: history from the finished round stays (rolls
 -- really happened), but nobody wins.
@@ -421,7 +429,8 @@ LW.doAction(1001, "roll")
 ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
 LW.doAction(1001, "finish")
 eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore from award")
-ok(LW.Find(1001) == nil and LW.detail == nil, "ignored item fully gone")
+ok(LW.Find(1001) ~= nil and LW.Find(1001).ignored, "ignored item stays listed")
+ok(LW.detail == nil, "detail closed: only ignored rows left")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "award-phase ignore won-marks nobody")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 1, "finished-round history kept")
 

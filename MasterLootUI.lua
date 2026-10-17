@@ -1289,18 +1289,18 @@ function M.MaybeMasterOnBoss()
   return false
 end
 
--- A row left the list (award or ignore): with backToGroup on and OUR
--- switch active, an emptied list means the boss is fully looted — flip
--- back to group loot and restore the remembered threshold. Sim rows
--- never count (no corpse, no method).
+-- A row left the list (award) or was marked ignored: with backToGroup on
+-- and OUR switch active, a finished list (empty, or only ignored rows)
+-- means the boss is fully looted — flip back to group loot and restore
+-- the remembered threshold. Sim rows never count (no corpse, no method).
 function M.MaybeGroupAfterBoss(source)
   if source == "sim" then return false end
   if not M.autoML then return false end
   if not (Z.DB and Z.DB.backToGroup) then return false end
   if not (Z.SRSecurity and Z.SRSecurity.AmLeader
       and Z.SRSecurity.AmLeader()) then return false end
-  if Z.LootWindow and Z.LootWindow.items
-      and Z.Util.ArrayCount(Z.LootWindow.items) > 0 then return false end
+  if Z.LootWindow and Z.LootWindow.LootingFinished
+      and not Z.LootWindow.LootingFinished() then return false end
   if M.TrySetLoot("group") then
     M.autoML = false
     if M.prevThreshold then
@@ -1313,11 +1313,14 @@ function M.MaybeGroupAfterBoss(source)
   return false
 end
 
--- Ignore the item: drop the row with no award, no won mark, no corpse
--- take, no roll history. Ends any open roll for the item FIRST (same
--- as awarding). The item stays on the corpse for manual handling; the
--- audit trail records it as ignored. Sim rows advance the queue like
--- an award (an ignored sim row must not stay rollable either).
+-- Ignore the item: mark the row ignored (it stays listed) with no award,
+-- no won mark, no corpse take, no roll history. Ends any open roll for
+-- the item FIRST (same as awarding). The item stays on the corpse for
+-- manual handling; the audit trail records it as ignored. When nothing
+-- actionable remains (empty list, or only ignored rows), looting is
+-- finished: the detail closes and the boss auto-switch flips back to
+-- group loot when it should. Sim rows advance the queue like an award
+-- (an ignored sim row must not stay rollable either).
 function M.Ignore(itemID, source)
   if not M.RequireML() then return end
   if not itemID then
@@ -1336,12 +1339,23 @@ function M.Ignore(itemID, source)
   if Z.DropLog then Z.DropLog.Add(itemID, link, source, "ignored", nil) end
   local disp = M.DisplayItemLink(itemID, link)
   Z.Print("Ignored " .. disp .. " (left on the corpse).")
-  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
+  if Z.LootWindow and Z.LootWindow.MarkIgnored then
+    Z.LootWindow.MarkIgnored(itemID)
+  end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
-  if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  -- Looting finished (no rows left, or only ignored rows): close the
+  -- detail and let the boss auto-switch flip back to group loot.
+  local finished = Z.LootWindow and Z.LootWindow.LootingFinished
+    and Z.LootWindow.LootingFinished()
+  if finished then
+    if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  end
   M.MaybeGroupAfterBoss(source)
-  -- Queue bookkeeping, same as the award path.
+  -- Queue bookkeeping: an ignored sim row must not stay rollable,
+  -- so its queue entry drops (the row itself stays listed, ignored).
   if Z.Sim then
+    -- Plain sim entries never rehearse: just drop the queue entry.
+    if Z.Sim.DropSim then Z.Sim.DropSim(itemID) end
     if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
       if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
           and Z.Sim.afterRehearsal then
@@ -1350,7 +1364,6 @@ function M.Ignore(itemID, source)
     end
     if source == "sim" then
       if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
-      if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
     end
   end
   return true
