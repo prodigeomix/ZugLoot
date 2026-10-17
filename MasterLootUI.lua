@@ -213,16 +213,36 @@ function M.SRBonus(itemID, player, rtype)
   return 0
 end
 
--- One roll lands on the open roll (first-roll-only). The RANGE the
--- player chose decides the kind; 1-100 is SR only for reserve holders,
--- otherwise MS. Sheet lookups here so window, award, and resolver all
--- see the same kind.
+-- One roll lands on the open roll (up to the player's allowance). The
+-- RANGE the player chose decides the kind; 1-100 is SR only for reserve
+-- holders, otherwise MS. Sheet lookups here so window, award, and
+-- resolver all see the same kind.
+--
+-- Allowance: a player may roll as many times as they SR'd the item
+-- (sheet `rolls`: x2 = two rolls, default one). The resolver judges
+-- every roll but keeps each player's best, so extra rolls are extra
+-- chances, never extra winners. Anything past the allowance is ignored.
+function M.RollAllowance(itemID, player)
+  if Z.DB and Z.DB.sheet and Z.SRData.GetRollers then
+    local rollers = Z.SRData.GetRollers(Z.DB.sheet, itemID)
+    for i = 1, Z.Util.ArrayCount(rollers) do
+      if rollers[i].name == player then
+        local n = tonumber(rollers[i].rolls) or 1
+        if n < 1 then n = 1 end
+        return n
+      end
+    end
+  end
+  return 1
+end
 function M.AddRoll(player, rv, minR, maxR)
   local roll = M.roll
   if not roll or (roll.itemID == nil) then return end
+  local seen = 0
   for i = 1, Z.Util.ArrayCount(roll.rolls) do
-    if roll.rolls[i].name == player then return end
+    if roll.rolls[i].name == player then seen = seen + 1 end
   end
+  if seen >= M.RollAllowance(roll.itemID, player) then return end
   local rtype = "MS"
   if minR == 1 and maxR == Z.Caps.OS then rtype = "OS"
   elseif minR == 1 and maxR == Z.Caps.TMOG then rtype = "TMOG"
@@ -286,7 +306,7 @@ function M.ContinueRoll(itemID)
   if stamp.roster then roll.roster = stamp.roster end
   if stamp.n then roll.n = stamp.n end
   -- Landed rolls, kept: live truth in the intake's own shape
-  -- ({name, roll, type, min, max, effective}); first-roll-only guards
+  -- ({name, roll, type, min, max, effective}); allowance guards
   -- still apply to newcomers AND re-rollers.
   for i = 1, Z.Util.ArrayCount(kept) do
     local r = kept[i]
