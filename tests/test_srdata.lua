@@ -103,6 +103,41 @@ else
   T.fail = T.fail + 1 table.insert(T.errors, "FAIL example file missing")
 end
 
+-- 6b. CSV example file parses (second SR-sheet format).
+local cf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
+if cf then
+  local cex = cf:read("*a") cf:close()
+  local cs, cserr = SRData.ParseCSVFormat(cex)
+  ok(cs ~= nil, "csv example parses: " .. tostring(cserr))
+  if cs then
+    -- Pysanka dupes merge: rolls 2, max SR+ wins.
+    local byN = {}
+    for _, r in ipairs(cs.items[18814].rollers) do byN[r.name] = r end
+    eq(byN["Pysanka"].rolls, 2, "csv dupe counts rolls")
+    eq(byN["Pysanka"].sr_plus, 70, "csv max sr+ wins")
+    eq(byN["Ivkoo"].sr_plus, nil, "csv sr+ 0 is nil")
+    -- Class+spec stored raw (no spaces) for RoleOf/SpecName.
+    eq(cs.players["Pysanka"].class, "Paladin", "csv class canonical")
+    eq(cs.players["Pysanka"].raw, "PaladinProtection", "csv raw class+spec")
+    eq(cs.players["Akiruy"].class, "Warlock", "csv warlock class")
+    -- Dispatch: CSV reaches ParseAnyImport; preamble above it is dropped.
+    -- (SRImport loads in section 8 below; dispatch checked there.)
+    -- Minimum fields: rows without ID/Attendee skipped, header aliases ok.
+    local mn = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n,1002\nBbb,\n")
+    ok(mn ~= nil, "csv min-fields header ok")
+    local names = SRData.AllPlayerNames(mn)
+    eq(#names, 1, "csv min-fields skips bad rows")
+    eq(names[1], "Aaa", "csv min-fields keeps good row")
+    -- Preamble above base64 is dropped; garbage still rejected.
+    local b64pre = "copy below this line:\neyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119\n"
+    local pb, pberr = SRData.ParseRaidResExport(b64pre)
+    ok(pb ~= nil, "base64 preamble dropped: " .. tostring(pberr))
+    if pb then eq(pb.meta.raidID, "R1", "preamble body intact") end
+  end
+else
+  T.fail = T.fail + 1 table.insert(T.errors, "FAIL csv example file missing")
+end
+
 -- 8. Real-world file content: base64 raidres export parses via the same
 -- path LoadFromFile uses (regression: LoadFromFile only tried line format).
 ZugLoot.Util = ZugLoot.Util or {}
@@ -117,14 +152,23 @@ ZugLoot.DB = {}
 ZugLoot.Comm = {}
 dofile("SRImport.lua")
 local blob = nil
-local bf = io.open("CustomData_example/ZugLoot_SR.txt", "r")
+local bf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
 if bf then blob = bf:read("*a") bf:close() end
 -- Synthesize a raidres-style base64 blob: {"softreserves":[...]} minimal.
 -- (Full export decode is covered by section 3; here we check dispatch.)
 local lineSheet, lineErr = ZugLoot.SRImport.ParseAnyImport(blob)
-ok(lineSheet ~= nil, "ParseAnyImport accepts line format: " .. tostring(lineErr))
+ok(lineSheet ~= nil, "ParseAnyImport accepts csv format: " .. tostring(lineErr))
 local badSheet, badErr = ZugLoot.SRImport.ParseAnyImport("not a sheet at all !!!")
 ok(badSheet == nil and badErr ~= nil, "ParseAnyImport rejects garbage")
+-- CSV dispatch incl. preamble above the header.
+local csvBlob = nil
+local cbf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
+if cbf then csvBlob = cbf:read("*a") cbf:close() end
+local csvPre = ZugLoot.SRImport.ParseAnyImport("copy everything below this line:\n" .. (csvBlob or ""))
+ok(csvPre ~= nil, "ParseAnyImport drops csv preamble")
+if csvPre then
+  eq(csvPre.items[18814].rollers[1].sr_plus, 70, "csv preamble body intact")
+end
 
 -- 7. SortedItemIDs ascending.
 local ids = SRData.SortedItemIDs(s2)

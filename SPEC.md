@@ -92,8 +92,11 @@ Sheet = {
    off) — value is what matters.
 2. **Static file** (`CustomData/ZugLoot_SR.txt`, via Load from File): accepts
    *either* a raw raidres export blob pasted into the file (base64, exactly
-   what raidres.top gives you) *or* the static line format below. Paste-import
-   accepts both as well; format is auto-detected (export first, lines second).
+   what raidres.top gives you), the CSV export below, *or* the static line
+   format. Paste-import accepts all three as well; format is auto-detected
+   (export first, CSV second, lines third). Lines above the payload
+   (tool headers, "copy below this line" notes) are dropped for the
+   export and CSV formats.
 3. **Static line format** (hand-written sheets, either path):
    `#` comments, blank lines ignored.
    ```
@@ -104,7 +107,20 @@ Sheet = {
    ```
    Grammar per entry: `itemID` (required number), `:count` (default 1),
    `+srplus` (default 0). `HARDRES;` line lists hard-reserved item IDs.
-3. Anything else → import error naming the first bad line (never half-imports).
+4. **CSV export** (either path): header-matched, so column order and extra
+   columns (`Item`, `Boss`, `Comment`, `Date`) don't matter. Minimum
+   columns: `ID` (+`Attendee`); minimum per row: numeric ID + non-empty
+   attendee (other rows skipped). `Class` feeds the sheet class store
+   (unknown still imports, just uncolored); `Specialization` is optional
+   (missing = class-default role); `SR+` defaults to 0. Header aliases:
+   `ID`/`ItemID`, `Attendee`/`Player`/`Name`/`Character`/`Raider`,
+   `Specialization`/`Spec`, `SR+`/`SRPlus`. Lines above the header
+   (preamble) are dropped.
+   ```
+   ID,Item,Boss,Attendee,Class,Specialization,SR+
+   18814,"Choker of the Fire Lord",Ragnaros,Pysanka,Paladin,Protection,70
+   ```
+5. Anything else → import error naming the first bad line (never half-imports).
 
 ### 3.2 Roll types (normative): each kind judged by itself
 
@@ -636,6 +652,7 @@ ZugLoot/
     test_resolver.lua winner / tie / missroll / one-win / 2x tests
   CustomData_example/
     ZugLoot_SR.txt   static-file format example (copy to <WoW>/CustomData/)
+    ZugLoot_SR.txt.csv  CSV export format example (same destination)
 ```
 
 Load order respects deps (pure → security/comm → import → views). All files are
