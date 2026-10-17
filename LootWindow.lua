@@ -541,8 +541,10 @@ function M.BuildFrame()
     return nil -- no usable client frame (minimal test stubs)
   end
   -- Raider-window style: compact dark frame (same palette/backdrop).
+  -- Default LEFT of center: the roll detail anchors +350 to this frame,
+  -- so it lands center/center-right; all frames stay draggable.
   f:SetWidth(220) f:SetHeight(120)
-  f:SetPoint("CENTER", UIParent, "CENTER", 250, 0)
+  f:SetPoint("CENTER", UIParent, "CENTER", -260, 0)
   f:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 16,
@@ -1643,8 +1645,11 @@ function M.BuildDetailFrame()
     return nil
   end
   -- Raider-window style: 220px dark frame, 40px item icon + name header.
+  -- Snug against the loot overview (which defaults left of center):
+  -- +240 puts a 20px gap between the frames, so the roll window sits
+  -- just right of the list, near center. Draggable.
   f:SetWidth(220) f:SetHeight(250)
-  f:SetPoint("CENTER", parent, "CENTER", 350, 40)
+  f:SetPoint("CENTER", parent, "CENTER", 240, 40)
   f:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 16,

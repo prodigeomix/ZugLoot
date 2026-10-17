@@ -196,7 +196,9 @@ end
 function M.Build()
   frame = CreateFrame("Frame", "ZugLootLootFrame", UIParent)
   frame:SetWidth(220) frame:SetHeight(250)
-  frame:SetPoint("CENTER", UIParent, "CENTER", 0, 100)
+  -- Default RIGHT of center (clear of the ML roll detail at ~+90):
+  -- raiders look right, the ML's windows tile center-left. Draggable.
+  frame:SetPoint("CENTER", UIParent, "CENTER", 320, 100)
   frame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
     edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
     tile = true, tileSize = 16, edgeSize = 16,
