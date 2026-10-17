@@ -1,4 +1,3 @@
--- ZugLoot CI: stock-lua test suite + luacheck, PR-gated via branch protection.
 name: CI
 
 on:
