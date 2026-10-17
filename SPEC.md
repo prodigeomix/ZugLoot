@@ -10,7 +10,7 @@ buttons with roll caps, raid-warning triggered rolls).
 Goals:
 
 - One addon, two faces: a **master-looter console** (RollFor-like) and a **raider
-  loot window** (LootBlare-like, incl. group-loot display).
+  loot window** (LootBlare-like, master-loot rolls only by default).
 - **SR sheets**: import, secure distribution, SR+ math, fancy in-game sheet view,
   one-win-per-item enforcement, drop log.
 - **Auto-roll + auto-resolve**: raiders can auto-roll SR items; if the whole raid
@@ -462,11 +462,20 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
 
 ### 4.3 Raider loot window (`RaiderLootUI.lua`) — LootBlare-like
 
-- Appears when: (a) a roll starts on this client (the local loot window
-  shows it, whoever runs the loot), or (b) `ROLL_REQ` received, or (c)
-  **group-loot mode**: loot method is group and a roll-worthy item
-  (quality ≥ threshold) is announced — same frame, so group loot looks
-  identical to master loot from the raider's side (per requirement).
+- Appears for master-loot rolls ONLY (default): (a) the ML's `ROLL_REQ`
+  addon message, or (b) the ML/RL's RAID_WARNING roll call
+  (`MatchRollCall`: `Roll for X: /roll ...` dice line or full item link
+  — Pysanka parity). Group-loot rolls, solo, and anyone else's chat
+  never pop it — Blizzard's own Need/Greed frames own the group-loot
+  vote (mirroring them would double-vote or forfeit), and solo has
+  nobody to roll against. Opt-out: Setup toggle `Roll window: ML/ALL`
+  (`Z.DB.raiderFrame`, default `ml`) — `ALL` restores the legacy
+  group-loot mirror (`START_LOOT_ROLL` → dice vote via `RollOnLoot`)
+  + local preview. Gate: `RaiderLootUI.MayShow` (policy) +
+  `AllowMasterFrame` (live grouped-master-loot check); every open
+  funnels through `ShowItem`, which refuses (returns false) when shut.
+  Verifiable: `tests/test_raider_frame.lua` pins mode/allow/matrix +
+  trigger paths per grouping and loot method.
 - Contents (LootBlare layout, 220×250): green countdown **status bar floating
   above the frame** with seconds text (green→orange→red, pulsing under 5s),
   big 40px item icon (shared handlers: hover = item tooltip, click =
@@ -664,7 +673,7 @@ ZugLoot/
   ItemIcon.lua       ONE shared item-icon implementation (hover/ctrl/shift
                      for all five icons: sheet, log header, raider, rows, detail)
   LootWindow.lua     ML loot list (numbered icon/name/SR-HR rows + row detail)
-  RaiderLootUI.lua   LootBlare-like frame incl. group-loot display
+  RaiderLootUI.lua   LootBlare-like frame (master-loot rolls; group-loot mirror only in ALL mode)
   AutoRoll.lua       auto-roll + auto-resolve eligibility
   VersionGrid.lua    members grid + version request handling
   AtlasLoot.lua      live Atlas-CFM loot source (boss/raid/trash chance rolls)

@@ -336,6 +336,51 @@ end
 assert(hasTopRight(lwX.points), "overview X anchored top-right");
 assert(hasTopRight(dfX.points), "detail X anchored top-right");
 print("top-right X buttons OK");
+-- Roll list vs button bar: the list fills header-to-bar exactly, so a
+-- wrapped award-phase bar (Award + Continue + Roll again + Raid roll +
+-- Ignore + ... = 4-5 rows) can never cover the rollers (regression:
+-- the list was sized for a 1-row bar, every wrapped row slid ~30px
+-- over the roll lines — screenshot showed buttons on top of the roll).
+local LW = Z.LootWindow;
+-- Pure geometry first: header + list + bar tile the frame exactly —
+-- ALWAYS (ListHeight has no fixed floor to break the tiling): list
+-- bottom sits 10px above the bar top (120 = list anchor, so
+-- 120 + listH + 10 = frameH - barH). And content fits whenever the
+-- frame wasn't max-capped (huge raids clip — accepted, pre-existing).
+for _, n in ipairs({ 0, 1, 2, 10, 40 }) do
+  for _, b in ipairs({ 1, 2, 4, 5 }) do
+    local fh = LW.DetailHeight(n, b);
+    local lh = LW.ListHeight(fh, b);
+    assert(120 + lh + 10 == fh - LW.BarHeight(b),
+      "header+list+bar tile the frame (n=" .. n .. " bar=" .. b .. ")");
+    if fh < LW.DETAIL_MAX_H then
+      assert(lh >= n * LW.DETAIL_ROLL_H,
+        "list fits its rollers (n=" .. n .. " bar=" .. b .. ")");
+    end
+  end
+end
+-- Live widgets: list bottom (TOP-120 anchor + height) clears the top
+-- edge of the highest bar button. Buttons anchor BOTTOMLEFT + y, so a
+-- button top sits (frameH - y - BTN_HEIGHT) from the top.
+local listH = (df.rollsL and df.rollsL.h) or 0;
+local listBottom = 120 + listH;
+local frameH = df.h or 0;
+local barTop = nil;
+for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "sandB", "ignoreB", "moreB" }) do
+  local btn = df[n];
+  if btn and btn.hidden ~= true then
+    local box = barBox(btn);
+    if box then
+      local top = frameH - box.y - Z.LootWindow.BTN_HEIGHT;
+      if barTop == nil or top < barTop then barTop = top end
+    end
+  end
+end
+assert(barTop ~= nil, "bar placed");
+assert(listBottom <= barTop,
+  "roll list clears the button bar (list bottom " .. tostring(listBottom)
+  .. " vs bar top " .. tostring(barTop) .. ")");
+print("roll list clears button bar OK");
 -- ... dropdown builds under the mock API, rows clickable, closes cleanly.
 -- (Roll initiation lives on the bar buttons, never in the menu.)
 Z.LootWindow.ToggleMoreDropdown(Z.LootWindow.detailFrame.moreB);
@@ -603,6 +648,18 @@ assert(Z.MainWindow.threshDropdown == nil, "dropdown closes on pick");
 Z.DB.bossThreshold = 4;
 Z.DB.mlOnBoss = false;
 Z.DB.backToGroup = false;
+-- raider-frame policy toggle: ML (default) <-> ALL, label follows.
+Z.DB.raiderFrame = nil;
+Z.MainWindow.SelectTab("setup");
+local st3 = Z.MainWindow.DebugSetupToggles();
+assert(st3.raiderFrame ~= nil, "roll-window toggle built");
+assert(string.find(st3.raiderFrame.label or "", "ML", 1, true) ~= nil, "roll-window toggle starts ML");
+st3.raiderFrame:GetScript("OnClick")();
+assert(Z.DB.raiderFrame == "all", "roll-window toggle flips to ALL");
+assert(string.find(st3.raiderFrame.label or "", "ALL", 1, true) ~= nil, "roll-window toggle relabels");
+st3.raiderFrame:GetScript("OnClick")();
+assert(Z.DB.raiderFrame == "ml", "roll-window toggle flips back to ML");
+Z.DB.raiderFrame = nil;
 print("setup loot toggles OK");
 -- scrollbar invariant, checked on every tab: a visible slider may only belong
 -- to the active tab. Hidden tabs must never paint a thumb (the old bug left
@@ -651,6 +708,9 @@ assert(hb.import, "header Import button built");
 assert(hb.file, "header File button built");
 assert(hb.getsheetVisible == true, "Get sheet always visible");
 -- LootBlare-style roll window: build, show item, feed grouped rolls.
+-- (Render checks run under the "all" preview opt-in; the master-loot
+-- gate itself is pinned in tests/test_raider_frame.lua.)
+Z.DB.raiderFrame = "all";
 Z.RaiderLootUI.ShowItem("|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r", 15);
 -- icon + name resolve link-first (regression: bare-ID call showed no
 -- icon and fell back to the raw link text).
@@ -675,6 +735,10 @@ Z.RaiderLootUI.ShowResult("The winner is Jaina (50) !");
 -- roll call ("Roll for X: ..." dice line, full link). Everything else
 -- Pysanka says — drop lists, winners, countdowns, stop-rolls, raid-roll
 -- numbering, bare item names, other senders — never pops it.
+-- Policy OFF for the trigger checks below: master loot + raid, so the
+-- ML roll call is a genuine master-loot roll (gate open) and the
+-- non-trigger lines prove the MATCHER stays tight (not the gate).
+Z.DB.raiderFrame = nil;
 GetLootMethod = function() return "master" end;
 GetLootMaster = function() return "Pysanka" end;
 GetNumRaidMembers = function() return 3 end;
@@ -705,6 +769,9 @@ GetNumRaidMembers = function() return 0 end;
 print("roll-call trigger OK");
 -- Roll-window icon hover: full link -> SetHyperlink tooltip; bare name
 -- (Pysanka-style call, unseen item) -> name + hint, never a dead tip.
+-- (Render checks: preview opt-in; the gate itself is pinned in
+-- tests/test_raider_frame.lua.)
+Z.DB.raiderFrame = "all";
 local tipCalls = {};
 GameTooltip.SetHyperlink = function(self, link) table.insert(tipCalls, { "hyper", link }) end;
 GameTooltip.SetText = function(self, txt) table.insert(tipCalls, { "text", txt }) end;
@@ -787,9 +854,11 @@ DressUpItemLink = nil;
 assert(#triedDetail == 1 and string.find(triedDetail[1], "19137", 1, true),
   "detail ctrl-click tries on, got: " .. tostring(triedDetail[1]));
 print("shared icon parity OK");
--- START_LOOT_ROLL mirrors a group roll in OUR dice frame; the dice vote
--- through RollOnLoot (Need 1 / Greed 2 / Pass 0), never RandomRoll chat
--- spam (which would forfeit the roll). CANCEL hides the frame.
+-- START_LOOT_ROLL mirrors a group roll in OUR dice frame ONLY in "all"
+-- mode (default keeps the mirror shut — Blizzard's frames own the vote);
+-- the dice vote through RollOnLoot (Need 1 / Greed 2 / Pass 0), never
+-- RandomRoll chat spam (which would forfeit the roll). CANCEL hides it.
+Z.DB.raiderFrame = "all";
 local votes = {};
 RollOnLoot = function(id, vote) table.insert(votes, { id, vote }) end;
 GetLootRollItemLink = function(id) return "item:2001:0:0:0" end;

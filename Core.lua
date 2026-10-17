@@ -68,6 +68,10 @@ function Z.InitDB()
   -- Boss threshold for the auto-switch (Setup dropdown, 1 common ..
   -- 4 epic). Default epic: bosses drop epics. Absent = default.
   if ZugLootDB.bossThreshold == nil then ZugLootDB.bossThreshold = 4 end
+  -- Raider roll window policy (Setup toggle): "ml" (default) = the
+  -- window pops for master-loot rolls only; "all" = legacy (also
+  -- mirror group-loot rolls + local preview). Absent = default.
+  if ZugLootDB.raiderFrame ~= "all" then ZugLootDB.raiderFrame = "ml" end
   -- Pysanka raid-setup sheet (invitation word, buff/tank/debuff tables).
   if Z.Pysanka and Z.Pysanka.Ensure then Z.Pysanka.Ensure(ZugLootDB) end
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose

@@ -3,11 +3,47 @@
 -- countdown bar on top, big item icon + quality-colored name, two-column
 -- roll list (class-colored names left, "roll (min-max)" in roll-type color
 -- right, grouped SR > MS > OS > TMOG), four dice buttons at the bottom,
--- top-screen winner banner. Works for master-loot AND group-loot drops.
+-- top-screen winner banner. Master-loot rolls ONLY by default: the
+-- window pops off the master looter's roll call (ROLL_REQ addon message
+-- or their RW line) and stays shut in every other mode — group loot,
+-- solo, or anyone else's chat. In group loot Blizzard's own Need/Greed
+-- frames own the vote (mirroring them would double-vote or forfeit);
+-- solo has nobody to roll against. Opt-out lives in Setup
+-- (Z.DB.raiderFrame = "ml" | "all"): "all" restores the legacy
+-- group-loot mirror + local preview. Nothing else reads that flag.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
 Z.RaiderLootUI = M
+
+-- Frame policy: "ml" (default) = master-loot rolls only; "all" =
+-- legacy (also mirror group-loot rolls + local preview). Pure helper
+-- so tests pin the default without frames.
+function M.FrameMode()
+  if Z.DB and Z.DB.raiderFrame == "all" then return "all" end
+  return "ml"
+end
+
+-- May the raider frame open for a MASTER-LOOT roll right now? Default
+-- yes in a group under master loot; solo opens only in "all" mode
+-- (local preview). The loot-method read is live (GetLootMethod first,
+-- SRSecurity fallback) so a mid-raid method switch takes effect at
+-- once. Headless (no loot APIs): group-absent reads as non-master,
+-- which keeps headless preview tests on the explicit "all" opt-in.
+function M.AllowMasterFrame()
+  if M.FrameMode() == "all" then return true end
+  if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return false end
+  local method = nil
+  if GetLootMethod then
+    local ok, m = pcall(GetLootMethod)
+    if ok then method = m end
+  end
+  if method == nil and Z.SRSecurity and Z.SRSecurity.LootMethod then
+    local ok, m = pcall(Z.SRSecurity.LootMethod)
+    if ok then method = m end
+  end
+  return method == "master"
+end
 
 local frame = nil
 local itemIcon = nil
@@ -335,7 +371,17 @@ function M.ShowResult(message)
   end
 end
 
+-- Gatekeeper: every frame-open funnels through here. Master-loot
+-- rolls open when AllowMasterFrame says so; the group-loot mirror
+-- (START_LOOT_ROLL) opens only in "all" mode. Returns true when the
+-- frame showed, false when policy kept it shut (callers stay silent).
+function M.MayShow(mirror)
+  if mirror then return M.FrameMode() == "all" end
+  return M.AllowMasterFrame()
+end
+
 function M.ShowItem(itemLink, seconds)
+  if not M.MayShow(false) then return false end
   if not frame then M.Build() end
   duration = seconds or (Z.DB and Z.DB.rollTime) or 15
   timeLeft = duration
@@ -356,6 +402,7 @@ function M.ShowItem(itemLink, seconds)
   frame:Show()
   -- Auto-roll path.
   if Z.AutoRoll and Z.AutoRoll.MaybeAutoRoll then Z.AutoRoll.MaybeAutoRoll(itemLink) end
+  return true
 end
 
 function M.OnRoll(player, roll, rtype, excluded)
@@ -394,9 +441,11 @@ end
 -- Group-loot Need/Greed frames (Blizzard's GroupLootFrame1..N) stay alive
 -- (see LootWindow NOTE): a group roll is a server-side roll, and the ONLY
 -- way to vote is RollOnLoot(rollID, 1/2/0) — suppressing the frames would
--- strand the item. So our window mirrors the roll: START_LOOT_ROLL shows
--- OUR dice frame for the item (same frame as master-loot rolls, LootBlare
--- parity), the dice vote through RollOnLoot, CANCEL_LOOT_ROLL hides it.
+-- strand the item. So in "all" mode our window mirrors the roll:
+-- START_LOOT_ROLL shows OUR dice frame for the item (same frame as
+-- master-loot rolls, LootBlare parity), the dice vote through RollOnLoot,
+-- CANCEL_LOOT_ROLL hides it. Default ("ml"): the mirror stays shut —
+-- Blizzard's own frames own the group-loot vote, no double UI.
 -- RollOnLoot is guarded: without it (headless) the dice are inert.
 M.groupRollID = nil
 -- Roll-call matching: the ML's RW line for one item. Pysanka-style calls
@@ -437,13 +486,18 @@ function M.OnEvent(event, a1, a2)
   if event == "CHAT_MSG_RAID_WARNING" then
     -- ML/RL roll call in RW (Pysanka style): plain item name, "Roll for
     -- X: ..." dice line, or full link (LootBlare trigger). Verify sender.
+    -- ShowItem enforces the master-loot gate (group-loot RW chatter
+    -- never pops the frame by default).
     local item = M.MatchRollCall(a1, a2)
     if item ~= "" then
       M.ShowItem(item, (Z.DB and Z.DB.rollTime) or 15)
     end
   elseif event == "START_LOOT_ROLL" then
-    -- a1 = rollID (1.12 passes the roll id as first arg). Resolve the
-    -- item link for the frame; the dice vote via RollOnLoot(rollID, ...).
+    -- a1 = rollID (1.12 passes the roll id as first arg). Default
+    -- ("ml"): the group-loot mirror stays SHUT — Blizzard's own
+    -- Need/Greed frames own the vote. Only "all" mode mirrors the
+    -- roll into our dice frame (dice vote via RollOnLoot).
+    if M.FrameMode() ~= "all" then return end
     local rollID = tonumber(a1)
     M.groupRollID = rollID
     local link = nil

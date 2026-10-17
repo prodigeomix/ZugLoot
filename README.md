@@ -40,7 +40,7 @@ No dependencies. Interface 11200.
   (optional dependency, nothing copied).
   The **Reset rolls** button at the top of
   the window (confirmation window first) or `/zl reset` clears sessions + won marks.
-- Raider: frame pops on ML warning / ROLL_REQ / group-loot drops. `/zl auto on` to auto-roll SRs.
+- Raider: frame pops on the ML's roll call (warning / ROLL_REQ) under master loot only — group loot stays in Blizzard's Need/Greed frames, solo stays shut (Setup `Roll window: ML/ALL` restores the legacy mirror). `/zl auto on` to auto-roll SRs.
 - `/zl ver` shows the addon-version squares grid. `/zl help` lists commands.
 
 ## Static file (`CustomData/ZugLoot_SR.txt`)

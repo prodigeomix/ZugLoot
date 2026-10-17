@@ -70,14 +70,34 @@ M.DETAIL_ROLL_H = 12 -- one roll-list line (FontString line height)
 M.DETAIL_BASE_H = 250 -- the old fixed height: windows never shrink,
 -- only grow past ~7 rolls
 M.DETAIL_MAX_H = 650 -- cap: a full 40-man list still fits
+-- Pure (headless-testable): pixel height of a button bar with N rows
+-- (bottom margin + rows + gaps + top breathing room). Single source of
+-- truth — DetailHeight AND the roll-list sizing below share it, so the
+-- list and the bar can never disagree about where the bar starts.
+function M.BarHeight(barRows)
+  local n = math.max(1, tonumber(barRows) or 1)
+  return n * M.BTN_HEIGHT + (n - 1) * M.BTN_GAP + M.BTN_MARGIN + 4
+end
 -- Pure (headless-testable): frame height for a roll count + bar rows.
 function M.DetailHeight(nRolls, barRows)
   local rows = math.max(0, tonumber(nRolls) or 0)
-  local barH = (math.max(1, tonumber(barRows) or 1)) * M.BTN_HEIGHT
-    + (math.max(1, tonumber(barRows) or 1) - 1) * M.BTN_GAP + M.BTN_MARGIN + 4
-  local h = M.DETAIL_HEADER_H + rows * M.DETAIL_ROLL_H + barH
+  local h = M.DETAIL_HEADER_H + rows * M.DETAIL_ROLL_H + M.BarHeight(barRows)
   if h < M.DETAIL_BASE_H then h = M.DETAIL_BASE_H end
   if h > M.DETAIL_MAX_H then h = M.DETAIL_MAX_H end
+  return h
+end
+-- Pure (headless-testable): roll-list height for a frame of height
+-- frameH carrying a bar of barRows rows. The list fills exactly the
+-- space between the header block and the bar top: header + list + bar
+-- tile the frame with nothing left over, so buttons can never slide
+-- under the rollers no matter how many rows the bar wraps to. Floored
+-- at 0, never at a fixed minimum: a fixed floor (the old 24px) BREAKS
+-- the tiling on content-free frames with big bars (empty list + 4-row
+-- bar = 14px overlap) while buying nothing — the waiting line only
+-- ever shows in the rolling phase, whose 2-row bar always leaves 54px.
+function M.ListHeight(frameH, barRows)
+  local h = (tonumber(frameH) or 0) - M.DETAIL_HEADER_H - M.BarHeight(barRows)
+  if h < 0 then h = 0 end
   return h
 end
 
@@ -2029,11 +2049,15 @@ function M.PaintDetailFrame()
   if phase == "award" and d.menu then
     nShown = nShown + Z.Util.ArrayCount((d.menu or {}).winners or {})
   end
-  if f.SetHeight then f:SetHeight(M.DetailHeight(nShown, barRows)) end
-  -- The roll columns stretch with the frame (fixed 70px clipped long
-  -- lists before); anchored top + button bar, never overlapping it.
-  local listH = M.DetailHeight(nShown, 1) - M.DETAIL_HEADER_H - 40
-  if listH < 24 then listH = 24 end
+  local frameH = M.DetailHeight(nShown, barRows)
+  if f.SetHeight then f:SetHeight(frameH) end
+  -- The roll columns fill header-to-bar exactly (ListHeight shares the
+  -- BarHeight the frame was sized with): a wrapped award-phase bar
+  -- (Award + Continue + Roll again + Raid roll + Ignore + ... = 4-5
+  -- rows) grows the frame AND shrinks the list together, so buttons
+  -- can never cover the rollers. The old code sized the list for a
+  -- 1-row bar — every wrapped row slid ~30px over the roll list.
+  local listH = M.ListHeight(frameH, barRows)
   if f.rollsL and f.rollsL.SetHeight then f.rollsL:SetHeight(listH) end
   if f.rollsR and f.rollsR.SetHeight then f.rollsR:SetHeight(listH) end
   -- Item icon follows the detail's item (mirrors the raider header).

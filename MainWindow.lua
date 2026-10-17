@@ -1464,10 +1464,32 @@ function M.RenderSetup()
   b10:SetScript("OnClick", function() M.ToggleThresholdDropdown(b10) end)
   Tip(b10, "Boss threshold", "Loot threshold applied when auto-switching to master loot on a boss.",
     "Previous threshold is remembered and restored on switch-back.")
+  -- Raider roll window policy (master-loot rolls only by default):
+  -- ML = pop for master-loot rolls (ROLL_REQ / ML roll call), group
+  -- loot + solo stay shut; ALL = legacy (also mirror group-loot rolls
+  -- + local preview). Same gate the window enforces at open.
+  local b11 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b11:SetWidth(150) b11:SetHeight(24)
+  b11:SetPoint("LEFT", b7, "RIGHT", 8, 0)
+  local function rfLabel()
+    if Z.DB and Z.DB.raiderFrame == "all" then return "Roll window: ALL" end
+    return "Roll window: ML"
+  end
+  b11:SetText(rfLabel())
+  b11:SetScript("OnClick", function()
+    if Z.DB then
+      if Z.DB.raiderFrame == "all" then Z.DB.raiderFrame = "ml"
+      else Z.DB.raiderFrame = "all" end
+    end
+    b11:SetText(rfLabel())
+  end)
+  Tip(b11, "Roll window", "When the raider roll window pops: master-loot rolls only (ML), or every roll (ALL).",
+    "Default ML: group loot stays in Blizzard's Need/Greed frames, solo stays shut.")
   M.setupBtns = M.setupBtns or {}
   M.setupBtns.mlOnBoss = b8
   M.setupBtns.backToGroup = b9
   M.setupBtns.bossThreshold = b10
+  M.setupBtns.raiderFrame = b11
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (/zl log)\n" ..
@@ -1723,12 +1745,13 @@ function M.ToggleThresholdDropdown(anchor)
 end
 
 -- Setup-tab toggle buttons (headless-testable): the auto loot-method
--- switching pair + the boss-threshold dropdown button. Returns
--- { mlOnBoss, backToGroup, bossThreshold } (nil before first Setup render).
+-- switching pair + the boss-threshold dropdown button + the raider-frame
+-- policy button. Returns { mlOnBoss, backToGroup, bossThreshold,
+-- raiderFrame } (nil before first Setup render).
 function M.DebugSetupToggles()
   local sb = M.setupBtns or {}
   return { mlOnBoss = sb.mlOnBoss, backToGroup = sb.backToGroup,
-    bossThreshold = sb.bossThreshold }
+    bossThreshold = sb.bossThreshold, raiderFrame = sb.raiderFrame }
 end
 
 function M.Build()

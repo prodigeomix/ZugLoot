@@ -53,6 +53,11 @@ function M.BeginRoll(itemID, itemLink, mode, silent)
   if not roll.silent and Z.Comm then
     Z.Comm.SendRollReq(itemID, itemLink, mode)
   end
+  -- Local raider frame: master-loot rolls only (default). The person
+  -- running loot already sees the loot window — the raider frame is
+  -- for ROLLERS. ShowItem enforces the gate (group-loot/solo stays
+  -- shut unless the "all" preview opt-in is on); a refusal here is
+  -- normal, never an error — the loot window owns the roll.
   if Z.RaiderLootUI then
     Z.RaiderLootUI.ShowItem(itemLink, Z.DB.rollTime)
   end
