@@ -349,9 +349,17 @@ LW.doAction(1001, "roll")
 ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
 LW.doAction(1001, "finish")
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
+-- Chat carries a REAL clickable link (|Hitem:...|h[Name]|h), never a
+-- bare item:id and never bare white text.
+local sawLink = false
+for i = 1, #printed do
+  if string.find(printed[i], "|Hitem:1001", 1, true) then sawLink = true break end
+end
+ok(sawLink, "chat links the item (|Hitem:1001|h[Dragonfang Blade]|h)")
 local leaked = nil
 for i = 1, #printed do
-  if string.find(printed[i], "item:1001", 1, true) then leaked = printed[i] break end
+  if not string.find(printed[i], "|Hitem:", 1, true)
+      and string.find(printed[i], "item:1001", 1, true) then leaked = printed[i] break end
 end
 ok(leaked == nil, "no bare item:id in chat, got: " .. tostring(leaked))
 local sawNamed = false

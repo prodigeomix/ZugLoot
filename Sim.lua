@@ -38,8 +38,13 @@ function M.Rehearsing()
   return M.rehearseRun == true
 end
 
--- Display name for sim lines (never a bare item:id).
+-- Display link for sim lines (never a bare item:id): the clickable
+-- chat link, same as the raid sees. Prefers the warmed cache, else the
+-- entry link, else a synthesized link off the resolved row.
 local function dispName(itemID, link)
+  if Z.MasterLootUI and Z.MasterLootUI.ChatItemLink then
+    return Z.MasterLootUI.ChatItemLink(itemID, link)
+  end
   if Z.MasterLootUI and Z.MasterLootUI.DisplayItemLink then
     return Z.MasterLootUI.DisplayItemLink(itemID, link)
   end
@@ -74,6 +79,42 @@ local function queueEntry(sheet, itemID, link, opts)
   return entry
 end
 
+-- Resolve a sim row's name + link BEFORE SetItems: sim entries often
+-- carry bare ids (simboss drops, simraid trash) that can never yield a
+-- clickable chat link on their own. GetItemInfo by id fills both from
+-- the client cache when warm; otherwise the sheet quality rides along
+-- so the row (and the chat link built off it) still has a color.
+local function resolveSimRow(itemID, link)
+  local name, fullLink, q = nil, nil, 0
+  if GetItemInfo then
+    local ok, n, l, qq = pcall(GetItemInfo, tonumber(itemID))
+    if ok then
+      if n and n ~= "" then name = n end
+      if l and string.find(tostring(l), "|Hitem:", 1, true) then fullLink = l end
+      if qq then q = qq end
+    end
+    if (not name or not fullLink) and link and link ~= "" then
+      local ok2, n2, l2, q2 = pcall(GetItemInfo, link)
+      if ok2 then
+        if not name and n2 and n2 ~= "" then name = n2 end
+        if not fullLink and l2 and string.find(tostring(l2), "|Hitem:", 1, true) then fullLink = l2 end
+        if (not q or q == 0) and q2 then q = q2 end
+      end
+    end
+  end
+  if not name and link and link ~= "" then
+    local nm = string.match(tostring(link), "%[(.-)%]")
+    if nm and nm ~= "" then name = nm end
+  end
+  if not fullLink and link and string.find(tostring(link), "|Hitem:", 1, true) then
+    fullLink = link
+  end
+  local sheet = Z.DB and Z.DB.sheet
+  if (not q or q == 0) and sheet and sheet.items and sheet.items[itemID] then
+    q = tonumber(sheet.items[itemID].quality) or 0
+  end
+  return name, fullLink or link, q or 0
+end
 local function syncWindow()
   if not Z.LootWindow then return end
   local W = Z.LootWindow
@@ -86,10 +127,9 @@ local function syncWindow()
       if sheet and Z.SRData.ReserveBadge then
         badge = Z.SRData.ReserveBadge(sheet, e.itemID)
       end
-      table.insert(rows, { itemID = e.itemID, link = e.link,
-        quality = (sheet and sheet.items[e.itemID]
-          and sheet.items[e.itemID].quality) or 0,
-        badge = badge })
+      local name, link, q = resolveSimRow(e.itemID, e.link)
+      table.insert(rows, { itemID = e.itemID, link = link, name = name,
+        quality = q, badge = badge })
     end
   end
   W.SetItems(rows, "sim")
@@ -157,10 +197,12 @@ function M.RequestRoll(itemID)
   for i = 1, Z.Util.ArrayCount(entry.rolls) do
     local rv = entry.rolls[i]
     if rv then
+      -- Same intake as live rolls (MasterLootUI.AddRoll) AND the same
+      -- chat line it emits — sim output and raid output share the path,
+      -- only the channel differs (Comm.Say: solo local, party PARTY,
+      -- raid RAID). Verifiable: tests pin the line text per grouping.
       local minR, maxR = M.RangeFor(rv.type)
-      Z.Print(tostring(rv.name) .. " rolls " .. tostring(rv.roll)
-        .. " (" .. tostring(minR) .. "-" .. tostring(maxR) .. ")")
-      MLUI.AddRoll(rv.name, rv.roll, minR, maxR)
+      MLUI.AddRoll(rv.name, rv.roll, minR, maxR, { announce = true })
       n = n + 1
     end
   end

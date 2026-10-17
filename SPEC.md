@@ -597,10 +597,25 @@ window owns everything; closing it ends the roll — exactly like live.
 - `/zl simtmog <itemLink>` — transmog demo: one roller rolls TMOG instead
   of SR; the award window offers the TMOG kind winner next to the outright
   winner and the ML awards either directly.
-- Chat routing matches live rolls: raid → `RAID` + `RAID_WARNING`, party →
-  `PARTY` (warnings have no party channel, so plain party text), solo → local
-  chat frame. Sim sessions are silent on the addon channel (no
-  `ROLL_REQ` broadcast), so other clients' windows and auto-rolls never fire.
+- **One chat router, one set of lines.** Sim and live rolls share
+  `Comm.Say` — the ONLY difference is the channel: solo → the ZugLoot
+  log (local chat frame), party → `PARTY`, raid → `RAID` (`RAID_WARNING`
+  for roll-start warnings; warnings have no party channel, so plain
+  party text). Every roll line goes through shared builders in
+  `MasterLootUI` (`StartLine`, `RollLine` via `AddRoll`, `ResultLine`,
+  `AwardLine`, `SandLine`) + shared senders (`AnnounceRoll`,
+  `AnnounceVerdict`, `AnnounceAward`, `AnnounceSand`) — a solo sim
+  prints byte-for-byte what the raid would see in group chat. Every
+  line carries a REAL clickable item link (`ChatItemLink`: row link →
+  client cache → synthesized `BuildLink` off the resolved name +
+  quality) — never bare white text, never a bare item:id; sim rows
+  pre-resolve name/quality (`Sim.syncWindow`) so bare-id sim entries
+  link correctly too.
+  Verifiable without a raid: `tests/test_chat_routing.lua` pins
+  text + channel per grouping (solo log only, party PARTY-only, raid
+  RAID/RAID_WARNING-only, identical text). Sim sessions stay silent on
+  the addon channel (no `ROLL_REQ` broadcast), so other clients'
+  windows and auto-rolls never fire.
 - Every sim roll is **written back into the sheet**: roll history
   (`sheet.rolls`, mode `SIM`, same shape as live via
   `Resolver.ToHistoryEntry`), won marks, and drop-log entries

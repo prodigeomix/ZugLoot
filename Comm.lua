@@ -162,48 +162,53 @@ function M.BroadcastAward(itemID, winner)
   send("AWARD:" .. tostring(itemID) .. ":" .. tostring(winner), c)
 end
 
--- Local loot channel: solo or non-master loot methods stay on the local
--- chat frame (no one else's chat to coordinate); master loot in a group
--- uses group chat like before. Used by live rolls and sim alike.
-local function localLoot()
-  if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return true end
-  if Z.SRSecurity and Z.SRSecurity.LootMethod then
-    local m = Z.SRSecurity.LootMethod()
-    if m and m ~= "master" then return true end
+-- Single chat router for ALL roll traffic — sim AND live share it.
+-- One policy, channel only: solo -> the ZugLoot log (local chat frame),
+-- party -> PARTY, raid -> RAID (RAID_WARNING when warn=true). No loot-
+-- method branching, no sim special-casing: a sim in a raid reads exactly
+-- like the real roll would, and a solo sim stays local. Callers never
+-- touch SendChatMessage directly.
+--
+-- Verifiable by design: every roll line goes through here, so tests pin
+-- the channel (`SendChatMessage` stub) + text (`Z.Print` stub) per
+-- grouping (see tests/test_chat_routing.lua) — solo prints locally,
+-- party sends PARTY, raid sends RAID/RAID_WARNING, all with identical
+-- text for sim and live rolls.
+function M.Say(msg, warn)
+  msg = tostring(msg)
+  if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then
+    Z.Print(msg)
+    return "local"
   end
-  return false
-end
-
--- Shared chat fan-out for ALL roll traffic (live, sim, rehearsal):
--- master loot in raid -> RAID (RAID_WARNING when warn=true), master
--- loot in party -> PARTY, everything else (solo, group/need/greed,
--- sim echoes) -> local chat frame only (the ZugLoot log). Callers never
--- touch SendChatMessage directly: one router, one channel policy.
--- echo=true marks ML-local fake traffic (sim/rehearsal rolls print on
--- the ML's own frame even in a group — the group never sees fakes).
-function M.Say(msg, warn, echo)
-  if echo or localLoot() then Z.Print(msg) return end
   if Z.SRSecurity and Z.SRSecurity.IsInRaid and Z.SRSecurity.IsInRaid() then
     if SendChatMessage then
-      SendChatMessage(tostring(msg), warn and "RAID_WARNING" or "RAID")
+      SendChatMessage(msg, warn and "RAID_WARNING" or "RAID")
+      return warn and "RAID_WARNING" or "RAID"
     end
-  elseif Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
-    -- No raid warnings in a party: plain party message instead.
-    if SendChatMessage then SendChatMessage(tostring(msg), "PARTY") end
-  else
     Z.Print(msg)
+    return "local"
   end
+  if Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
+    -- No raid warnings in a party: plain party message instead.
+    if SendChatMessage then
+      SendChatMessage(msg, "PARTY")
+      return "PARTY"
+    end
+    Z.Print(msg)
+    return "local"
+  end
+  Z.Print(msg)
+  return "local"
 end
 
--- Group-aware chat for roll traffic. Master loot in raid -> RAID /
--- RAID_WARNING, master loot in party -> PARTY, everything else (solo,
--- group/need/greed etc.) -> local chat frame (Z.Print).
+-- Roll-traffic chat: raid -> RAID, party -> PARTY, solo -> ZugLoot log.
+-- Sim and live share this path; only the channel differs by grouping.
 function M.SayGroup(msg)
-  M.Say(msg, false, false)
+  M.Say(msg, false)
 end
 
 function M.WarnGroup(msg)
-  M.Say(msg, true, false)
+  M.Say(msg, true)
 end
 
 function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
