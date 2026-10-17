@@ -350,12 +350,17 @@ end
 function M.ShowPaste()
   if not pasteFrame then
     pasteFrame = CreateFrame("Frame", "ZugLootImportFrame", UIParent)
-    pasteFrame:SetWidth(420) pasteFrame:SetHeight(300)
+    pasteFrame:SetWidth(560) pasteFrame:SetHeight(460)
     pasteFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     pasteFrame:SetMovable(true) pasteFrame:EnableMouse(true)
     pasteFrame:RegisterForDrag("LeftButton")
     pasteFrame:SetScript("OnDragStart", function() pasteFrame:StartMoving() end)
     pasteFrame:SetScript("OnDragStop", function() pasteFrame:StopMovingOrSizing() end)
+    if pasteFrame.SetResizable then pasteFrame:SetResizable(true) end
+    if pasteFrame.SetMinResize then pasteFrame:SetMinResize(420, 320) end
+    if pasteFrame.SetClampedToScreen then pasteFrame:SetClampedToScreen(true) end
+    if pasteFrame.SetToplevel then pasteFrame:SetToplevel(true) end
+    if pasteFrame.SetFrameStrata then pasteFrame:SetFrameStrata("DIALOG") end
     pasteFrame:SetBackdrop({ bgFile = "Interface/Tooltips/UI-Tooltip-Background",
       edgeFile = "Interface/Tooltips/UI-Tooltip-Border", tile = true, tileSize = 16, edgeSize = 16,
       insets = { left = 4, right = 4, top = 4, bottom = 4 } })
@@ -363,16 +368,79 @@ function M.ShowPaste()
     local title = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
     title:SetPoint("TOP", pasteFrame, "TOP", 0, -10)
     title:SetText("ZugLoot Import")
-    editBox = CreateFrame("EditBox", "ZugLootImportBox", pasteFrame)
-    editBox:SetWidth(380) editBox:SetHeight(180)
-    editBox:SetPoint("TOP", pasteFrame, "TOP", 0, -40)
+    -- Text lives inside a clipping ScrollFrame whose bottom edge stops
+    -- above the button strip, so long pastes scroll instead of painting
+    -- over the buttons (the old fixed-height EditBox drew past its rect).
+    local scroll = CreateFrame("ScrollFrame", "ZugLootImportScroll", pasteFrame)
+    scroll:SetPoint("TOPLEFT", pasteFrame, "TOPLEFT", 20, -40)
+    scroll:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", -38, 55)
+    scroll:EnableMouseWheel(true)
+    scroll:SetBackdrop({ bgFile = "Interface/ChatFrame/ChatFrameBackground", edgeSize = 1 })
+    editBox = CreateFrame("EditBox", "ZugLootImportBox", scroll)
     editBox:SetMultiLine(true) editBox:SetAutoFocus(false)
-    editBox:SetFontObject(GameFontHighlightSmall)
-    editBox:SetBackdrop({ bgFile = "Interface/ChatFrame/ChatFrameBackground", edgeSize = 1 })
+    if editBox.EnableMouse then editBox:EnableMouse(true) end
+    if editBox.SetFontObject and GameFontHighlightSmall then editBox:SetFontObject(GameFontHighlightSmall) end
+    if editBox.SetJustifyH then editBox:SetJustifyH("LEFT") end
+    if editBox.SetJustifyV then editBox:SetJustifyV("TOP") end
+    editBox:SetWidth(480) editBox:SetHeight(200)
+    editBox:SetText("")
+    if editBox.SetMaxLetters then editBox:SetMaxLetters(0) end
+    scroll:SetScrollChild(editBox)
+    local sb = CreateFrame("Slider", "ZugLootImportBar", pasteFrame, "UIPanelScrollBarTemplate")
+    sb:SetPoint("TOPLEFT", scroll, "TOPRIGHT", 4, -16)
+    sb:SetPoint("BOTTOMLEFT", scroll, "BOTTOMRIGHT", 4, 16)
+    local upB = getglobal and getglobal("ZugLootImportBarScrollUpButton")
+    local dnB = getglobal and getglobal("ZugLootImportBarScrollDownButton")
+    if upB and upB.Hide then upB:Hide() end
+    if dnB and dnB.Hide then dnB:Hide() end
+    if sb.SetThumbTexture then sb:SetThumbTexture("Interface\\Buttons\\WHITE8X8") end
+    local th = sb.GetThumbTexture and sb:GetThumbTexture()
+    if th then
+      if th.SetWidth then th:SetWidth(6) end
+      if th.SetHeight then th:SetHeight(24) end
+      if th.SetVertexColor then th:SetVertexColor(0.42, 0.43, 0.48, 0.95) end
+    end
+    if sb.SetMinMaxValues then sb:SetMinMaxValues(0, 0) end
+    if sb.SetValueStep then sb:SetValueStep(24) end
+    if sb.SetValue then sb:SetValue(0) end
+    local function SyncImportScroll()
+      if scroll.UpdateScrollChildRect then scroll:UpdateScrollChildRect() end
+      if sb and sb.SetMinMaxValues and scroll.GetVerticalScrollRange then
+        local range = scroll:GetVerticalScrollRange()
+        if not range or range < 0 then range = 0 end
+        sb:SetMinMaxValues(0, range)
+      end
+    end
+    sb:SetScript("OnValueChanged", function()
+      if scroll.SetVerticalScroll and sb.GetValue then scroll:SetVerticalScroll(sb:GetValue()) end
+    end)
+    if scroll.SetScript then
+      scroll:SetScript("OnVerticalScroll", function()
+        if sb.SetValue and scroll.GetVerticalScroll then sb:SetValue(scroll:GetVerticalScroll()) end
+      end)
+      scroll:SetScript("OnMouseWheel", function()
+        local mn, mx = 0, 0
+        if sb.GetMinMaxValues then mn, mx = sb:GetMinMaxValues() end
+        local v = 0
+        if sb.GetValue then v = sb:GetValue() end
+        v = v - ((arg1 or 0) * 32)
+        if v < mn then v = mn elseif v > mx then v = mx end
+        if sb.SetValue then sb:SetValue(v) end
+      end)
+      scroll:SetScript("OnSizeChanged", function() SyncImportScroll() end)
+    end
+    editBox:SetScript("OnTextChanged", function() SyncImportScroll() end)
+    editBox:SetScript("OnCursorChanged", function() SyncImportScroll() end)
+    editBox:SetScript("OnEscapePressed", function() pasteFrame:Hide() end)
+    -- Buttons sit in their own strip below the scroll rect and above it
+    -- in frame level, so they stay visible and clickable at any size.
+    local baseLvl = 5
+    if pasteFrame.GetFrameLevel then baseLvl = pasteFrame:GetFrameLevel() + 2 end
     local importBtn = CreateFrame("Button", nil, pasteFrame, "UIPanelButtonTemplate")
     importBtn:SetWidth(120) importBtn:SetHeight(24)
     importBtn:SetPoint("BOTTOMLEFT", pasteFrame, "BOTTOMLEFT", 20, 15)
     importBtn:SetText("Import!")
+    if importBtn.SetFrameLevel then importBtn:SetFrameLevel(baseLvl) end
     importBtn:SetScript("OnClick", function()
       -- Anyone may import (local view only; broadcast stays ML/leader).
       M.DoPasteImport(editBox:GetText())
@@ -382,12 +450,42 @@ function M.ShowPaste()
     fileBtn:SetWidth(150) fileBtn:SetHeight(24)
     fileBtn:SetPoint("BOTTOM", pasteFrame, "BOTTOM", 10, 15)
     fileBtn:SetText("Load from File")
+    if fileBtn.SetFrameLevel then fileBtn:SetFrameLevel(baseLvl) end
     fileBtn:SetScript("OnClick", function() M.LoadFromFile() pasteFrame:Hide() end)
     local closeBtn = CreateFrame("Button", nil, pasteFrame, "UIPanelButtonTemplate")
     closeBtn:SetWidth(80) closeBtn:SetHeight(24)
     closeBtn:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", -20, 15)
     closeBtn:SetText("Close")
+    if closeBtn.SetFrameLevel then closeBtn:SetFrameLevel(baseLvl) end
     closeBtn:SetScript("OnClick", function() pasteFrame:Hide() end)
+    -- Resize grip: drag the corner to grow/shrink; the scroll rect
+    -- follows via anchors and the edit width follows the scroll.
+    local grip = CreateFrame("Button", nil, pasteFrame)
+    grip:SetWidth(16) grip:SetHeight(16)
+    grip:SetPoint("BOTTOMRIGHT", pasteFrame, "BOTTOMRIGHT", -4, 4)
+    grip:EnableMouse(true)
+    if grip.SetNormalTexture then
+      grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+    end
+    grip:SetScript("OnMouseDown", function()
+      if pasteFrame.StartSizing then pasteFrame:StartSizing("BOTTOMRIGHT") end
+    end)
+    grip:SetScript("OnMouseUp", function()
+      if pasteFrame.StopMovingOrSizing then pasteFrame:StopMovingOrSizing() end
+    end)
+    if grip.SetFrameLevel then grip:SetFrameLevel(baseLvl) end
+    pasteFrame:SetScript("OnSizeChanged", function()
+      if scroll.GetWidth and editBox.SetWidth then
+        local w = scroll:GetWidth()
+        if w and w > 40 then editBox:SetWidth(w) end
+      end
+      SyncImportScroll()
+    end)
+    if scroll.GetWidth and editBox.SetWidth then
+      local w0 = scroll:GetWidth()
+      if w0 and w0 > 40 then editBox:SetWidth(w0) end
+    end
+    SyncImportScroll()
   end
   -- Non-privileged users may still open the frame to inspect, but Import is gated.
   pasteFrame:Show()
