@@ -412,6 +412,11 @@ ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "ignore won-marks nobody")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "ignore records no history")
 ok(LW.Find(1002) ~= nil, "other row untouched")
 -- Mid-roll ignore ends the live roll; the marked row stays listed.
+-- It is also the LAST actionable row here, so the whole loot window
+-- closes (not just the detail) — Hide() hides the overview frame.
+local hideCalls = 0
+local realHide = LW.Hide
+LW.Hide = function() hideCalls = hideCalls + 1 return realHide() end
 LW.OpenDetail(1002)
 LW.doAction(1002, "roll")
 ML.IntakeChatRoll("Solo rolls 70 (1-100)")
@@ -419,6 +424,8 @@ eq(LW.doAction(1002, "ignore"), "ignored 1002", "ignore mid-roll")
 ok(ML.roll == nil, "ignore ends the roll")
 ok(LW.Find(1002) ~= nil and LW.Find(1002).ignored, "mid-roll ignore stays listed")
 ok(LW.detail == nil, "detail closed: only ignored rows left")
+ok(hideCalls >= 1, "loot window closed: only ignored rows left")
+LW.Hide = realHide
 ok(LW.LootingFinished(), "only ignored rows: looting finished")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 0, "unfinished roll logs nothing")
 -- Award-phase ignore: history from the finished round stays (rolls

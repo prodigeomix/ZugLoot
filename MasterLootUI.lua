@@ -1344,11 +1344,14 @@ function M.Ignore(itemID, source)
   end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
   -- Looting finished (no rows left, or only ignored rows): close the
-  -- detail and let the boss auto-switch flip back to group loot.
+  -- whole loot window and the loot, like the awarded-emptied path in
+  -- RemoveItem — CloseDetail alone would strand the overview open on
+  -- a list of nothing but ignored rows.
   local finished = Z.LootWindow and Z.LootWindow.LootingFinished
     and Z.LootWindow.LootingFinished()
   if finished then
-    if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+    if Z.LootWindow and Z.LootWindow.Hide then Z.LootWindow.Hide() end
+    if CloseLoot then pcall(CloseLoot) end
   end
   M.MaybeGroupAfterBoss(source)
   -- Queue bookkeeping: an ignored sim row must not stay rollable,
