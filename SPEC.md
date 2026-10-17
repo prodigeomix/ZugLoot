@@ -404,9 +404,13 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   The award window keeps **Continue rolling**, **Roll again**,
   **Raid roll** and **Ignore** as bar buttons
   next to the winners. **Ignore** (on every phase: pick, rolling,
-  award) drops the row with no award, no won mark, no corpse take and
-  no roll history — the item stays on the corpse for manual handling,
-  the audit log records it as ignored. Sim rows advance the queue.
+  award) marks the row ignored — it STAYS listed (`[ignored]`) with no
+  award, no won mark, no corpse take and no roll history; the item stays
+  on the corpse for manual handling, the audit log records it as
+  ignored. Sim rows advance the queue. When no rows remain, or only
+  ignored rows do, looting is finished: the detail closes, the loot
+  window can close, and a raid-boss auto-switch flips back to group
+  loot when it should.
   **Close** to dismiss and keep working the overview. `/zl cr`
   returns the item to open.
 - **Award menu** (RollFor finish-popup style): on SR-roll completion nothing is

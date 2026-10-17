@@ -184,6 +184,19 @@ function M.InventedFor(itemID)
   return nil
 end
 
+-- Drop a queued entry (pre-roll award AND ignore paths): an ignored
+-- sim row must not stay rollable either. True when dropped.
+function M.DropSim(itemID)
+  local dropped = false
+  for i = Z.Util.ArrayCount(M.pending), 1, -1 do
+    local e = M.pending[i]
+    if e and e.itemID == itemID and not e.rehearse then
+      table.remove(M.pending, i)
+      dropped = true
+    end
+  end
+  return dropped
+end
 -- Drop a queued rehearsal entry (pre-roll award path). True when dropped.
 function M.DropRehearsal(itemID)
   local dropped = false

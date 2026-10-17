@@ -16,9 +16,12 @@
 -- Data layer (M.items, M.detail) is plain tables so tests drive it
 -- headless; frames are client-only (nil-guarded, mock-safe).
 -- Item: { itemID, link, texture, quality, quantity, slot, badge, status,
---         source, index }
+--         source, index, ignored }
 --   badge: "HR" | "SR" | "SR:n" | ""; status: "open"|"rolling"|"done";
 --   source: "loot"|"sim"; index: 1-based row number (RollFor modern skin).
+--   ignored: true once the ML marks the row ignored — the row STAYS listed
+--   ([ignored]) instead of leaving. Looting is finished when the list is
+--   empty or every row is ignored.
 -- Detail: BuildDetail fields + phase ("pick"|"rolling"|"award"),
 --   rolls ({name, roll, rollType, effective}), menu (award data once
 --   finished), countdown (seconds left) + countdownDur (full window,
@@ -133,6 +136,7 @@ function M.WatchClick(slot, itemID, rowName)
     if Z.MasterLootUI and Z.MasterLootUI.VerifySlot then
       local v = Z.MasterLootUI.VerifySlot(itemID, slot)
       if v == "gone" or v == nil then
+        -- RescanLeftovers closes itself when it actually dropped rows.
         if Z.MasterLootUI.RescanLeftovers then Z.MasterLootUI.RescanLeftovers() end
         return
       end
@@ -178,6 +182,7 @@ function M.SetItems(list, source)
         free = (not e.coin and not e.group) and (e.free and true or false) or false,
         group = (not e.coin) and (e.group and true or false) or false,
         status = "open",
+        ignored = false,
         source = source or "loot",
       }
       M.EnsureResolved(row) -- sheet-style name/icon/link, not "item:<id>"
@@ -200,9 +205,65 @@ function M.SetStatus(itemID, status)
   M.Refresh()
 end
 
-function M.MarkRolling(itemID) M.SetStatus(itemID, "rolling") end
+function M.MarkRolling(itemID)
+  -- Rolling an ignored row handles it after all: the mark clears.
+  local it = M.Find(itemID)
+  if it then it.ignored = nil end
+  M.SetStatus(itemID, "rolling")
+end
 function M.MarkDone(itemID) M.SetStatus(itemID, "done") end
-function M.MarkOpen(itemID) M.SetStatus(itemID, "open") end
+function M.MarkOpen(itemID)
+  -- Reopening handles it after all: the mark clears.
+  local it = M.Find(itemID)
+  if it then it.ignored = nil end
+  M.SetStatus(itemID, "open")
+end
+-- Ignore the item: the row STAYS listed, flagged ([ignored]) — nothing
+-- awarded, looted, won-marked, or logged (the caller writes the audit
+-- entry). Status returns to open: no roll runs behind an ignored row.
+-- The open detail mirrors the flag so the window shows it too.
+function M.MarkIgnored(itemID)
+  local it = M.Find(itemID)
+  if not it then return end
+  it.ignored = true
+  it.status = "open"
+  if M.detail and M.detail.itemID == itemID then
+    M.detail.ignored = true
+    M.detail.status = "open"
+  end
+  M.Refresh()
+  M.RefreshDetail()
+end
+-- Looting is finished when no rows remain OR every remaining row is
+-- ignored: nothing left to roll or award, so the window can close (and
+-- a raid-boss auto-switch flips back to group loot).
+function M.LootingFinished()
+  local n = Z.Util.ArrayCount(M.items)
+  if n == 0 then return true end
+  for i = 1, n do
+    local it = M.items[i]
+    if not (it and it.ignored) then return false end
+  end
+  return true
+end
+-- Shared close-out: when looting just finished (rows dropped and nothing
+-- actionable remains), close the whole window and the loot. Every path
+-- that drops rows funnels through here, so no ordering can strand the
+-- overview open: ignore-first then award/loot the rest closes here just
+-- like ignore-last does.
+--
+-- Reopening NEVER closes: the looter re-looting the corpse gets the
+-- ignored rows back as a second chance to roll them. Only a rescan that
+-- DROPPED something (or an ignore that just marked) may close — a rescan
+-- that changed nothing (reopen, unrelated slot) must leave the window up.
+-- Returns true when it closed.
+function M.CloseIfFinished(dropped)
+  if not dropped then return false end
+  if not M.LootingFinished() then return false end
+  M.Hide()
+  if CloseLoot then pcall(CloseLoot) end
+  return true
+end
 
 -- Blizzard frame takeover (RollFor parity): Blizzard's `LootFrame` is a
 -- real FrameXML window that pops itself on LOOT_OPENED. Hiding it once is
@@ -371,13 +432,10 @@ function M.RemoveItem(itemID, slotHint)
     M.detailFrame = nil
   end
   M.Refresh()
-  -- Nothing left: the corpse is fully distributed. Close the window and
-  -- the loot (Clear() also fires on a fresh LOOT_OPENED, so the next
-  -- corpse starts clean). Every slot had a row, so nothing is stranded.
-  if Z.Util.ArrayCount(M.items) == 0 then
-    M.Hide()
-    if CloseLoot then pcall(CloseLoot) end
-  end
+  -- Nothing actionable left (empty, or only ignored rows): the corpse is
+  -- fully distributed. Close the window and the loot (Clear() also fires
+  -- on a fresh LOOT_OPENED, so the next corpse starts clean).
+  M.CloseIfFinished(true) -- a row just left the list
 end
 
 function M.AllDone()
@@ -393,19 +451,22 @@ function M.Hide()
 end
 
 -- The overview Close button: reconcile with the corpse (confirmed loots
--- drop, failed clicks stay) instead of blindly hiding. Empty tracked list
--- closes the loot out; leftovers stay listed so nothing undistributed is
--- lost by dismissing the window.
+-- drop, failed clicks stay) instead of blindly hiding. Finished (empty
+-- or only ignored rows) closes the loot out; leftovers stay listed so
+-- nothing undistributed is lost by dismissing the window.
 function M.CloseOverview()
   if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
     Z.MasterLootUI.RescanLeftovers()
   end
-  if Z.Util.ArrayCount(M.items) == 0 then
-    M.Hide()
+  -- The X button is an explicit dismiss: a finished list closes the loot
+  -- out, anything else parks. (No drop happened here — the explicit
+  -- close IS the event.)
+  local finishedNow = M.LootingFinished()
+  M.Hide()
+  if finishedNow then
     if CloseLoot then pcall(CloseLoot) end
     return "closed"
   end
-  M.Hide()
   return "parked"
 end
 
@@ -433,6 +494,9 @@ function M.OnEvent(event, _arg1)
       Z.MasterLootUI.ParkCorpse()
     end
   elseif event == "LOOT_SLOT_CLEARED" then
+    -- Slots confirmed off the corpse: the last actionable row may just
+    -- have left while ignored rows stay (ignore-first, loot-rest).
+    -- RescanLeftovers closes itself when it actually dropped rows.
     if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
       Z.MasterLootUI.RescanLeftovers()
     end
@@ -490,6 +554,7 @@ function M.RowText(it)
   if it.badge and it.badge ~= "" then s = s .. " " .. it.badge end
   if it.status == "rolling" then s = s .. " [rolling]"
   elseif it.status == "done" then s = s .. " [done]" end
+  if it.ignored then s = s .. " [ignored]" end
   return s
 end
 
@@ -743,6 +808,7 @@ function M.Refresh()
     if it.quantity and it.quantity > 1 then label = label .. " x" .. it.quantity end
     if it.status == "rolling" then label = label .. " [rolling]"
     elseif it.status == "done" then label = label .. " [done]" end
+    if it.ignored then label = label .. " [ignored]" end
     if name.SetText then
       name:SetText(M.QualityHex(it.quality) .. label .. "|r")
     end
@@ -870,6 +936,7 @@ function M.BuildDetail(itemID)
     badge = it.badge or "",
     status = it.status,
     source = it.source,
+    ignored = it.ignored == true,
     rollers = rollers,
     single = Z.Util.ArrayCount(rollers) == 1,
     phase = "pick", -- pick -> rolling -> award
@@ -1020,6 +1087,7 @@ function M.OnRowClick(itemID, clickSlot)
     -- reported "gray and says done, still not looted" ghost.
     -- "passthrough" (Blizzard frame restored, hands off): nothing to dim.
     if issued == "gone" then
+      -- RescanLeftovers closes itself when it actually dropped rows.
       if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
         Z.MasterLootUI.RescanLeftovers()
       end
@@ -1193,6 +1261,7 @@ function M.DetailLines(d)
   if not d then return lines end
   local head = tostring(d.name or d.link or ("item:" .. d.itemID))
   if d.badge and d.badge ~= "" then head = head .. " [" .. d.badge .. "]" end
+  if d.ignored then head = head .. " [ignored]" end
   if d.phase == "rolling" then
     head = head .. " [rolling"
     -- Headless mirror of the client countdown bar (bar + seconds): the
@@ -1248,7 +1317,7 @@ end
 --          ... (More), Close.
 -- rolling: Finish (resolve now, award on this window), Cancel (end the
 --          roll, window back to pick), Raid roll (end the open roll and
---          raid-roll the item instead), Ignore (drop the row, no award),
+--          raid-roll the item instead), Ignore (mark ignored, no award),
 --          Close (ends roll AND closes).
 -- award:   Award <winner> per winner row, Continue rolling (reopen
 --          intake, landed rolls kept), Roll again (fresh), Raid roll,
@@ -1336,10 +1405,10 @@ function M.doAction(itemID, actionID, extra)
     return M.MoreLines(d)
   end
   if actionID == "ignore" then
-    -- Ignore: drop the row with no award, no won mark, no history.
-    -- Ends any open roll for the item first (same as awarding). The
-    -- item stays on the corpse for manual handling; the audit trail
-    -- records it as ignored.
+    -- Ignore: mark the row ignored (it stays listed) with no award, no
+    -- won mark, no history. Ends any open roll for the item first (same
+    -- as awarding). The item stays on the corpse for manual handling;
+    -- the audit trail records it as ignored.
     if MLUI and MLUI.Ignore then
       MLUI.Ignore(d.itemID, d.source)
       return "ignored " .. tostring(d.itemID)
@@ -1650,7 +1719,7 @@ function M.BuildDetailFrame()
   -- are their own buttons (never inside ...): rolling starts one click,
   -- on every phase that can start one (pick, mid-roll switch, award
   -- re-rolls). Continue rolling reopens a finished round with the
-  -- landed rolls kept. Ignore drops the row on every phase.
+  -- landed rolls kept. Ignore marks the row ignored on every phase.
   -- pick:    "Award <name>" on a single holder, else hidden; Roll +
   --          Raid roll always; ... = award anyone.
   -- rolling: "Finish" (resolve now, award on this window) + Raid roll
@@ -1725,8 +1794,8 @@ function M.BuildDetailFrame()
     if M.detail then M.doAction(M.detail.itemID, "continue") end
   end)
   f.contB = contB
-  -- Ignore: drops the row with no award, no won mark, no corpse take.
-  -- Visible on every phase (pick, rolling, award).
+  -- Ignore: marks the row ignored (stays listed) — no award, no won
+  -- mark, no corpse take. Visible on every phase (pick, rolling, award).
   local ignoreB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   ignoreB:SetHeight(M.BTN_HEIGHT)
   ignoreB:SetText("Ignore")
@@ -1773,6 +1842,7 @@ function M.PaintDetailFrame()
   if f.title and f.title.SetText then
     local head = tostring(d.name or d.link or ("item:" .. d.itemID))
     if d.badge and d.badge ~= "" then head = head .. " [" .. d.badge .. "]" end
+    if d.ignored then head = head .. " [ignored]" end
     if phase == "rolling" then head = head .. " [rolling]" end
     f.title:SetText(head)
   end
@@ -1873,7 +1943,7 @@ function M.PaintDetailFrame()
   end
   -- Award rows: primary = top winner, TMOG button = TMOG kind
   -- winner, Continue rolling + Roll/Raid roll = re-roll buttons,
-  -- Ignore = drop the row, ... = everyone else.
+  -- Ignore = mark ignored, ... = everyone else.
   local function awardButtons()
     if not (d.menu and phase == "award") then
       return
