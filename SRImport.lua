@@ -431,7 +431,13 @@ function M.ShowPaste()
     if editBox.SetFontObject and GameFontHighlightSmall then editBox:SetFontObject(GameFontHighlightSmall) end
     if editBox.SetJustifyH then editBox:SetJustifyH("LEFT") end
     if editBox.SetJustifyV then editBox:SetJustifyV("TOP") end
-    editBox:SetWidth(M.IMPORT_BOX_W - 12) editBox:SetHeight(M.IMPORT_BOX_H - 8)
+    -- Inset the text clear of the border: the EditBox sits 10px inside
+    -- the scroll frame on all sides (plus small text insets), so pasted
+    -- lines never paint over the edge decorations.
+    if editBox.ClearAllPoints then editBox:ClearAllPoints() end
+    if editBox.SetPoint then editBox:SetPoint("TOPLEFT", scroll, "TOPLEFT", 10, -10) end
+    editBox:SetWidth(M.IMPORT_BOX_W - 28) editBox:SetHeight(M.IMPORT_BOX_H - 20)
+    if editBox.SetTextInsets then editBox:SetTextInsets(2, 2, 2, 2) end
     editBox:SetText("")
     if editBox.SetMaxLetters then editBox:SetMaxLetters(0) end
     scroll:SetScrollChild(editBox)

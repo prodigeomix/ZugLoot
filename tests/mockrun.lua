@@ -490,8 +490,8 @@ print("import sheet above main window OK");
 -- dialog focuses it.
 local impBox = Z.SRImport.DebugImportBox();
 assert(impBox ~= nil and impBox.GetText, "import box tracked");
-assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 12, "box width static, got: " .. tostring(impBox.w));
-assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 8, "box height static, got: " .. tostring(impBox.h));
+assert(impBox.w == Z.SRImport.IMPORT_BOX_W - 28, "box width static, got: " .. tostring(impBox.w));
+assert(impBox.h == Z.SRImport.IMPORT_BOX_H - 20, "box height static, got: " .. tostring(impBox.h));
 local impScroll = Z.SRImport.DebugImportScroll();
 assert(impScroll ~= nil, "import scroll tracked");
 assert(impScroll.w == Z.SRImport.IMPORT_BOX_W, "scroll width static, got: " .. tostring(impScroll.w));
@@ -501,6 +501,13 @@ assert(impScroll.h == Z.SRImport.IMPORT_BOX_H, "scroll height static, got: " .. 
 for _, p in ipairs(impScroll.points or {}) do
   assert(p[1] ~= "BOTTOMRIGHT", "scroll must not stretch-anchor");
 end
+-- Text stays clear of the border: box inset 10px inside the scroll on
+-- the top-left (text insets pad the rest).
+local insetTL = false;
+for _, p in ipairs(impBox.points or {}) do
+  if p[1] == "TOPLEFT" and p[4] == 10 and p[5] == -10 then insetTL = true end
+end
+assert(insetTL, "box inset clear of the border");
 assert(impScroll:GetScript("OnMouseDown"), "box click-to-focus wired");
 impScroll:GetScript("OnMouseDown")();
 assert(impBox.focused == true, "click focuses the box");
