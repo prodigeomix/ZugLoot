@@ -1,7 +1,31 @@
 -- ZugLoot/Util.lua
 -- PURE helpers. No WoW API. Lua 5.0-safe (no `#`, no goto, no bitwise ops).
 -- Loaded both in-game (via toc) and under stock lua in tests/.
+-- Compat shims below run at load (2nd in the toc, before every user):
+-- strict 5.0 clients lack string.match/string.gmatch, so we polyfill
+-- them off string.find/string.gfind. Additive only — never replaces an
+-- existing (possibly faster, C-provided) implementation.
 local M = {}
+
+if not string.match then
+  -- string.match(s, pat [, init]): like string.find but returns the
+  -- captures (or the whole match when the pattern has none), nil on miss.
+  local unpack_ = table.unpack or unpack
+  function string.match(s, pat, init)
+    local res = { string.find(s, pat, init) }
+    if res[1] == nil then return nil end
+    if M.ArrayCount(res) > 2 then
+      table.remove(res, 1)
+      table.remove(res, 1)
+      return unpack_(res)
+    end
+    return string.sub(s, res[1], res[2])
+  end
+end
+
+if not string.gmatch then
+  string.gmatch = string.gfind
+end
 
 -- 5.0 (client) uses string.gfind, 5.1+ uses string.gmatch.
 local Gfind = string.gmatch or string.gfind

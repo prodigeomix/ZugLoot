@@ -402,4 +402,74 @@ local candNames = {}
 for i = 1, #menu.candidates do candNames[menu.candidates[i].name] = true end
 ok(not candNames["Aaa"] and not candNames["Bbb"], "rollers never repeat as candidates")
 
+-- 14. Auto loot-method switching (party-leader boss flow): option off =
+-- nothing happens; option on + leader + boss target = master loot with
+-- self as master; fully looting (last row gone) flips back to group.
+-- Non-leaders, non-boss targets, and solo never switch.
+resetHarness()
+local lootCalls = {}
+SetLootMethod = function(m, master) table.insert(lootCalls, { m, master }) return true end
+local targetCls = "worldboss"
+UnitExists = function(u) return u == "target" end
+UnitClassification = function(u) return targetCls end
+grouping = "party"
+ZugLoot.SRSecurity.AmLeader = function() return true end
+ZugLoot.SRSecurity.LootMethod = function() return "group" end
+ZugLoot.DB.mlOnBoss = true
+ZugLoot.DB.backToGroup = true
+ML.autoML = false
+ok(ML.MaybeMasterOnBoss(), "leader + boss target switches")
+eq(lootCalls[1][1], "master", "master loot method")
+eq(lootCalls[1][2], "SoloPlayer", "self as master")
+ok(ML.autoML, "auto-switch flagged")
+ok(not ML.MaybeMasterOnBoss(), "second select is a no-op")
+eq(#lootCalls, 1, "no double switch")
+-- Non-boss target: no switch.
+targetCls = "normal"
+ML.autoML = false
+ok(not ML.MaybeMasterOnBoss(), "trash target never switches")
+eq(#lootCalls, 1, "still one call")
+-- Non-leader: no switch even on a boss.
+targetCls = "worldboss"
+ZugLoot.SRSecurity.AmLeader = function() return false end
+ok(not ML.MaybeMasterOnBoss(), "non-leader never switches")
+eq(#lootCalls, 1, "still one call")
+-- Option off: no switch.
+ZugLoot.SRSecurity.AmLeader = function() return true end
+ZugLoot.DB.mlOnBoss = false
+ok(not ML.MaybeMasterOnBoss(), "option off never switches")
+eq(#lootCalls, 1, "still one call")
+-- Switch-back: last row gone after OUR switch flips to group.
+ZugLoot.DB.mlOnBoss = true
+ML.autoML = true
+LW.SetItems({ { itemID = 1001, link = "item:1001" } }, "loot")
+ok(not ML.MaybeGroupAfterBoss("raid"), "rows left: no switch-back")
+eq(#lootCalls, 1, "still one call")
+LW.RemoveItem(1001)
+ok(ML.MaybeGroupAfterBoss("raid"), "emptied list switches back")
+eq(lootCalls[2][1], "group", "back to group loot")
+ok(not ML.autoML, "flag cleared")
+-- Sim rows never trigger the switch-back.
+ML.autoML = true
+ok(not ML.MaybeGroupAfterBoss("sim"), "sim never switches back")
+eq(#lootCalls, 2, "still two calls")
+ok(ML.autoML, "sim keeps the flag")
+-- Awarding the last row switches back through the award path.
+ML.autoML = true
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+ML.AwardDirect(1001, "Aaa", "loot")
+eq(lootCalls[3][1], "group", "award-emptied list switches back")
+ok(not ML.autoML, "award clears the flag")
+-- Ignoring the last row switches back through the ignore path.
+ML.autoML = true
+ML.OnLootOpened()
+ML.Ignore(1001, "loot")
+eq(lootCalls[4][1], "group", "ignore-emptied list switches back")
+SetLootMethod = nil
+UnitExists = nil
+UnitClassification = nil
+ZugLoot.SRSecurity.AmLeader = function() return true end
+grouping = "solo"
+
 return T

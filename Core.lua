@@ -3,6 +3,7 @@
 -- (In-game only; tests load pure files directly.)
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
+local frame = nil
 
 Z.DB = nil
 Z.CharDB = nil
@@ -59,6 +60,11 @@ function Z.InitDB()
   -- (a broken loot path won't fix itself on relog); re-arm via Setup tab
   -- or /zl lootframe. Never nil-guarded away: false is a valid state.
   if ZugLootDB.lootTakeover == nil then ZugLootDB.lootTakeover = true end
+  -- Auto loot-method switching (party-leader boss flow, Setup tab):
+  -- flip to master loot when the leader selects a boss, flip back to
+  -- group loot once the boss is fully looted. Absent = off.
+  if ZugLootDB.mlOnBoss == nil then ZugLootDB.mlOnBoss = false end
+  if ZugLootDB.backToGroup == nil then ZugLootDB.backToGroup = false end
   -- Pysanka raid-setup sheet (invitation word, buff/tank/debuff tables).
   if Z.Pysanka and Z.Pysanka.Ensure then Z.Pysanka.Ensure(ZugLootDB) end
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
@@ -129,6 +135,7 @@ function Z.OnEvent(event, arg1, arg2, arg3, arg4)
 end
 
 function Z.Init()
+  if not CreateFrame then return end
   frame = CreateFrame("Frame", "ZugLootFrame")
   frame:RegisterEvent("ADDON_LOADED")
   frame:RegisterEvent("CHAT_MSG_ADDON")
@@ -143,6 +150,7 @@ function Z.Init()
   frame:RegisterEvent("UI_ERROR_MESSAGE")
   frame:RegisterEvent("RAID_ROSTER_UPDATE")
   frame:RegisterEvent("PARTY_MEMBERS_CHANGED")
+  frame:RegisterEvent("PLAYER_TARGET_CHANGED")
   frame:SetScript("OnEvent", function() Z.OnEvent(event, arg1, arg2, arg3, arg4) end)
   SLASH_ZUGLOOT1 = "/zl"
   SLASH_ZUGLOOT2 = "/zugloot"

@@ -96,7 +96,8 @@ function M.ExtractMeta(text)
     elseif k == "src" then meta.source = munesc(v) end
   end
   -- Strip the META line (first occurrence) so item parsing never sees it.
-  local stripped, n = string.gsub(text, "META;" .. metaLine:gsub("(%W)", "%%%1"), "", 1)
+  local escapedMeta = string.gsub(metaLine, "(%W)", "%%%1")
+  local stripped, n = string.gsub(text, "META;" .. escapedMeta, "", 1)
   if n == 0 then stripped = text end
   return meta, stripped
 end

@@ -39,31 +39,43 @@ function M.Pending()
   return n
 end
 
+local dueScratch = {}
+local keepScratch = {}
+
 -- Advance the clock by dt seconds, firing everything due. Collect-then-fire
 -- so callbacks may safely schedule (or cancel) more timers.
+-- ZERO ALLOCATIONS: early-exits when empty; reuses static buffers.
 function M.Update(dt)
+  if M.queue[1] == nil then return end
   dt = tonumber(dt) or 0
-  local due = {}
-  local keep = {}
-  for i = 1, qlen() do
+  local n = qlen()
+  local dueCount = 0
+  local keepCount = 0
+  for i = 1, n do
     local h = M.queue[i]
-    if h.dead then
-      -- drop
-    else
+    if h and not h.dead then
       h.t = h.t - dt
       if h.t <= 0 then
         h.dead = true
-        table.insert(due, h.fn)
+        dueCount = dueCount + 1
+        dueScratch[dueCount] = h.fn
       else
-        table.insert(keep, h)
+        keepCount = keepCount + 1
+        keepScratch[keepCount] = h
       end
     end
   end
-  M.queue = keep
-  local j = 1
-  while due[j] ~= nil do
-    if due[j] then due[j]() end
-    j = j + 1
+  for i = 1, keepCount do
+    M.queue[i] = keepScratch[i]
+    keepScratch[i] = nil
+  end
+  for i = keepCount + 1, n do
+    M.queue[i] = nil
+  end
+  for j = 1, dueCount do
+    local fn = dueScratch[j]
+    dueScratch[j] = nil
+    if fn then fn() end
   end
 end
 

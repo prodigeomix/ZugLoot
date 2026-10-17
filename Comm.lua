@@ -7,10 +7,24 @@ local M = {}
 Z.Comm = M
 
 local function send(msg, channel)
-  if SendAddonMessage then
-    SendAddonMessage(Z.PREFIX, msg, channel or "RAID")
+  channel = channel or M.Channel() or "RAID"
+  if ChatThrottleLib and ChatThrottleLib.SendAddonMessage then
+    ChatThrottleLib:SendAddonMessage("NORMAL", Z.PREFIX, msg, channel)
+  elseif SendAddonMessage then
+    SendAddonMessage(Z.PREFIX, msg, channel)
   end
 end
+
+local function printMsg(msg)
+  if Z.Print then Z.Print(msg) end
+end
+
+M.CHUNK_SIZE = 160 -- Safe headroom under the 254-byte MTU limit
+M.DEBOUNCE_INTERVAL = 1.5
+M.lastBroadcastTime = 0
+M.lastSheetReqTime = 0
+M.lastVerReqTime = 0
+M.chunkBuffers = {}
 
 function M.Channel()
   if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return nil end
@@ -41,12 +55,28 @@ function M.EncodeSheetPayload(sheet)
   esc = string.gsub(esc, "|", "%%B")
   return "ESC" .. esc
 end
-function M.BroadcastSheet(sheet, raidID)
+
+function M.BroadcastSheet(sheet, raidID, targetChannel)
   if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return end
-  local channel = M.Channel()
+  local channel = targetChannel or M.Channel()
   if not channel then return end
+  local now = (GetTime and GetTime()) or (time and time()) or 0
+  if (now - (M.lastBroadcastTime or 0)) < M.DEBOUNCE_INTERVAL then return end
+  M.lastBroadcastTime = now
   local ver = 1
-  send("SHEET:" .. ver .. ":" .. tostring(raidID) .. ":" .. M.EncodeSheetPayload(sheet), channel)
+  local payload = M.EncodeSheetPayload(sheet)
+  local plen = string.len(payload)
+  if plen <= M.CHUNK_SIZE then
+    send("SHEET:" .. ver .. ":" .. tostring(raidID) .. ":" .. payload, channel)
+  else
+    local total = math.floor((plen + M.CHUNK_SIZE - 1) / M.CHUNK_SIZE)
+    for seq = 1, total do
+      local startIdx = (seq - 1) * M.CHUNK_SIZE + 1
+      local endIdx = seq * M.CHUNK_SIZE
+      local chunk = string.sub(payload, startIdx, endIdx)
+      send("SHEET_C:" .. ver .. ":" .. tostring(raidID) .. ":" .. seq .. ":" .. total .. ":" .. chunk, channel)
+    end
+  end
 end
 
 function M.SendRollReq(itemID, itemLink, mode)
@@ -56,6 +86,9 @@ end
 function M.RequestVersions()
   local c = M.Channel()
   if not c then return end
+  local now = (GetTime and GetTime()) or (time and time()) or 0
+  if (now - (M.lastVerReqTime or 0)) < M.DEBOUNCE_INTERVAL then return end
+  M.lastVerReqTime = now
   send("VER_REQ", c)
 end
 
@@ -85,12 +118,15 @@ end
 function M.RequestSheet()
   local c = M.Channel()
   if not c then
-    Z.Print("No group to ask — solo has no sheet source.")
+    printMsg("No group to ask — solo has no sheet source.")
     return
   end
+  local now = (GetTime and GetTime()) or (time and time()) or 0
+  if (now - (M.lastSheetReqTime or 0)) < M.DEBOUNCE_INTERVAL then return end
+  M.lastSheetReqTime = now
   local me = (UnitName and UnitName("player")) or "?"
   send("SHEET_REQ", c)
-  Z.Print("Sheet requested from the master looter (" .. tostring(me) .. " asked).")
+  printMsg("Sheet requested from the master looter (" .. tostring(me) .. " asked).")
 end
 
 -- Ask ONE player for their sheet (/zl sync <name>): targeted request.
@@ -101,16 +137,16 @@ end
 function M.RequestSheetFrom(rawName)
   local c = M.Channel()
   if not c then
-    Z.Print("No group to ask — solo has no sheet source.")
+    printMsg("No group to ask — solo has no sheet source.")
     return
   end
   local name = M.StripPlayerLink(rawName)
   if not name or name == "" then
-    Z.Print("Usage: /zl sync <name>")
+    printMsg("Usage: /zl sync <name>")
     return
   end
   send("SHEET_REQ:" .. name, c)
-  Z.Print("Sheet requested from " .. name .. ".")
+  printMsg("Sheet requested from " .. name .. ".")
 end
 function M.AnnounceVersion()
   local c = M.Channel()
@@ -167,15 +203,58 @@ function M.WarnGroup(msg)
   M.Say(msg, true, false)
 end
 
+function M.ApplyReceivedSheet(ver, raidID, payload, sender)
+  -- A sheet landed: cancel any pending leader reply (the ML answered
+  -- first — the group must never get two competing sheets).
+  if Z.SRSecurity and Z.SRSecurity.NoteSheetArrived then
+    Z.SRSecurity.NoteSheetArrived()
+  end
+  -- SECURITY: only ML or raid leader/assistant may push sheets.
+  if not Z.SRSecurity.CanAcceptFrom(sender) then
+    printMsg("Ignored sheet from " .. tostring(sender) .. " (not ML/leader).")
+    return
+  end
+  local sheet, err = Z.SRImport.DeserializeSheet(payload)
+  if not sheet then printMsg("Sheet import failed: " .. tostring(err)) return end
+  -- Envelope (META line) carries the raid identity; the message raidID
+  -- and the trusted sender fill gaps it leaves (legacy senders send no
+  -- META at all). Sender always wins: we know who pushed it.
+  sheet.meta = sheet.meta or {}
+  if not sheet.meta.raidID or sheet.meta.raidID == "" then
+    sheet.meta.raidID = raidID
+  end
+  sheet.meta.importedBy = sender
+  -- Stale guard: same raid compares content revision (importedAt from
+  -- the META envelope), not the raidID string — a re-sent update keeps
+  -- its raidID but carries a NEWER stamp and must apply. Refuse BEFORE
+  -- archiving (archiving first would snapshot progress, then drop it).
+  if Z.SRImport and Z.SRImport.SheetIsStale
+      and Z.SRImport.SheetIsStale(Z.DB and Z.DB.sheet, sheet) then
+    printMsg("Ignored stale sheet " .. tostring(sheet.meta.raidID)
+      .. " (a newer update is already applied).")
+    return
+  end
+  if Z.RaidArchive then
+    Z.RaidArchive.ArchiveActive(Z.DB, (time and time()) or 0)
+  end
+  Z.DB.sheet = sheet
+  if Z.RaidArchive then
+    Z.RaidArchive.SyncActive(Z.DB, (time and time()) or 0)
+  end
+  printMsg("Sheet received from " .. tostring(sender) .. " (" .. tostring(raidID) .. ")")
+  if Z.MainWindow then Z.MainWindow.Refresh() end
+  if Z.SRView then Z.SRView.Refresh() end
+end
+
 function M.OnEvent(event, a1, a2, a3, a4)
   if event == "CHAT_MSG_ADDON" then
     local prefix, msg, channel, sender = a1, a2, a3, a4
     if prefix ~= Z.PREFIX then return end
-    M.OnMessage(tostring(msg or ""), sender)
+    M.OnMessage(tostring(msg or ""), sender, channel)
   end
 end
 
-function M.OnMessage(msg, sender)
+function M.OnMessage(msg, sender, channel)
   local tag = string.match(msg, "^(%S+):")
   -- Sheet request: answer ONLY when entitled, ML first. The ML answers
   -- at once when they hold a sheet; the raid leader/assistant answers
@@ -194,7 +273,7 @@ function M.OnMessage(msg, sender)
       if not me or Z.Comm.StripPlayerLink(target) ~= me then return end
     end
     if Z.SRSecurity and Z.SRSecurity.ShouldAnswerSheetReq then
-      Z.SRSecurity.ShouldAnswerSheetReq(sender, target and true or false)
+      Z.SRSecurity.ShouldAnswerSheetReq(sender, target and true or false, channel)
     end
     return
   end
@@ -227,49 +306,42 @@ function M.OnMessage(msg, sender)
     end
     return
   end
-  if string.sub(msg, 1, 6) == "SHEET:" then
-    -- A sheet landed: cancel any pending leader reply (the ML answered
-    -- first — the group must never get two competing sheets).
-    if Z.SRSecurity and Z.SRSecurity.NoteSheetArrived then
-      Z.SRSecurity.NoteSheetArrived()
+  if string.sub(msg, 1, 8) == "SHEET_C:" then
+    local ver, raidID, seqStr, totStr, chunk = string.match(msg, "^SHEET_C:(%d+):([^:]+):(%d+):(%d+):(.*)$")
+    local seq = tonumber(seqStr)
+    local total = tonumber(totStr)
+    if not (seq and total and chunk) then
+      printMsg("Bad sheet chunk from " .. tostring(sender))
+      return
     end
-    -- SECURITY: only ML or raid leader/assistant may push sheets.
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored sheet from " .. tostring(sender) .. " (not ML/leader).")
+      printMsg("Ignored sheet chunk from " .. tostring(sender) .. " (not ML/leader).")
       return
     end
+    local now = (GetTime and GetTime()) or (time and time()) or 0
+    M.chunkBuffers = M.chunkBuffers or {}
+    local buf = M.chunkBuffers[raidID]
+    if not buf or (now - (buf.t or 0) > 15) then
+      buf = { total = total, chunks = {}, count = 0, t = now, sender = sender }
+      M.chunkBuffers[raidID] = buf
+    end
+    if not buf.chunks[seq] then
+      buf.chunks[seq] = chunk
+      buf.count = buf.count + 1
+    end
+    if buf.count == total then
+      local parts = {}
+      for i = 1, total do table.insert(parts, buf.chunks[i] or "") end
+      local fullPayload = table.concat(parts, "")
+      M.chunkBuffers[raidID] = nil
+      M.ApplyReceivedSheet(tonumber(ver) or 1, raidID, fullPayload, sender)
+    end
+    return
+  end
+  if string.sub(msg, 1, 6) == "SHEET:" then
     local ver, raidID, payload = string.match(msg, "SHEET:(%d+):([^:]+):(.+)$")
-    if not payload then Z.Print("Bad sheet message from " .. tostring(sender)) return end
-    local sheet, err = Z.SRImport.DeserializeSheet(payload)
-    if not sheet then Z.Print("Sheet import failed: " .. tostring(err)) return end
-    -- Envelope (META line) carries the raid identity; the message raidID
-    -- and the trusted sender fill gaps it leaves (legacy senders send no
-    -- META at all). Sender always wins: we know who pushed it.
-    sheet.meta = sheet.meta or {}
-    if not sheet.meta.raidID or sheet.meta.raidID == "" then
-      sheet.meta.raidID = raidID
-    end
-    sheet.meta.importedBy = sender
-    -- Stale guard: same raid compares content revision (importedAt from
-    -- the META envelope), not the raidID string — a re-sent update keeps
-    -- its raidID but carries a NEWER stamp and must apply. Refuse BEFORE
-    -- archiving (archiving first would snapshot progress, then drop it).
-    if Z.SRImport and Z.SRImport.SheetIsStale
-        and Z.SRImport.SheetIsStale(Z.DB and Z.DB.sheet, sheet) then
-      Z.Print("Ignored stale sheet " .. tostring(sheet.meta.raidID)
-        .. " (a newer update is already applied).")
-      return
-    end
-    if Z.RaidArchive then
-      Z.RaidArchive.ArchiveActive(Z.DB, (time and time()) or 0)
-    end
-    Z.DB.sheet = sheet
-    if Z.RaidArchive then
-      Z.RaidArchive.SyncActive(Z.DB, (time and time()) or 0)
-    end
-    Z.Print("Sheet received from " .. tostring(sender) .. " (" .. tostring(raidID) .. ")")
-    if Z.MainWindow then Z.MainWindow.Refresh() end
-    if Z.SRView then Z.SRView.Refresh() end
+    if not payload then printMsg("Bad sheet message from " .. tostring(sender)) return end
+    M.ApplyReceivedSheet(tonumber(ver) or 1, raidID, payload, sender)
     return
   end
 end

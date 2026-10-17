@@ -1411,6 +1411,40 @@ function M.RenderSetup()
   end)
   Tip(b7, "Rehearse", "Solo master-loot practice: corpse items roll with invented raiders.",
     "Solo only. Awards really loot the corpse.")
+  -- Auto loot-method switching (party-leader boss flow): flip to master
+  -- loot when the leader selects a boss, flip back to group loot once
+  -- the boss is fully looted. Two independent toggles, off by default.
+  local b8 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b8:SetWidth(150) b8:SetHeight(24)
+  b8:SetPoint("TOPLEFT", row, "TOPLEFT", 162, -116)
+  local function mlLabel()
+    if Z.DB and Z.DB.mlOnBoss then return "ML on boss: ON" end
+    return "ML on boss: OFF"
+  end
+  b8:SetText(mlLabel())
+  b8:SetScript("OnClick", function()
+    if Z.DB then Z.DB.mlOnBoss = not Z.DB.mlOnBoss end
+    b8:SetText(mlLabel())
+  end)
+  Tip(b8, "ML on boss", "As party/raid leader, switch to master loot when you select a boss.",
+    "Leader only. Worldboss + elite targets.")
+  local b9 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+  b9:SetWidth(150) b9:SetHeight(24)
+  b9:SetPoint("TOPLEFT", b8, "BOTTOMLEFT", 0, -8)
+  local function grpLabel()
+    if Z.DB and Z.DB.backToGroup then return "Back to group: ON" end
+    return "Back to group: OFF"
+  end
+  b9:SetText(grpLabel())
+  b9:SetScript("OnClick", function()
+    if Z.DB then Z.DB.backToGroup = not Z.DB.backToGroup end
+    b9:SetText(grpLabel())
+  end)
+  Tip(b9, "Back to group", "After the boss is fully looted, switch back to group loot.",
+    "Only after OUR auto-switch (never yanks a manual change).")
+  M.setupBtns = M.setupBtns or {}
+  M.setupBtns.mlOnBoss = b8
+  M.setupBtns.backToGroup = b9
   local info = FS(row, "GameFontHighlightSmall",
     "Roll time: " .. tostring(Z.DB and Z.DB.rollTime or 15) .. "s  (/zl time N)\n" ..
     "Drops logged: " .. tostring(Z.Util.ArrayCount((Z.DB and Z.DB.drops) or {})) .. "  (/zl log)\n" ..
@@ -1575,6 +1609,14 @@ function M.DebugHeaderButtons()
   out.getsheetVisible = M.reqSheetBtn and M.reqSheetBtn.IsVisible
     and M.reqSheetBtn:IsVisible() or false
   return out
+end
+
+-- Setup-tab toggle buttons (headless-testable): the auto loot-method
+-- switching pair. Returns { mlOnBoss, backToGroup } (nil before first
+-- Setup render).
+function M.DebugSetupToggles()
+  local sb = M.setupBtns or {}
+  return { mlOnBoss = sb.mlOnBoss, backToGroup = sb.backToGroup }
 end
 
 function M.Build()

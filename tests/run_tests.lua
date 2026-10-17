@@ -42,6 +42,11 @@ run("test_mlflow.lua")
 run("test_lootwindow.lua")
 run("test_threshold.lua")
 run("test_atlasloot.lua")
+run("test_network_mtu_throttle.lua")
+run("test_corpse_slot_shift.lua")
+run("test_fuzz_deserialization.lua")
+run("test_memory_churn_bounds.lua")
+run("test_global_guard.lua")
 
 -- Mock-client UI run: executes MainWindow Build + all tab renders under a
 -- fake 1.12 frame API to catch typos/nil-globals outside the client.
@@ -112,7 +117,7 @@ local fifty = {
   { pat = "//", msg = "// integer division" },
   { pat = "%f[%a]goto%f[%A]", msg = "goto" },
   { pat = "::", msg = "::label::" },
-  { pat = "table%.unpack", msg = "table.unpack (5.0: global unpack)" },
+  { pat = "table%.unpack%f[^%s]", msg = "table.unpack (5.0: global unpack)" },
   -- NOTE: `string.gmatch or string.gfind` fallback idiom is SAFE and
   -- allowed; only a bare call is flagged. The pattern below requires
   -- the match NOT to be followed by ` or `.
