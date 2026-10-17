@@ -1181,15 +1181,28 @@ end
 -- never yanked back. All client calls pcall-guarded + nil-safe.
 M.autoML = false
 
--- Boss at the cursor? worldboss always; elite too (instanced bosses
--- rarely carry the worldboss flag). Pure shape, WoW globals nil-safe.
+-- Boss at the cursor? worldboss flag OR high HP. UnitClassification is
+-- too weak alone: indoor raid bosses usually report plain elite (and
+-- elite can't be the trigger — in raids every trash mob is elite and
+-- trash wants group loot). So: worldboss always wins; otherwise the
+-- target's max HP must clear BOSS_HP_MIN. Classic numbers: raid bosses
+-- bottom out ~200k (ZG priests) up to millions (Naxx); raid trash sits
+-- far below — except AQ40 Anubisath sentinels (~300k), which trip the
+-- floor too (harmless: AQ40 guilds run ML through trash anyway).
+-- Raid-only on top: the flow is a raid flow. Pure shape, WoW globals
+-- nil-safe.
+M.BOSS_HP_MIN = 100000
 function M.IsBossTarget()
   if not (UnitExists and UnitClassification) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.IsInRaid
+      and Z.SRSecurity.IsInRaid()) then return false end
   local okE, exists = pcall(UnitExists, "target")
   if not (okE and exists) then return false end
   local okC, cls = pcall(UnitClassification, "target")
-  if not okC then return false end
-  return cls == "worldboss" or cls == "elite"
+  if okC and cls == "worldboss" then return true end
+  if not UnitHealthMax then return false end
+  local okH, hp = pcall(UnitHealthMax, "target")
+  return okH and type(hp) == "number" and hp >= M.BOSS_HP_MIN
 end
 
 function M.CanAutoSwitch()
@@ -1219,9 +1232,64 @@ function M.CurrentLootMethod()
   return nil
 end
 
+-- Boss threshold (Setup dropdown): the loot threshold applied with the
+-- auto-switch to master loot. 1 common .. 4 epic. Pure data + validated
+-- setter (headless-testable); the client call runs inside the switch.
+M.THRESHOLDS = {
+  { value = 1, label = "Common" },
+  { value = 2, label = "Uncommon" },
+  { value = 3, label = "Rare" },
+  { value = 4, label = "Epic" },
+}
+function M.ThresholdChoices()
+  local out = {}
+  for i = 1, Z.Util.ArrayCount(M.THRESHOLDS) do
+    local t = M.THRESHOLDS[i]
+    table.insert(out, { value = t.value,
+      label = t.label .. " (" .. t.value .. ")" })
+  end
+  return out
+end
+function M.BossThreshold()
+  local n = Z.DB and tonumber(Z.DB.bossThreshold) or nil
+  if n and n >= 1 and n <= 4 then return math.floor(n) end
+  return 4 -- default: bosses drop epics, threshold follows
+end
+function M.ThresholdLabel(n)
+  n = tonumber(n)
+  for i = 1, Z.Util.ArrayCount(M.THRESHOLDS) do
+    local t = M.THRESHOLDS[i]
+    if t.value == n then return t.label .. " (" .. t.value .. ")" end
+  end
+  return "Epic (4)"
+end
+-- Validated setter: stores the preference (1-4). Anything else refuses.
+-- Applies live ONLY through the boss auto-switch, never here.
+function M.SetBossThreshold(n)
+  n = tonumber(n)
+  if not (n and n >= 1 and n <= 4) then return false end
+  n = math.floor(n)
+  if Z.DB then Z.DB.bossThreshold = n end
+  return true
+end
+function M.CurrentThreshold()
+  if GetLootThreshold then
+    local ok, t = pcall(GetLootThreshold)
+    if ok and type(t) == "number" then return t end
+  end
+  return nil
+end
+function M.TrySetThreshold(n)
+  if not SetLootThreshold then return false end
+  local ok = pcall(SetLootThreshold, n)
+  return ok and true or false
+end
+
 -- Leader selected a boss: flip to master loot (once — already-master
 -- or already-switched is a no-op). Master is self: only the leader's
 -- own client runs this, so handing master to self is always right.
+-- The Setup threshold rides along (previous one remembered for the
+-- switch-back).
 function M.MaybeMasterOnBoss()
   if not M.CanAutoSwitch() then return false end
   if M.autoML then return false end
@@ -1231,7 +1299,14 @@ function M.MaybeMasterOnBoss()
   if UnitName then local ok, nm = pcall(UnitName, "player") if ok then me = nm end end
   if M.TrySetLoot("master", me) then
     M.autoML = true
-    Z.Print("Boss selected — loot method set to master loot.")
+    M.prevThreshold = M.CurrentThreshold()
+    local want = M.BossThreshold()
+    if M.TrySetThreshold(want) then
+      Z.Print("Boss selected — loot method set to master loot, threshold "
+        .. M.ThresholdLabel(want) .. ".")
+    else
+      Z.Print("Boss selected — loot method set to master loot.")
+    end
     return true
   end
   return false
@@ -1239,7 +1314,8 @@ end
 
 -- A row left the list (award or ignore): with backToGroup on and OUR
 -- switch active, an emptied list means the boss is fully looted — flip
--- back to group loot. Sim rows never count (no corpse, no method).
+-- back to group loot and restore the remembered threshold. Sim rows
+-- never count (no corpse, no method).
 function M.MaybeGroupAfterBoss(source)
   if source == "sim" then return false end
   if not M.autoML then return false end
@@ -1250,6 +1326,10 @@ function M.MaybeGroupAfterBoss(source)
       and Z.Util.ArrayCount(Z.LootWindow.items) > 0 then return false end
   if M.TrySetLoot("group") then
     M.autoML = false
+    if M.prevThreshold then
+      M.TrySetThreshold(M.prevThreshold)
+      M.prevThreshold = nil
+    end
     Z.Print("Boss fully looted — loot method set back to group loot.")
     return true
   end
@@ -1297,6 +1377,194 @@ function M.Ignore(itemID, source)
     end
   end
   return true
+end
+
+-- Hourglass Sand distributor (item 19183): the ML hands a sand stack to
+-- the raid member with the lowest running total, so sand evens out over
+-- the raid. Ledger lives in Z.DB.sand ({ [name] = count }, SavedVariables)
+-- and is independent of the SR sheet: sand is never SR'd, never won-
+-- marked, never roll-logged. One corpse slot = one handoff = the whole
+-- stack to a single recipient; fairness comes from the ledger, not from
+-- splitting (a corpse slot cannot be split).
+M.SAND_ITEM_ID = 19183
+M.SAND_NAME = "Hourglass Sand"
+function M.IsSandItem(itemID)
+  return tonumber(itemID) == M.SAND_ITEM_ID
+end
+-- Ledger table, created on demand. Falls back to a transient table when
+-- there is no DB (headless tests driving the flow without InitDB).
+M._sandFallback = {}
+function M.SandLedger()
+  if Z.DB then
+    Z.DB.sand = Z.DB.sand or {}
+    return Z.DB.sand
+  end
+  return M._sandFallback
+end
+function M.SandTotal(ledger, name)
+  return tonumber((ledger or {})[name]) or 0
+end
+-- Pick the recipient: lowest ledger total, ties broken by roster order
+-- (stable, same ethos as the frozen raid-roll roster). Pure.
+function M.SandPick(roster, ledger)
+  local best, bestTotal = nil, nil
+  for i = 1, Z.Util.ArrayCount(roster or {}) do
+    local nm = roster[i]
+    if nm and nm ~= "" then
+      local t = M.SandTotal(ledger, nm)
+      if best == nil or t < bestTotal then
+        best, bestTotal = nm, t
+      end
+    end
+  end
+  return best
+end
+-- Sorted ledger for display: highest total first, name tiebreak. Pure.
+function M.SandTotals(ledger)
+  local out = {}
+  for nm, c in pairs(ledger or {}) do
+    table.insert(out, { name = nm, count = tonumber(c) or 0 })
+  end
+  table.sort(out, function(a, b)
+    if a.count ~= b.count then return a.count > b.count end
+    return (a.name or "") < (b.name or "")
+  end)
+  return out
+end
+-- Distribute one sand row: lowest-ledger raider takes the whole stack
+-- via the master-loot handoff, ledger += quantity, announced + logged.
+-- Ends any open roll for the item first (same as awarding). Returns
+-- true on success, false when refused (row kept).
+function M.SandDistribute(itemID, source)
+  if not M.RequireML() then return false end
+  itemID = Z.Util.ItemID(itemID)
+  if not itemID then
+    Z.Print("Nothing to distribute.")
+    return false
+  end
+  if not M.IsSandItem(itemID) then
+    Z.Print("Sand distribution is only for " .. M.SAND_NAME .. ".")
+    return false
+  end
+  local roster = M.RaidRoster()
+  if Z.Util.ArrayCount(roster) == 0 then
+    Z.Print("Nobody in the raid to give sand to.")
+    return false
+  end
+  local ledger = M.SandLedger()
+  local winnerName = M.SandPick(roster, ledger)
+  if not winnerName or winnerName == "" then
+    Z.Print("Nobody in the raid to give sand to.")
+    return false
+  end
+  M.EndRoll(itemID)
+  -- Distributed = gone: no finished round left to continue on this item.
+  if M.lastRound and M.lastRound.itemID == itemID then M.lastRound = nil end
+  local link = "item:" .. tostring(itemID)
+  local qty = 1
+  if Z.LootWindow then
+    local it = Z.LootWindow.Find(itemID)
+    if it then
+      if it.link then link = it.link end
+      if tonumber(it.quantity) and tonumber(it.quantity) > 0 then
+        qty = math.floor(tonumber(it.quantity))
+      end
+    end
+  end
+  -- Same corpse-open gate as the award path: walked-away corpse means
+  -- no handoff can land; re-loot and distribute from the open window.
+  -- Headless rows (no slot) skip the gate like headless awards do.
+  local row0 = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
+  local liveRow = row0 and row0.slot ~= nil
+  if source ~= "sim" and not M.lootOpen and liveRow then
+    Z.Print("Not distributing sand to " .. tostring(winnerName)
+      .. ": no loot open. Loot the corpse again, then distribute.")
+    return false
+  end
+  if source ~= "sim" and row0 and row0.slot ~= nil
+      and GetNumLootItems and GetLootSlotLink then
+    local rc = M.LootCorpseSlot(link, itemID, winnerName)
+    if rc == false then return false end
+  end
+  source = source or "raid"
+  ledger[winnerName] = M.SandTotal(ledger, winnerName) + qty
+  if Z.DropLog then Z.DropLog.Add(itemID, link, source, "sand", winnerName) end
+  local disp = M.DisplayItemLink(itemID, link)
+  local line = "Sand x" .. tostring(qty) .. " -> " .. tostring(winnerName)
+    .. " (" .. tostring(ledger[winnerName]) .. " total)"
+  if Z.Comm and Z.Comm.SayGroup and source ~= "sim" then
+    Z.Comm.SayGroup(line .. " [" .. tostring(disp) .. "]")
+  else
+    Z.Print(line)
+  end
+  if Z.SRView then Z.SRView.Refresh() end
+  if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
+  if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
+  if Z.LootWindow and Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+  M.MaybeGroupAfterBoss(source)
+  -- Queue bookkeeping, same as the award path.
+  if Z.Sim then
+    if Z.Sim.DropRehearsal and Z.Sim.DropRehearsal(itemID) then
+      if Z.Sim.Rehearsing and Z.Sim.Rehearsing()
+          and Z.Sim.afterRehearsal then
+        Z.Sim.afterRehearsal()
+      end
+    end
+    if source == "sim" then
+      if Z.Sim.OnSimAwarded then Z.Sim.OnSimAwarded(itemID) end
+      if Z.Sim.SyncLootWindow then Z.Sim.SyncLootWindow() end
+    end
+  end
+  return true
+end
+-- /zl sand: print the ledger (highest first, grand total last).
+-- /zl sand reset: clear it (solo always; in group ML/leader only,
+-- same gate as the roll-log reset). Returns counts for feedback.
+function M.SandReset()
+  local ledger = M.SandLedger()
+  local nNames, nUnits = 0, 0
+  for nm, c in pairs(ledger) do
+    nNames = nNames + 1
+    nUnits = nUnits + (tonumber(c) or 0)
+  end
+  for nm in pairs(ledger) do ledger[nm] = nil end
+  return { names = nNames, units = nUnits }
+end
+function M.SandCommand(argText)
+  local sub = Z.Util and Z.Util.Trim(argText or "") or tostring(argText or "")
+  if sub == "" then
+    local totals = M.SandTotals(M.SandLedger())
+    if Z.Util.ArrayCount(totals) == 0 then
+      Z.Print("No sand distributed yet.")
+      return true
+    end
+    local grand = 0
+    for i = 1, Z.Util.ArrayCount(totals) do
+      local t = totals[i]
+      grand = grand + t.count
+      Z.Print("Sand: " .. tostring(t.name) .. " x" .. tostring(t.count))
+    end
+    Z.Print("Sand total: x" .. tostring(grand))
+    return true
+  end
+  if string.lower(sub) == "reset" then
+    local allowed = false
+    if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then
+      allowed = true
+    elseif Z.SRSecurity and Z.SRSecurity.CanBroadcast and Z.SRSecurity.CanBroadcast() then
+      allowed = true
+    end
+    if not allowed then
+      Z.Print("Only the master looter or raid leader can reset the sand ledger.")
+      return false
+    end
+    local c = M.SandReset()
+    Z.Print("Sand ledger cleared (" .. tostring(c.units) .. " sand across "
+      .. tostring(c.names) .. " raiders).")
+    return true
+  end
+  Z.Print("Usage: /zl sand [reset]")
+  return false
 end
 
 -- Old names, same single award path above. invented resolves off the

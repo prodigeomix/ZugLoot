@@ -1,4 +1,4 @@
-# ZugLoot (skeleton v0.1.0)
+# ZugLoot
 
 SR loot addon for Turtle WoW for **both master looters and raiders**.
 RollFor-inspired ML console + SR+ support, LootBlare-inspired raider frame.

@@ -179,6 +179,9 @@ assert(Z.LootWindow.detailFrame ~= nil, "detail frame built");
 assert(Z.LootWindow.detailFrame.ignoreB ~= nil, "Ignore button built");
 assert(Z.LootWindow.detailFrame.ignoreB.label == "Ignore", "Ignore labeled");
 assert(Z.LootWindow.detailFrame.ignoreB:GetScript("OnClick"), "Ignore click wired");
+assert(Z.LootWindow.detailFrame.sandB ~= nil, "Sand button built");
+assert(Z.LootWindow.detailFrame.sandB.label == "Sand", "Sand labeled");
+assert(Z.LootWindow.detailFrame.sandB:GetScript("OnClick"), "Sand click wired");
 assert(Z.LootWindow.detailFrame.rolls ~= nil, "roll list widget built");
 -- rolling + award phases repaint under the mock API (persistent window).
 Z.LootWindow.detail.phase = "rolling";
@@ -266,7 +269,7 @@ local function barBox(b)
   return { x = last[4] or 0, y = last[5] or 0, w = b.w or 0 }
 end
 local vis = {}
-for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "ignoreB", "moreB" }) do
+for _, n in ipairs({ "awardB", "tmogB", "contB", "rollB", "raidB", "sandB", "ignoreB", "moreB" }) do
   local btn = df[n]
   if btn and btn.hidden ~= true then
     local box = barBox(btn)
@@ -503,6 +506,22 @@ assert(Z.DB.mlOnBoss == true, "ML toggle flips the flag");
 assert(string.find(st.mlOnBoss.label or "", "ON", 1, true) ~= nil, "ML toggle relabels");
 st.backToGroup:GetScript("OnClick")();
 assert(Z.DB.backToGroup == true, "group toggle flips the flag");
+-- boss threshold dropdown: button shows the pick, 4 rows, click stores.
+Z.DB.bossThreshold = 4;
+Z.MainWindow.SelectTab("setup");
+local st2 = Z.MainWindow.DebugSetupToggles();
+assert(st2.bossThreshold ~= nil, "threshold button built");
+assert(string.find(st2.bossThreshold.label or "", "Epic", 1, true) ~= nil,
+  "threshold button shows the pick, got: " .. tostring(st2.bossThreshold.label));
+Z.MainWindow.ToggleThresholdDropdown(st2.bossThreshold);
+assert(Z.MainWindow.threshDropdown ~= nil, "threshold dropdown opened");
+assert(#Z.MainWindow.threshDropdown.rows == 4, "four threshold rows");
+assert(Z.MainWindow.threshDropdown.rows[1].choice.value == 1, "common first");
+assert(Z.MainWindow.threshDropdown.rows[3].choice.label == "Rare (3)", "rare labeled");
+Z.MainWindow.threshDropdown.rows[3]:GetScript("OnClick")();
+assert(Z.DB.bossThreshold == 3, "dropdown click stores rare");
+assert(Z.MainWindow.threshDropdown == nil, "dropdown closes on pick");
+Z.DB.bossThreshold = 4;
 Z.DB.mlOnBoss = false;
 Z.DB.backToGroup = false;
 print("setup loot toggles OK");

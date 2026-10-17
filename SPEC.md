@@ -145,6 +145,14 @@ Sheet = {
   ML's 1-N roll counts, first number only). The item goes straight out
   on the number — no award window. Finish/award reuse the
   normal path, including the award line.
+- Sand (loot `Sand` button, Hourglass Sand item 19183 only): the
+  lowest-ledger raider takes the row via the master-loot handoff, no
+  roll, no award window. Ledger `Z.DB.sand` (`{ [name] = count }`)
+  tracks running totals per raider so sand evens out over the raid;
+  one corpse slot = one handoff of the whole stack. Never touches the
+  SR sheet (no SR, no won mark, no roll history) — DropLog records it
+  as `sand`. `/zl sand` prints the ledger, `/zl sand reset` clears it
+  (solo always; in group ML/leader only).
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; the resolver excludes them from later SR contests for that itemID.
   Excluded rollers stay visible everywhere: their rolls are kept in a separate
@@ -234,8 +242,12 @@ Sheet = {
   Load from File, auto-roll toggle, clear won marks, **Reset all settings**
   (factory reset with confirmation: sheet, raid history, drop log and all
   options back to defaults; local data only, no permission gate),
-  auto loot-method switching (**ML on boss**: as party/raid leader, flip
-  to master loot when selecting a boss — worldboss + elite targets;
+  auto loot-method switching (**ML on boss**: as raid leader, flip
+  to master loot when selecting a raid boss — worldboss flag or 100k+ HP
+  (indoor bosses report elite; raid trash never reaches 100k), raid only; **Boss
+  threshold** dropdown (Common 1 .. Epic 4, default Epic) rides along
+  with the switch, previous threshold remembered and restored on
+  switch-back;
   **Back to group**: flip back to group loot once the boss is fully
   looted — only after OUR auto-switch, never yanks a manual change;
   both off by default), roll-time/log stats.

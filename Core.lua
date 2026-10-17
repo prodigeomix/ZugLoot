@@ -29,6 +29,7 @@ function Z.HelpLines()
     "    simboss <boss> ... queue a boss's drops, you roll each",
     "    simraid <raid> ... condensed full raid: one boss at a time (+ trash), you roll each",
     "    simstop .......... stop the sim, reset everything",
+    "    sand [reset] ..... Hourglass Sand ledger (reset clears it)",
     "    rehearse [on|off]  solo master-loot practice with invented rollers",
     "    rolldebug ........ trace roll feeds (ML window diagnosis)",
     "    lootdebug ........ verbose click-to-loot logging (slot, corpse, link)",
@@ -65,6 +66,9 @@ function Z.InitDB()
   -- group loot once the boss is fully looted. Absent = off.
   if ZugLootDB.mlOnBoss == nil then ZugLootDB.mlOnBoss = false end
   if ZugLootDB.backToGroup == nil then ZugLootDB.backToGroup = false end
+  -- Boss threshold for the auto-switch (Setup dropdown, 1 common ..
+  -- 4 epic). Default epic: bosses drop epics. Absent = default.
+  if ZugLootDB.bossThreshold == nil then ZugLootDB.bossThreshold = 4 end
   -- Pysanka raid-setup sheet (invitation word, buff/tank/debuff tables).
   if Z.Pysanka and Z.Pysanka.Ensure then Z.Pysanka.Ensure(ZugLootDB) end
   ZugLootDB.autoClose = (ZugLootDB.autoClose == nil) and true or ZugLootDB.autoClose
@@ -180,6 +184,8 @@ function Z.Slash(msg)
   elseif cmd == "simboss" then Z.Sim.SimBoss(rest)
   elseif cmd == "simraid" then Z.Sim.SimRaid(rest)
   elseif cmd == "simstop" then Z.Sim.Stop()
+  elseif cmd == "sand" then
+    if Z.MasterLootUI and Z.MasterLootUI.SandCommand then Z.MasterLootUI.SandCommand(rest) end
   elseif cmd == "rehearse" then
     if Z.Sim and Z.Sim.SetRehearse then Z.Sim.SetRehearse(rest) end
   elseif cmd == "rolldebug" then
