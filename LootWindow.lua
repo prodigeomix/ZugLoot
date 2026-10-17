@@ -1502,10 +1502,12 @@ function M.doAction(itemID, actionID, extra)
   if actionID == "award-name" then
     -- Award a named raider from ANY phase: the roll (if any) ends early
     -- inside the award. Stays open on failure, closes on success.
-    local nm = extra
-    if type(extra) == "table" then nm = extra.name end
+    -- The via ("tmog" on the TMOG kind row) rides along so TMOG awards
+    -- name the normal winner in the trade note.
+    local nm, via = extra, nil
+    if type(extra) == "table" then nm, via = extra.name, extra.via end
     if MLUI and MLUI.AwardChosen then
-      MLUI.AwardChosen({ name = nm }, d.itemID, d.source)
+      MLUI.AwardChosen({ name = nm, via = via }, d.itemID, d.source)
       return "awarded " .. tostring(nm)
     end
     return "award failed"

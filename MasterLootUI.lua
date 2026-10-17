@@ -587,13 +587,20 @@ end
 
 -- Award line: pure text builder (testable) + shared sender (below).
 -- "Name wins <link>." — one format for sim and live; the ROUTER
--- (Comm.Say via SayGroup) picks the channel by grouping.
-function M.AwardLine(itemID, link, winnerName)
+-- (Comm.Say via SayGroup) picks the channel by grouping. When the item
+-- goes to the TMOG winner, tradeTo names the normal (SR/MS/OS) winner
+-- and a "Trade to <player> after equipping." note follows; nil/empty
+-- tradeTo (or TMOG-only rolls) leaves the plain line alone.
+function M.AwardLine(itemID, link, winnerName, tradeTo)
   local disp = M.ChatItemLink(itemID, link)
-  return ChatName(winnerName) .. " wins " .. tostring(disp) .. "."
+  local line = ChatName(winnerName) .. " wins " .. tostring(disp) .. "."
+  if tradeTo and tradeTo ~= "" then
+    line = line .. " Trade to " .. ChatName(tradeTo) .. " after equipping."
+  end
+  return line
 end
-function M.AnnounceAward(itemID, link, winnerName)
-  local line = M.AwardLine(itemID, link, winnerName)
+function M.AnnounceAward(itemID, link, winnerName, tradeTo)
+  local line = M.AwardLine(itemID, link, winnerName, tradeTo)
   if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
   return line
 end
@@ -1213,8 +1220,9 @@ end
 -- then won mark, broadcast, log, print. Handed out = gone: the row
 -- leaves the list and the window closes. Awarding ends any open roll
 -- for the item FIRST (EndRoll), so deciding off the ... menu can never
--- leave a roll collecting behind the award.
-function M.Award(itemID, winnerName, source)
+-- leave a roll collecting behind the award. tradeTo (TMOG awards): the
+-- normal winner named in the "Trade to <player> after equipping." note.
+function M.Award(itemID, winnerName, source, tradeTo)
   if not M.RequireML() then return end
   if not itemID or not winnerName or winnerName == "" then
     Z.Print("Pick a recipient first.")
@@ -1273,11 +1281,12 @@ function M.Award(itemID, winnerName, source)
   Z.SRData.MarkWon(Z.DB.sheet, itemID, winnerName, wq)
   if Z.Comm then Z.Comm.BroadcastAward(itemID, winnerName) end
   if Z.DropLog then Z.DropLog.Add(itemID, link, source, "award", winnerName) end
-  -- Award line: ONE format for sim and live ("Name wins Item."). The
-  -- router (Comm.Say) picks the channel by grouping — solo lands in the
+  -- Award line: ONE format for sim and live ("Name wins Item." + the
+  -- TMOG trade note when tradeTo names the normal winner). The router
+  -- (Comm.Say) picks the channel by grouping — solo lands in the
   -- ZugLoot log, party in PARTY, raid in RAID. Verifiable: tests pin
   -- text + channel per grouping (tests/test_chat_routing.lua).
-  M.AnnounceAward(itemID, link, winnerName)
+  M.AnnounceAward(itemID, link, winnerName, tradeTo)
   if Z.SRView then Z.SRView.Refresh() end
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
@@ -1683,8 +1692,22 @@ function M.SandCommand(argText)
   return false
 end
 
-function M.AwardDirect(itemID, winnerName, source)
-  return M.Award(itemID, winnerName, source)
+function M.AwardDirect(itemID, winnerName, source, tradeTo)
+  return M.Award(itemID, winnerName, source, tradeTo)
+end
+-- Trade note for TMOG awards: the choice carries via = "tmog" on the
+-- TMOG kind row; the normal (SR/MS/OS) winner comes off the open
+-- window's menu (menu.winners is SR > MS > OS priority, TMOG never
+-- lands there). TMOG-only rolls have no normal winner: no note.
+function M.TradeToFor(choice, itemID)
+  if not choice or choice.via ~= "tmog" then return nil end
+  local d = Z.LootWindow and Z.LootWindow.detail
+  if not d or d.itemID ~= itemID then return nil end
+  local w = d.menu and d.menu.winners and d.menu.winners[1]
+  if w and w.name and w.name ~= "" and w.name ~= choice.name then
+    return w.name
+  end
+  return nil
 end
 function M.AwardChosen(choice, itemID, source)
   local nm = choice and choice.name
@@ -1697,7 +1720,7 @@ function M.AwardChosen(choice, itemID, source)
     local row = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
     source = (row and row.source == "sim") and "sim" or "raid"
   end
-  return M.Award(itemID, nm, source)
+  return M.Award(itemID, nm, source, M.TradeToFor(choice, itemID))
 end
 -- Award context reads off the OPEN window, not stored state. Item = the
 -- open detail's item (fallback: explicit id).

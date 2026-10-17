@@ -501,7 +501,45 @@ eq(LW.doAction(1001, "award-name", "Tmog"), "awarded Tmog", "tmog kind award")
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Tmog"), "tmog winner marked")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "no spillover mark")
 
--- 6c. Raid roll button, mid-roll: old roll ends, the
+-- 6c. TMOG award via the kind row names the normal winner in chat.
+ZugLoot.DB = { sheet = makeSheet() }
+table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+LW.doAction(1001, "roll")
+ML.IntakeChatRoll("Aaa rolls 58 (1-100)")
+ML.IntakeChatRoll("Tmog rolls 15 (1-98)")
+LW.doAction(1001, "finish")
+printed = {}
+eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "tmog row award")
+local tradeSaid = false
+for i = 1, #printed do
+  if string.find(printed[i], "Tmog wins ", 1, true)
+      and string.find(printed[i], "Trade to Aaa after equipping.", 1, true) then
+    tradeSaid = true break
+  end
+end
+ok(tradeSaid, "tmog award tells chat to trade to the normal winner")
+-- TMOG-only rolls: no normal winner, no note.
+ZugLoot.DB = { sheet = makeSheet() }
+table.insert(ZugLoot.DB.sheet.items[1001].rollers, { name = "Tmog", rolls = 1 })
+LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
+LW.OpenDetail(1001)
+LW.doAction(1001, "roll")
+ML.IntakeChatRoll("Tmog rolls 15 (1-98)")
+LW.doAction(1001, "finish")
+printed = {}
+eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "tmog-only award")
+local tradeOmitted = true
+for i = 1, #printed do
+  if string.find(printed[i], "Trade to ", 1, true) then tradeOmitted = false break end
+end
+ok(tradeOmitted, "tmog-only award omits the trade note")
+-- Plain line builder: note only with a trade recipient.
+ok(string.find(ML.AwardLine(1001, "item:1001", "Tmog", "Aaa"), "Trade to Aaa after equipping.", 1, true) ~= nil, "AwardLine appends the trade note")
+ok(string.find(ML.AwardLine(1001, "item:1001", "Aaa"), "Trade to ", 1, true) == nil, "AwardLine plain without trade recipient")
+
+-- 6d. Raid roll button, mid-roll: old roll ends, the
 -- raid-roll starts clean on the same window. doAction("raidroll") stays
 -- (bar-button entry); the ... menu no longer carries roll rows.
 ZugLoot.DB = { sheet = makeSheet() }
