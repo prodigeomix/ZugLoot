@@ -571,6 +571,24 @@ assert(impBox.focused == true, "click focuses the box");
 impBox.focused = nil;
 Z.SRImport.ShowPaste();
 assert(Z.SRImport.DebugImportBox().focused == true, "dialog open focuses the box");
+-- Raidres hint: caption under the edit box + annotated screenshot
+-- (red boxes around both RollFor export buttons).
+local hintT, hintX = Z.SRImport.DebugImportHint();
+assert(hintT ~= nil, "import hint caption built");
+assert(hintT:GetText() == "Paste RollFor export from raidres",
+  "hint caption text, got: " .. tostring(hintT:GetText()));
+local hintAnchor = false;
+for _, p in ipairs(hintT.points or {}) do
+  if p[2] == impBorder and p[4] == 0 and p[5] == -8 then hintAnchor = true end
+end
+assert(hintAnchor, "hint caption sits below the edit box");
+assert(hintX ~= nil, "import hint image built");
+assert(hintX.tex == Z.SRImport.HINT_IMAGE,
+  "hint image path, got: " .. tostring(hintX.tex));
+assert(hintX.w == Z.SRImport.HINT_IMG_W and hintX.h == Z.SRImport.HINT_IMG_H,
+  "hint image static size, got: " .. tostring(hintX.w) .. "x" .. tostring(hintX.h));
+assert(hintX.coord ~= nil and hintX.coord[4] == Z.SRImport.HINT_TEX_BOTTOM,
+  "hint image cropped to live content");
 print("import compact input box OK");
 -- Kill order renders the 8 real raid-target icons in order.
 Z.MainWindow.SelectTab("sheet");
@@ -617,6 +635,27 @@ for _,tab in ipairs({"sheet","raids","pysanka","versions","setup"}) do
   Z.MainWindow.SelectTab(tab);
   print("rendered tab:", tab);
 end
+-- Raids tab: inactive rows carry Activate + Delete, the active row
+-- carries neither (it can't be deleted out from under the raid).
+-- Archive a second raid so one row goes inactive, then click Delete.
+local s2 = Z.SRData.NewSheet();
+s2.meta.raidID = "MOCK-RAID-2"; s2.meta.raidName = "Blackwing Lair";
+s2.meta.importedAt = 1720000001; s2.meta.importedBy = "ML"; s2.meta.source = "paste";
+s2.items[1002] = { quality = 4, rollers = { { name = "Bbb", rolls = 1 } } };
+Z.RaidArchive.ArchiveActive(Z.DB, 1720000001);
+Z.DB.sheet = s2;
+Z.MainWindow.SelectTab("raids");
+local rb = Z.MainWindow.DebugRaidsButtons();
+assert(rb["MOCK-RAID-1"] ~= nil and rb["MOCK-RAID-1"].activate ~= nil
+  and rb["MOCK-RAID-1"].delete ~= nil, "inactive raid has Activate + Delete");
+assert(rb["MOCK-RAID-2"] == nil, "active raid has no buttons");
+rb["MOCK-RAID-1"].delete:GetScript("OnClick")();
+assert(Z.RaidArchive.Find(Z.DB, "MOCK-RAID-1") == nil, "Delete button forgets the raid");
+assert(Z.DB.sheet.meta.raidID == "MOCK-RAID-2", "live sheet untouched by delete");
+-- Restore the MOCK-RAID-1 live sheet (later header asserts expect it).
+Z.DB.sheet = s;
+Z.RaidArchive.ArchiveActive(Z.DB, 1720000002);
+print("raids delete button OK");
 -- setup tab: auto loot-method toggles exist, flip the DB flags, relabel.
 Z.DB.mlOnBoss = false;
 Z.DB.backToGroup = false;

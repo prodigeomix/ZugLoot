@@ -653,6 +653,7 @@ end
 function M.RenderRaids()
   local key = "raids"
   ClearBody(key)
+  M.raidsBtns = {} -- row button hooks rebuilt below (stale ids drop)
   local b = bodies[key]
   local now = (time and time()) or 0
   local rows = (Z.RaidArchive and Z.RaidArchive.ListSummaries(Z.DB, now)) or {}
@@ -693,6 +694,17 @@ function M.RenderRaids()
       actB:SetScript("OnClick", function() Z.SRImport.ActivateArchivedRaid(rid) end)
       Tip(actB, "Activate", "Make this raid the active sheet and continue it.",
         "Won marks + roll history come along. The current sheet is archived first.")
+      -- Delete: forget the archived snapshot (confirmation first).
+      -- The active raid has no Delete button — it can't be deleted
+      -- out from under the raid (activate another raid first).
+      local delB = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
+      delB:SetWidth(80) delB:SetHeight(20)
+      delB:SetPoint("TOPRIGHT", row, "TOPRIGHT", -8, -28)
+      delB:SetText("Delete")
+      delB:SetScript("OnClick", function() Z.SRImport.RequestDeleteArchivedRaid(rid) end)
+      Tip(delB, "Delete", "Permanently delete this archived raid.",
+        "Sheet, roll history and won marks are removed. Cannot be undone.")
+      M.raidsBtns[rid] = { activate = actB, delete = delB }
     end
     -- zebra
     if math.mod(i, 2) == 0 then
@@ -1638,6 +1650,12 @@ end
 function M.DebugActiveRaid()
   if activeRaidFS and activeRaidFS.GetText then return activeRaidFS:GetText() end
   return nil
+end
+
+-- Test hook: Raids-tab row buttons per raidID ({ activate, delete }).
+-- Active raids carry no buttons (nil entry); rebuilt every render.
+function M.DebugRaidsButtons()
+  return M.raidsBtns or {}
 end
 
 -- Test hook: header buttons presence + Get-sheet visibility.

@@ -707,6 +707,7 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl sheet            open sheet view
 /zl raids            open raid history
 /zl raid <raidID>   activate an archived raid (continue it)
+/zl raidforget <id> delete an archived raid (confirmation first; never the active raid)
 /zl import           open import frame (anyone; broadcast stays ML/RL)
 /zl loadfile         import from CustomData/ZugLoot_SR.txt (anyone)
 /zl rf <link>        start SR roll (ML)        /zl arf <link>  open roll

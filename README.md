@@ -75,4 +75,4 @@ merge is blocked until tests + lint pass.
 
 ## Commands
 
-`/zl sheet|raids|raid <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simraid|simtmog|simroll|simstop|log|logclear|reset|help`
+`/zl sheet|raids|raid <id>|raidforget <id>|import|loadfile|rf|arf|rr|2x|roll|award|fr|cr|show|hide|time|autoclose|auto|ver|verlist|sim|simboss|simraid|simtmog|simroll|simstop|log|logclear|reset|help`

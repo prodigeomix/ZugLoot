@@ -135,6 +135,25 @@ function M.Find(db, raidID)
   return nil
 end
 
+-- Forget one archived raid (Raids tab Delete button, /zl raidforget).
+-- Pure list removal: returns true when something was dropped, false
+-- when the id wasn't archived. Never touches the live sheet — deleting
+-- the ACTIVE raid is refused by the SRImport wrapper, not here.
+function M.Forget(db, raidID)
+  if not raidID then return false end
+  local arch = M.GetArchive(db)
+  local i = 1
+  while arch[i] ~= nil do
+    if arch[i].raidID == raidID then
+      table.remove(arch, i)
+      return true
+    else
+      i = i + 1
+    end
+  end
+  return false
+end
+
 -- Refresh the live sheet's archive entry in place (same dedupe slot as
 -- ArchiveActive, but the sheet stays live). This is what puts a freshly
 -- loaded sheet into the list immediately, even though it was never

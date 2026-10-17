@@ -176,4 +176,37 @@ local foundNew = false
 for i = 1, #rows3 do if rows3[i].raidID == "Rbrandnew" then foundNew = true end end
 ok(foundNew, "just-imported raid listed")
 
+-- 11. Forget drops one archived raid; delete wrapper guards the live one.
+local db3 = { sheet = makeSheet("Rdel1") }
+RA.ArchiveActive(db3, 1000)
+db3.sheet = makeSheet("Rdel2")
+RA.ArchiveActive(db3, 2000)
+eq(#RA.GetArchive(db3), 2, "two archived before forget")
+ok(RA.Forget(db3, "Rdel1"), "forget returns true")
+eq(#RA.GetArchive(db3), 1, "one left after forget")
+eq(RA.GetArchive(db3)[1].raidID, "Rdel2", "the other raid kept")
+ok(RA.Find(db3, "Rdel1") == nil, "forgotten raid unfindable")
+ok(not RA.Forget(db3, "Rdel1"), "double forget returns false")
+ok(not RA.Forget(db3, nil), "nil forget returns false")
+-- Delete wrapper: unknown id refuses, active raid refuses, archived
+-- raid deletes (headless: no StaticPopup, direct path).
+ZugLoot.DB = { sheet = makeSheet("Rlive") }
+ZugLoot.DB.sheet.meta.raidID = "Rlive"
+RA.ArchiveActive(ZugLoot.DB, 3000) -- live snapshot archived
+ZugLoot.DB.sheet = makeSheet("Rgone")
+ZugLoot.DB.sheet.meta.raidID = "Rgone"
+RA.ArchiveActive(ZugLoot.DB, 4000) -- second snapshot archived
+ZugLoot.DB.sheet = makeSheet("Rlive")
+ZugLoot.DB.sheet.meta.raidID = "Rlive" -- live sheet back on Rlive
+local printed = {}
+ZugLoot.Print = function(m) table.insert(printed, tostring(m)) end
+eq(ZugLoot.SRImport.DoDeleteArchivedRaid("nope"), false, "unknown delete refused")
+eq(ZugLoot.SRImport.DoDeleteArchivedRaid("Rlive"), false, "active delete refused")
+ok(string.find(printed[#printed] or "", "active raid", 1, true) ~= nil, "active refusal explains itself")
+eq(ZugLoot.SRImport.DoDeleteArchivedRaid("Rgone"), true, "archived delete works")
+ok(RA.Find(ZugLoot.DB, "Rgone") == nil, "deleted raid gone")
+ok(RA.Find(ZugLoot.DB, "Rlive") ~= nil, "live archive entry kept")
+ok(ZugLoot.DB.sheet.meta.raidID == "Rlive", "live sheet untouched by delete")
+eq(ZugLoot.SRImport.DoDeleteArchivedRaid(""), false, "empty id refused")
+
 return T

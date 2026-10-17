@@ -163,19 +163,20 @@ local bf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
 if bf then blob = bf:read("*a") bf:close() end
 -- Synthesize a raidres-style base64 blob: {"softreserves":[...]} minimal.
 -- (Full export decode is covered by section 3; here we check dispatch.)
-local lineSheet, lineErr = ZugLoot.SRImport.ParseAnyImport(blob)
-ok(lineSheet ~= nil, "ParseAnyImport accepts csv format: " .. tostring(lineErr))
+local b64blob = "eyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119"
+local expSheet, expErr = ZugLoot.SRImport.ParseAnyImport(b64blob)
+ok(expSheet ~= nil, "ParseAnyImport accepts RollFor export: " .. tostring(expErr))
 local badSheet, badErr = ZugLoot.SRImport.ParseAnyImport("not a sheet at all !!!")
 ok(badSheet == nil and badErr ~= nil, "ParseAnyImport rejects garbage")
--- CSV dispatch incl. preamble above the header.
-local csvBlob = nil
-local cbf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
-if cbf then csvBlob = cbf:read("*a") cbf:close() end
-local csvPre = ZugLoot.SRImport.ParseAnyImport("copy everything below this line:\n" .. (csvBlob or ""))
-ok(csvPre ~= nil, "ParseAnyImport drops csv preamble")
-if csvPre then
-  eq(csvPre.items[18814].rollers[1].sr_plus, 70, "csv preamble body intact")
-end
+-- CSV is disabled: CSV input (incl. preamble above the header) is
+-- refused with the RollFor-only rule, never dispatched to the parser.
+local csvPre, csvPreErr = ZugLoot.SRImport.ParseAnyImport("copy everything below this line:\n" .. (blob or ""))
+ok(csvPre == nil, "ParseAnyImport refuses CSV with preamble")
+ok(string.find(tostring(csvPreErr), "only RollFor export", 1, true) ~= nil,
+  "CSV preamble refusal names the RollFor export")
+-- Static line format still dispatches.
+local lineSheet, lineErr = ZugLoot.SRImport.ParseAnyImport("Aaa;1001:1\n")
+ok(lineSheet ~= nil, "ParseAnyImport accepts line format: " .. tostring(lineErr))
 
 -- 7. SortedItemIDs ascending.
 local ids = SRData.SortedItemIDs(s2)
@@ -248,13 +249,12 @@ ok(cut == nil, "cut JSON refused (no hang, no sheet)")
 -- but every row skipped, e.g. names instead of numeric IDs — applied a
 -- 0-item sheet, broadcast it, and receivers landed on "(sheet is
 -- empty)" while printing "Sheet received").
--- Thin CSV fails LOUD at parse, naming the real cause + line.
+-- CSV is disabled: any CSV-looking input is refused at dispatch with
+-- the RollFor-only rule (never parsed, never a line-format fallthrough).
 local thin = "ID,Item,Attendee\nChoker of the Fire Lord,Choker,Pysanka\nBoots,Boots,Joblesspally\n"
 local thinS, thinErr = ZugLoot.SRImport.ParseAnyImport(thin)
 ok(thinS == nil and thinErr ~= nil, "thin CSV refused")
-ok(string.find(tostring(thinErr), "CSV line 2", 1, true) ~= nil, "thin CSV error names the bad line")
-ok(string.find(tostring(thinErr), "missing numeric item ID", 1, true) ~= nil, "thin CSV error names the missing ID")
--- (not the confusing line-format fallthrough).
+ok(string.find(tostring(thinErr), "only RollFor export", 1, true) ~= nil, "thin CSV refusal names the RollFor export")
 ok(string.find(tostring(thinErr), "missing ';'", 1, true) == nil, "thin CSV error is not the line-format fallthrough")
 -- Good CSV still parses through the same dispatch.
 ok(SRData.HasCSVHeader(thin), "thin CSV still recognized as CSV")

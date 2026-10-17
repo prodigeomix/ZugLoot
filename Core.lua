@@ -21,6 +21,9 @@ function Z.HelpLines()
   return {
     "|cFFFFD700ZugLoot v" .. tostring(Z.VERSION or "?") .. " — commands:|r",
     "    sheet ............ open the SR sheet",
+    "    raids ............ open raid history (activate / delete past raids)",
+    "    raid <id> ........ activate an archived raid (continue it)",
+    "    raidforget <id> .. permanently delete an archived raid",
     "    import ........... paste a raidres export or line-format sheet",
     "    loadfile ......... import from CustomData/ZugLoot_SR.txt",
     "    sheetreq ......... ask the group for the current sheet (ML/leader answers)",
@@ -183,6 +186,9 @@ function Z.Slash(msg)
   if cmd == "" or cmd == "help" then
     Z.PrintHelp()
   elseif cmd == "sheet" then Z.MainWindow.Toggle("sheet")
+  elseif cmd == "raids" then Z.MainWindow.Toggle("raids")
+  elseif cmd == "raid" then Z.SRImport.ActivateArchivedRaid(Z.Util.Trim(rest))
+  elseif cmd == "raidforget" then Z.SRImport.RequestDeleteArchivedRaid(Z.Util.Trim(rest))
   elseif cmd == "import" then Z.SRImport.ShowPaste()
   elseif cmd == "loadfile" then Z.SRImport.LoadFromFile()
   elseif cmd == "sheetreq" then Z.Comm.RequestSheet()

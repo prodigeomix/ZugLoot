@@ -10,15 +10,31 @@ local pasteFrame = nil
 local editBox = nil
 local importScroll = nil
 local importBorder = nil
+local importHintText = nil
+local importHintTex = nil
 
 -- Static sheet box geometry: fixed width, ~10 lines tall. Neither
 -- the box nor the dialog ever resizes; long pastes scroll inside.
 M.IMPORT_BOX_W = 502
 M.IMPORT_BOX_H = 150
 
+-- Raidres hint below the box: captioned screenshot showing the two
+-- "RollFor export" buttons. Baked 512x512 uncompressed TGA (client-
+-- readable); live content occupies the top 271px, cropped at show
+-- time via SetTexCoord and displayed at full box width (502x266).
+M.HINT_IMAGE = "Interface\\AddOns\\ZugLoot\\Media\\ZL-RollForHint.tga"
+M.HINT_TEX_BOTTOM = 271 / 512
+M.HINT_IMG_W = 502
+M.HINT_IMG_H = 266
+
 -- Test hook: live import frame (for the strata/level assert).
 function M.DebugImportFrame()
   return pasteFrame
+end
+
+-- Test hook: live hint text + hint image (caption/screenshot asserts).
+function M.DebugImportHint()
+  return importHintText, importHintTex
 end
 
 -- Test hook: live sheet edit box + its scroll frame + the border frame
@@ -216,12 +232,12 @@ function M.ApplySheet(sheet, source, importer)
     Z.Print("Import failed: no sheet data.")
     return false
   end
-  -- Refuse empty imports BEFORE stamping/archiving: a thin CSV (header
-  -- matched, every row skipped) or blank paste must never clobber the
-  -- live sheet — or broadcast as "(sheet is empty)" to the raid.
+  -- Refuse empty imports BEFORE stamping/archiving: a blank paste or an
+  -- empty export must never clobber the live sheet — or broadcast as
+  -- "(sheet is empty)" to the raid.
   if Z.SRData and Z.SRData.SheetIsEmpty and Z.SRData.SheetIsEmpty(sheet) then
     Z.Print("Import failed: sheet has no reservations (0 items, no hard reserves) — "
-      .. "check the export has a numeric item ID column and non-empty attendee names. "
+      .. "check the pasted text is the full RollFor export from raidres. "
       .. "Live sheet kept.")
     return false
   end
@@ -263,23 +279,19 @@ function M.ApplySheet(sheet, source, importer)
   if Z.DropLog then Z.DropLog.Add(nil, nil, "sheet", "import", sheet.meta.importedBy) end
 end
 
--- Accept either format: raidres export blob (base64/json), CSV export, or
--- static line format. Used by both paste import and Load from File.
+-- Accept the raidres RollFor export blob (base64/json) or the static
+-- line format. CSV is NOT accepted: CSV-looking input is refused with
+-- a pointer at the RollFor export. Used by paste import + Load from File.
 function M.ParseAnyImport(text)
-  local sheet, err = Z.SRData.ParseRaidResExport(text)
-  if not sheet then
-    sheet, err = Z.SRData.ParseCSVFormat(text)
+  local sheet = Z.SRData.ParseRaidResExport(text)
+  if sheet then return sheet, nil end
+  -- A CSV whose header matched must report the RollFor-only rule — NOT
+  -- fall through to a confusing line-format error like "line 1: missing ';'".
+  if Z.SRData.HasCSVHeader and Z.SRData.HasCSVHeader(text) then
+    return nil, "only RollFor export is supported — paste the RollFor export "
+      .. "from raidres (CSV imports are disabled)"
   end
-  if not sheet then
-    -- A CSV whose header matched but whose rows were all unusable must
-    -- report the CSV problem — NOT fall through to a confusing
-    -- line-format error like "line 1: missing ';'".
-    if Z.SRData.HasCSVHeader and Z.SRData.HasCSVHeader(text) then
-      return nil, err
-    end
-    sheet, err = Z.SRData.ParseLineFormat(text)
-  end
-  return sheet, err
+  return Z.SRData.ParseLineFormat(text)
 end
 
 function M.DoPasteImport(text)
@@ -345,6 +357,57 @@ end
 local function refreshViews()
   if Z.MainWindow then Z.MainWindow.Refresh() end
   if Z.SRView then Z.SRView.Refresh() end
+end
+
+-- Delete one archived raid (Raids tab Delete button, /zl raidforget).
+-- Testable core: no permission check, no UI. Refuses the ACTIVE raid
+-- (deleting the live sheet out from under the raid would strand every
+-- window — activate another raid first) and unknown ids. Returns true
+-- on delete, false otherwise. Local snapshots only: never touches the
+-- network, so no broadcast permission needed.
+function M.DoDeleteArchivedRaid(raidID)
+  if not Z.RaidArchive then return false end
+  if not raidID or raidID == "" then
+    Z.Print("Usage: /zl raidforget <raidID> (see the Raids tab)")
+    return false
+  end
+  local cur = Z.DB and Z.DB.sheet and Z.DB.sheet.meta and Z.DB.sheet.meta.raidID
+  if cur == raidID then
+    Z.Print("Can't delete the active raid (" .. tostring(raidID)
+      .. ") — activate another raid first, then delete this one.")
+    return false
+  end
+  if not Z.RaidArchive.Forget(Z.DB, raidID) then
+    Z.Print("Delete failed: no archived raid " .. tostring(raidID) .. ".")
+    return false
+  end
+  Z.Print("Deleted archived raid " .. tostring(raidID) .. ".")
+  refreshViews()
+  if Z.DropLog then Z.DropLog.Add(nil, nil, "raid", "delete", tostring(raidID)) end
+  return true
+end
+
+-- Button/slash entry point with confirmation window. Outside the
+-- client (no StaticPopup API) the confirm is skipped so tests can
+-- exercise the full path (same shape as RequestResetRollLog).
+function M.RequestDeleteArchivedRaid(raidID)
+  if not raidID or raidID == "" then
+    Z.Print("Usage: /zl raidforget <raidID> (see the Raids tab)")
+    return
+  end
+  if not (StaticPopupDialogs and StaticPopup_Show) then
+    M.DoDeleteArchivedRaid(raidID)
+    return
+  end
+  StaticPopupDialogs["ZUGLOOT_DELETE_RAID"] = StaticPopupDialogs["ZUGLOOT_DELETE_RAID"] or {
+    text = "Delete this archived raid?\nIts sheet, roll history and won marks will be permanently removed. This cannot be undone.",
+    button1 = "Delete", button2 = "Cancel",
+    OnAccept = function()
+      M.DoDeleteArchivedRaid(raidID)
+    end,
+    timeout = 0, whileDead = 1,
+  }
+  StaticPopup_Show("ZUGLOOT_DELETE_RAID")
 end
 
 -- Button/slash entry point: permission gate + confirmation window.
@@ -416,7 +479,7 @@ end
 function M.ShowPaste()
   if not pasteFrame then
     pasteFrame = CreateFrame("Frame", "ZugLootImportFrame", UIParent)
-    pasteFrame:SetWidth(560) pasteFrame:SetHeight(260)
+    pasteFrame:SetWidth(560) pasteFrame:SetHeight(540)
     pasteFrame:SetPoint("CENTER", UIParent, "CENTER", 0, 0)
     pasteFrame:SetMovable(true) pasteFrame:EnableMouse(true)
     pasteFrame:RegisterForDrag("LeftButton")
@@ -531,6 +594,22 @@ function M.ShowPaste()
     editBox:SetScript("OnTextChanged", function() SyncImportScroll() end)
     editBox:SetScript("OnCursorChanged", function() SyncImportScroll() end)
     editBox:SetScript("OnEscapePressed", function() pasteFrame:Hide() end)
+    -- Raidres hint below the edit box: caption + annotated screenshot
+    -- (red boxes around both "RollFor export" buttons). Static sizes;
+    -- the baked TGA is 512x512 with live content in the top 271px,
+    -- cropped via SetTexCoord and shown at full box width. Buttons
+    -- stay anchored to BOTTOM, so the taller frame just moves them down.
+    local hint = pasteFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    hint:SetPoint("TOPLEFT", borderF, "BOTTOMLEFT", 0, -8)
+    if hint.SetJustifyH then hint:SetJustifyH("LEFT") end
+    hint:SetText("Paste RollFor export from raidres")
+    importHintText = hint
+    local hintTex = pasteFrame:CreateTexture(nil, "ARTWORK")
+    if hintTex.SetTexture then hintTex:SetTexture(M.HINT_IMAGE) end
+    if hintTex.SetTexCoord then hintTex:SetTexCoord(0, 1, 0, M.HINT_TEX_BOTTOM) end
+    hintTex:SetWidth(M.HINT_IMG_W) hintTex:SetHeight(M.HINT_IMG_H)
+    hintTex:SetPoint("TOPLEFT", hint, "BOTTOMLEFT", 0, -4)
+    importHintTex = hintTex
     -- Buttons sit in their own strip below the scroll rect and above it
     -- in frame level, so they stay visible and clickable at any size.
     local baseLvl = 5
