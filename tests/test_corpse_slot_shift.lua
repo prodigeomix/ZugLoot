@@ -143,6 +143,41 @@ eq(masterCalls[1].api, "GiveMasterLootCandidate", "used GiveMasterLootCandidate 
 eq(masterCalls[1].slot, 1, "slot 1")
 eq(masterCalls[1].idx, 1, "candidate 1")
 
+-- 5. Ignore-first, then clear the rest through the corpse path: ignoring
+-- 17001 up front leaves 17002 actionable; a LOOT_SLOT_CLEARED confirm
+-- for 17002 (dropped by RescanLeftovers, which never closed out) must
+-- close the whole window since only ignored rows remain.
+loot = {
+  { id = 17001, link = "item:17001:0:0:0", quality = 4 },
+  { id = 17002, link = "item:17002:0:0:0", quality = 4 },
+}
+ZugLoot.DropLog = { Add = function() end }
+LW.SetItems({
+  { itemID = 17001, link = "item:17001:0:0:0", quality = 4, slot = 1 },
+  { itemID = 17002, link = "item:17002:0:0:0", quality = 4, slot = 2 },
+}, "loot")
+ML.lootOpen = true
+LW.OpenDetail(17001)
+ML.Ignore(17001, "loot")
+ok(LW.Find(17001) ~= nil and LW.Find(17001).ignored, "first row ignored, still listed")
+ok(LW.detail ~= nil, "detail stays open: 17002 still actionable")
+-- 17002 leaves the corpse (manual take / another client's loot):
+-- only the ignored row still matches the corpse.
+loot = { { id = 17001, link = "item:17001:0:0:0", quality = 4 } }
+local hideCalls, closeCalls = 0, 0
+local realHide = LW.Hide
+LW.Hide = function() hideCalls = hideCalls + 1 return realHide() end
+CloseLoot = function() closeCalls = closeCalls + 1 end
+ML.RescanLeftovers()
+eq(#LW.items, 1, "rescan dropped the looted row, ignored row stays")
+ok(LW.Find(17001).ignored, "remaining row is the ignored one")
+ok(LW.detail == nil, "detail closed: only ignored rows left")
+ok(hideCalls >= 1, "loot window closed after rescan left only ignored rows")
+ok(closeCalls >= 1, "loot session closed after rescan left only ignored rows")
+CloseLoot = nil
+LW.Hide = realHide
+ok(LW.LootingFinished(), "ignore-first + corpse-path finishes looting")
+
 if T.fail == 0 then
   print("corpse slot shift and candidate invariants passed")
 else

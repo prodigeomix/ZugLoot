@@ -137,6 +137,7 @@ function M.WatchClick(slot, itemID, rowName)
       local v = Z.MasterLootUI.VerifySlot(itemID, slot)
       if v == "gone" or v == nil then
         if Z.MasterLootUI.RescanLeftovers then Z.MasterLootUI.RescanLeftovers() end
+        M.CloseIfFinished()
         return
       end
     end
@@ -243,6 +244,17 @@ function M.LootingFinished()
     local it = M.items[i]
     if not (it and it.ignored) then return false end
   end
+  return true
+end
+-- Shared close-out: when looting is finished, close the whole window
+-- and the loot. Every path that drops or reconciles rows funnels through
+-- here, so no ordering can strand the overview open: ignore-first then
+-- award/loot the rest closes here just like ignore-last does.
+-- Returns true when it closed.
+function M.CloseIfFinished()
+  if not M.LootingFinished() then return false end
+  M.Hide()
+  if CloseLoot then pcall(CloseLoot) end
   return true
 end
 
@@ -416,10 +428,7 @@ function M.RemoveItem(itemID, slotHint)
   -- Nothing actionable left (empty, or only ignored rows): the corpse is
   -- fully distributed. Close the window and the loot (Clear() also fires
   -- on a fresh LOOT_OPENED, so the next corpse starts clean).
-  if M.LootingFinished() then
-    M.Hide()
-    if CloseLoot then pcall(CloseLoot) end
-  end
+  M.CloseIfFinished()
 end
 
 function M.AllDone()
@@ -442,11 +451,7 @@ function M.CloseOverview()
   if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
     Z.MasterLootUI.RescanLeftovers()
   end
-  if M.LootingFinished() then
-    M.Hide()
-    if CloseLoot then pcall(CloseLoot) end
-    return "closed"
-  end
+  if M.CloseIfFinished() then return "closed" end
   M.Hide()
   return "parked"
 end
@@ -478,6 +483,9 @@ function M.OnEvent(event, _arg1)
     if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
       Z.MasterLootUI.RescanLeftovers()
     end
+    -- Slots confirmed off the corpse: the last actionable row may just
+    -- have left while ignored rows stay (ignore-first, loot-rest).
+    M.CloseIfFinished()
   end
 end
 
@@ -1068,6 +1076,7 @@ function M.OnRowClick(itemID, clickSlot)
       if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
         Z.MasterLootUI.RescanLeftovers()
       end
+      M.CloseIfFinished()
       return "gone"
     end
     -- Moved away: block early, list untouched, log it. Re-loot the same

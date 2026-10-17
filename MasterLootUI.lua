@@ -1344,14 +1344,10 @@ function M.Ignore(itemID, source)
   end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
   -- Looting finished (no rows left, or only ignored rows): close the
-  -- whole loot window and the loot, like the awarded-emptied path in
-  -- RemoveItem — CloseDetail alone would strand the overview open on
-  -- a list of nothing but ignored rows.
-  local finished = Z.LootWindow and Z.LootWindow.LootingFinished
-    and Z.LootWindow.LootingFinished()
-  if finished then
-    if Z.LootWindow and Z.LootWindow.Hide then Z.LootWindow.Hide() end
-    if CloseLoot then pcall(CloseLoot) end
+  -- whole window and the loot via the shared close-out — CloseDetail
+  -- alone would strand the overview open on ignored leftovers.
+  if Z.LootWindow and Z.LootWindow.CloseIfFinished then
+    Z.LootWindow.CloseIfFinished()
   end
   M.MaybeGroupAfterBoss(source)
   -- Queue bookkeeping: an ignored sim row must not stay rollable,
@@ -1823,6 +1819,11 @@ function M.RescanLeftovers()
   end
   for i = 1, Z.Util.ArrayCount(rows) do rows[i].index = i end
   if Z.LootWindow and Z.LootWindow.Refresh then Z.LootWindow.Refresh() end
+  -- Reconciling may have dropped the last actionable row while ignored
+  -- rows stay (ignore-first, loot/award the rest): close out here too.
+  if Z.LootWindow and Z.LootWindow.CloseIfFinished then
+    Z.LootWindow.CloseIfFinished()
+  end
   return Z.Util.ArrayCount(rows)
 end
 

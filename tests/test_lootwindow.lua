@@ -403,9 +403,15 @@ LW.SetItems({
 }, "loot")
 ok(not LW.LootingFinished(), "open rows: looting not finished")
 LW.OpenDetail(1001)
+local lootCalls0 = 0
+local lootOpenSaved = ML.lootOpen
+CloseLoot = function() lootCalls0 = lootCalls0 + 1 end
 eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore from pick")
 ok(LW.Find(1001) ~= nil and LW.Find(1001).ignored, "ignored row stays listed")
 ok(LW.detail ~= nil and LW.detail.itemID == 1001, "detail stays open (rows actionable)")
+eq(lootCalls0, 0, "CloseLoot not fired while rows actionable")
+CloseLoot = nil
+ML.lootOpen = lootOpenSaved
 ok(string.find(LW.RowText(LW.Find(1001)), "[ignored]", 1, true) ~= nil, "ignored row flagged")
 ok(not LW.LootingFinished(), "actionable rows left: looting not finished")
 ok(not SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "ignore won-marks nobody")
@@ -416,6 +422,8 @@ ok(LW.Find(1002) ~= nil, "other row untouched")
 -- closes (not just the detail) — Hide() hides the overview frame.
 local hideCalls = 0
 local realHide = LW.Hide
+local closeCalls = 0
+CloseLoot = function() closeCalls = closeCalls + 1 end
 LW.Hide = function() hideCalls = hideCalls + 1 return realHide() end
 LW.OpenDetail(1002)
 LW.doAction(1002, "roll")
@@ -425,9 +433,40 @@ ok(ML.roll == nil, "ignore ends the roll")
 ok(LW.Find(1002) ~= nil and LW.Find(1002).ignored, "mid-roll ignore stays listed")
 ok(LW.detail == nil, "detail closed: only ignored rows left")
 ok(hideCalls >= 1, "loot window closed: only ignored rows left")
+ok(closeCalls >= 1, "loot session closed: only ignored rows left")
+CloseLoot = nil
 LW.Hide = realHide
 ok(LW.LootingFinished(), "only ignored rows: looting finished")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1002), 0, "unfinished roll logs nothing")
+-- Ignore-first, then process the rest: ignoring 1001 up front leaves
+-- 1002 actionable; awarding 1002 after must close the whole window
+-- even though the close-out runs through the award path, not ignore.
+ZugLoot.DB = { sheet = makeSheet() }
+LW.SetItems({
+  { itemID = 1001, link = "item:1001", badge = "SR:2" },
+  { itemID = 1002, link = "item:1002", badge = "SR" },
+}, "loot")
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "ignore"), "ignored 1001", "ignore-first from pick")
+ok(LW.Find(1001).ignored, "first row ignored, still listed")
+ok(LW.detail ~= nil, "detail open: 1002 still actionable")
+hideCalls = 0
+closeCalls = 0
+CloseLoot = function() closeCalls = closeCalls + 1 end
+LW.Hide = function() hideCalls = hideCalls + 1 return realHide() end
+LW.OpenDetail(1002)
+LW.doAction(1002, "roll")
+ML.IntakeChatRoll("Solo rolls 70 (1-100)")
+LW.doAction(1002, "finish")
+eq(LW.doAction(1002, "award-name", "Solo"), "awarded Solo", "award the rest")
+ok(LW.Find(1002) == nil, "awarded row left the list")
+ok(LW.Find(1001) ~= nil and LW.Find(1001).ignored, "ignored row still listed")
+ok(LW.detail == nil, "detail closed: only ignored rows left")
+ok(hideCalls >= 1, "loot window closed: only ignored rows left")
+ok(closeCalls >= 1, "loot session closed after ignore-first + award-rest")
+CloseLoot = nil
+LW.Hide = realHide
+ok(LW.LootingFinished(), "ignore-first + award-rest finishes looting")
 -- Award-phase ignore: history from the finished round stays (rolls
 -- really happened), but nobody wins.
 LW.SetItems({ { itemID = 1001, link = "item:1001", badge = "SR:2" } }, "loot")
