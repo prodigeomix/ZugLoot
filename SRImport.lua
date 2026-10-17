@@ -206,10 +206,13 @@ function M.ApplySheet(sheet, source, importer)
   if Z.DropLog then Z.DropLog.Add(nil, nil, "sheet", "import", sheet.meta.importedBy) end
 end
 
--- Accept either format: raidres export blob (base64/json) or static line format.
--- Used by both paste import and Load from File.
+-- Accept either format: raidres export blob (base64/json), CSV export, or
+-- static line format. Used by both paste import and Load from File.
 function M.ParseAnyImport(text)
   local sheet, err = Z.SRData.ParseRaidResExport(text)
+  if not sheet then
+    sheet, err = Z.SRData.ParseCSVFormat(text)
+  end
   if not sheet then
     sheet, err = Z.SRData.ParseLineFormat(text)
   end
