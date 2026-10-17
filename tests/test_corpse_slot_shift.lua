@@ -178,6 +178,30 @@ CloseLoot = nil
 LW.Hide = realHide
 ok(LW.LootingFinished(), "ignore-first + corpse-path finishes looting")
 
+-- 6. Second chance: re-looting the corpse brings the ignored row back
+-- WITHOUT closing. A no-change rescan (reopen) must never close — only
+-- a rescan that DROPPED rows may.
+loot = { { id = 17001, link = "item:17001:0:0:0", quality = 4 } }
+ML.lootOpen = true
+hideCalls, closeCalls = 0, 0
+LW.Hide = function() hideCalls = hideCalls + 1 return realHide() end
+CloseLoot = function() closeCalls = closeCalls + 1 end
+ML.RescanLeftovers() -- reopen onto the still-present ignored row: no drop
+eq(#LW.items, 1, "reopen rescan keeps the ignored row")
+ok(LW.Find(17001).ignored, "reopened row still flagged ignored")
+eq(hideCalls, 0, "reopen does not close the loot window")
+eq(closeCalls, 0, "reopen does not close the loot session")
+CloseLoot = nil
+LW.Hide = realHide
+-- …and the looter can roll the previously-ignored item after all:
+-- starting its roll clears the mark and it is actionable again.
+ZugLoot.DB = ZugLoot.DB or {}
+ZugLoot.DB.sheet = ZugLoot.DB.sheet or ZugLoot.SRData.NewSheet()
+LW.OpenDetail(17001)
+eq(LW.doAction(17001, "roll"), "rolling", "ignored row re-rollable on second chance")
+ok(not LW.Find(17001).ignored, "roll clears the ignored mark")
+ok(not LW.LootingFinished(), "actionable again: looting not finished")
+
 if T.fail == 0 then
   print("corpse slot shift and candidate invariants passed")
 else

@@ -136,8 +136,8 @@ function M.WatchClick(slot, itemID, rowName)
     if Z.MasterLootUI and Z.MasterLootUI.VerifySlot then
       local v = Z.MasterLootUI.VerifySlot(itemID, slot)
       if v == "gone" or v == nil then
+        -- RescanLeftovers closes itself when it actually dropped rows.
         if Z.MasterLootUI.RescanLeftovers then Z.MasterLootUI.RescanLeftovers() end
-        M.CloseIfFinished()
         return
       end
     end
@@ -246,12 +246,19 @@ function M.LootingFinished()
   end
   return true
 end
--- Shared close-out: when looting is finished, close the whole window
--- and the loot. Every path that drops or reconciles rows funnels through
--- here, so no ordering can strand the overview open: ignore-first then
--- award/loot the rest closes here just like ignore-last does.
+-- Shared close-out: when looting just finished (rows dropped and nothing
+-- actionable remains), close the whole window and the loot. Every path
+-- that drops rows funnels through here, so no ordering can strand the
+-- overview open: ignore-first then award/loot the rest closes here just
+-- like ignore-last does.
+--
+-- Reopening NEVER closes: the looter re-looting the corpse gets the
+-- ignored rows back as a second chance to roll them. Only a rescan that
+-- DROPPED something (or an ignore that just marked) may close — a rescan
+-- that changed nothing (reopen, unrelated slot) must leave the window up.
 -- Returns true when it closed.
-function M.CloseIfFinished()
+function M.CloseIfFinished(dropped)
+  if not dropped then return false end
   if not M.LootingFinished() then return false end
   M.Hide()
   if CloseLoot then pcall(CloseLoot) end
@@ -428,7 +435,7 @@ function M.RemoveItem(itemID, slotHint)
   -- Nothing actionable left (empty, or only ignored rows): the corpse is
   -- fully distributed. Close the window and the loot (Clear() also fires
   -- on a fresh LOOT_OPENED, so the next corpse starts clean).
-  M.CloseIfFinished()
+  M.CloseIfFinished(true) -- a row just left the list
 end
 
 function M.AllDone()
@@ -451,8 +458,15 @@ function M.CloseOverview()
   if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
     Z.MasterLootUI.RescanLeftovers()
   end
-  if M.CloseIfFinished() then return "closed" end
+  -- The X button is an explicit dismiss: a finished list closes the loot
+  -- out, anything else parks. (No drop happened here — the explicit
+  -- close IS the event.)
+  local finishedNow = M.LootingFinished()
   M.Hide()
+  if finishedNow then
+    if CloseLoot then pcall(CloseLoot) end
+    return "closed"
+  end
   return "parked"
 end
 
@@ -480,12 +494,12 @@ function M.OnEvent(event, _arg1)
       Z.MasterLootUI.ParkCorpse()
     end
   elseif event == "LOOT_SLOT_CLEARED" then
+    -- Slots confirmed off the corpse: the last actionable row may just
+    -- have left while ignored rows stay (ignore-first, loot-rest).
+    -- RescanLeftovers closes itself when it actually dropped rows.
     if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
       Z.MasterLootUI.RescanLeftovers()
     end
-    -- Slots confirmed off the corpse: the last actionable row may just
-    -- have left while ignored rows stay (ignore-first, loot-rest).
-    M.CloseIfFinished()
   end
 end
 
@@ -1073,10 +1087,10 @@ function M.OnRowClick(itemID, clickSlot)
     -- reported "gray and says done, still not looted" ghost.
     -- "passthrough" (Blizzard frame restored, hands off): nothing to dim.
     if issued == "gone" then
+      -- RescanLeftovers closes itself when it actually dropped rows.
       if Z.MasterLootUI and Z.MasterLootUI.RescanLeftovers then
         Z.MasterLootUI.RescanLeftovers()
       end
-      M.CloseIfFinished()
       return "gone"
     end
     -- Moved away: block early, list untouched, log it. Re-loot the same

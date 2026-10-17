@@ -1346,8 +1346,9 @@ function M.Ignore(itemID, source)
   -- Looting finished (no rows left, or only ignored rows): close the
   -- whole window and the loot via the shared close-out — CloseDetail
   -- alone would strand the overview open on ignored leftovers.
+  -- (Ignore just marked a row: that IS the drop-like event here.)
   if Z.LootWindow and Z.LootWindow.CloseIfFinished then
-    Z.LootWindow.CloseIfFinished()
+    Z.LootWindow.CloseIfFinished(true)
   end
   M.MaybeGroupAfterBoss(source)
   -- Queue bookkeeping: an ignored sim row must not stay rollable,
@@ -1709,6 +1710,7 @@ end
 M.lootOpen = false
 function M.RescanLeftovers()
   local rows = (Z.LootWindow and Z.LootWindow.items) or M.items
+  local before = Z.Util.ArrayCount(rows)
   if not GetNumLootItems then return Z.Util.ArrayCount(rows) end
   if not M.lootOpen then return Z.Util.ArrayCount(rows) end
   local threshold = M.LootThreshold()
@@ -1817,12 +1819,16 @@ function M.RescanLeftovers()
     end
     table.insert(rows, e)
   end
+  -- Rows dropped by this reconcile? A reopen-rescan that changed nothing
+  -- must NEVER close (the looter gets ignored rows back for a second
+  -- chance to roll them); only the transition to finished closes.
+  local dropped = Z.Util.ArrayCount(rows) ~= before
   for i = 1, Z.Util.ArrayCount(rows) do rows[i].index = i end
   if Z.LootWindow and Z.LootWindow.Refresh then Z.LootWindow.Refresh() end
   -- Reconciling may have dropped the last actionable row while ignored
   -- rows stay (ignore-first, loot/award the rest): close out here too.
   if Z.LootWindow and Z.LootWindow.CloseIfFinished then
-    Z.LootWindow.CloseIfFinished()
+    Z.LootWindow.CloseIfFinished(dropped)
   end
   return Z.Util.ArrayCount(rows)
 end
