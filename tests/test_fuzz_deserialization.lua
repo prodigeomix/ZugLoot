@@ -159,6 +159,17 @@ end
 eq(unhandledErrors, 0, "5000 fuzz iterations survived with zero crashes or unhandled exceptions")
 ok(fuzzCount >= 5000, "fuzz count threshold satisfied")
 
+-- 4. JSON recursion depth & malformed token resilience
+local deepJson = string.rep("{\"a\":", 80) .. "1" .. string.rep("}", 80)
+local resDeep, errDeep = ZugLoot.Util.JsonDecode(deepJson)
+eq(resDeep, nil, "deeply nested JSON rejected gracefully")
+ok(string.find(tostring(errDeep), "recursion depth limit") ~= nil, "recursion depth error reported")
+
+local malformedNum = "[ 1, # ]"
+local resMal, errMal = ZugLoot.Util.JsonDecode(malformedNum)
+eq(resMal, nil, "malformed token in JSON rejected")
+ok(errMal ~= nil, "error reported on malformed token")
+
 if T.fail == 0 then
   print("deserialization fuzzing and injection defense passed")
 else
