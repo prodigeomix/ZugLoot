@@ -736,6 +736,27 @@ function M.GetRollers(sheet, itemID)
   return sheet.items[itemID].rollers or {}
 end
 
+-- Live (unspent) SR holders: rollers on the item who have NOT won it.
+-- A won SR is SPENT — one win per player per item per raid, even with
+-- multi-SR (`rolls` x2 still wins only once). Everything that judges a
+-- FRESH roll reads this, never the raw roller list: the resolver (SR
+-- contest), the loot-window badge/roller list, the intake typer, the
+-- SR bonus, and the roll allowance. Display paths (sheet tab, cards,
+-- session history) keep the full list with [WON] marks — history stays.
+-- Returns the roller records (same table entries, filtered).
+function M.SRHolders(sheet, itemID)
+  local out = {}
+  if not sheet or not sheet.items or not sheet.items[itemID] then return out end
+  local rollers = sheet.items[itemID].rollers or {}
+  for i = 1, Util.ArrayCount(rollers) do
+    local r = rollers[i]
+    if r and r.name and not M.HasWon(sheet, itemID, r.name) then
+      table.insert(out, r)
+    end
+  end
+  return out
+end
+
 -- Hard reserve lookup: sheet.hardres[itemID] = { quality } (line HARDRES
 -- section or raidres hardreserves[]). Pure, nil-safe for tests.
 function M.IsHardres(sheet, itemID)
@@ -744,27 +765,26 @@ function M.IsHardres(sheet, itemID)
 end
 
 -- Loot-window badge for an item: "HR" beats everything; "SR" / "SR:n" when
--- n players hold a soft reserve; "" when nobody reserved it.
+-- n players hold a LIVE (unspent) soft reserve; "" when nobody does.
+-- A re-drop whose only SRs are already won shows NO badge — it rolls
+-- as an item with no SRs.
 function M.ReserveBadge(sheet, itemID)
   if M.IsHardres(sheet, itemID) then return "HR" end
-  local n = 0
-  if sheet and sheet.items and sheet.items[itemID] then
-    n = Util.ArrayCount(sheet.items[itemID].rollers or {})
-  end
+  local n = Util.ArrayCount(M.SRHolders(sheet, itemID))
   if n <= 0 then return "" end
   if n == 1 then return "SR" end
   return "SR:" .. n
 end
 
--- Players holding a soft reserve on an item, sorted. Powers the row
--- detail's roller list and the single-SR direct-award shortcut.
+-- Players holding a LIVE (unspent) soft reserve on an item, sorted.
+-- Powers the row detail's roller list and the single-SR direct-award
+-- shortcut. Spent (won) SRs drop out: a re-drop with only won SRs
+-- lists no rollers and offers no single-holder shortcut.
 function M.SRNames(sheet, itemID)
   local out = {}
-  if sheet and sheet.items and sheet.items[itemID] then
-    local rollers = sheet.items[itemID].rollers or {}
-    for i = 1, Util.ArrayCount(rollers) do
-      if rollers[i] and rollers[i].name then table.insert(out, rollers[i].name) end
-    end
+  local holders = M.SRHolders(sheet, itemID)
+  for i = 1, Util.ArrayCount(holders) do
+    if holders[i] and holders[i].name then table.insert(out, holders[i].name) end
   end
   table.sort(out)
   return out

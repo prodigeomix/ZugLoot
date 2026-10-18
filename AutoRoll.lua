@@ -28,14 +28,15 @@ function M.PlayerSRd(itemID)
 end
 
 -- How many times the local player reserved this item (x2 = two rolls).
+-- Spent SRs roll once like everyone else (see MasterLootUI.RollAllowance).
 function M.PlayerAllowance(itemID)
   local sheet = Z.DB and Z.DB.sheet
   if not sheet then return 1 end
   local me = UnitName("player")
-  local rollers = Z.SRData.GetRollers(sheet, itemID)
-  for i = 1, Z.Util.ArrayCount(rollers) do
-    if rollers[i].name == me then
-      local n = tonumber(rollers[i].rolls) or 1
+  local holders = Z.SRData.SRHolders(sheet, itemID)
+  for i = 1, Z.Util.ArrayCount(holders) do
+    if holders[i].name == me then
+      local n = tonumber(holders[i].rolls) or 1
       if n < 1 then n = 1 end
       return n
     end

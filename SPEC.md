@@ -158,7 +158,9 @@ Sheet = {
   `x2`) may roll up to N times in one session; their best roll stands.
   Extra rolls are extra chances, never extra winners: a player's own
   rolls never tie against each other, and anything past the allowance is
-  ignored. Non-holders roll once.
+  ignored. Non-holders roll once. WINNING SPENDS THE SR: one win per
+  player per item per raid, even with `x2` — a spent holder rolls once
+  (allowance 1), takes no SR+ bonus, and their 1-100 types as MS.
 - Off-sheet rolls (no holders on the item): same single path - kind
   priority SR > MS > OS, with an empty SR contest. An MS 33 beats an
   OS 76 even with nobody holding SR; OS wins only with no MS contest.
@@ -195,6 +197,13 @@ Sheet = {
   the raid result line, the live raider roll list (greyed), sim output, and the
   Sheet tab history lines (`Resolver.ToHistoryEntry` carries them into
   `sheet.rolls`).
+  SPENT SRS DROP OUT: `SRData.SRHolders` (rollers minus won) is what fresh
+  rolls read — resolver SR contest, intake typer, SR bonus, allowance,
+  sim fakes, loot badge (`ReserveBadge`), and the row detail's roller
+  list + single-holder shortcut (`SRNames`). An item whose only SRs are
+  won shows NO badge, NO roller list, NO shortcut on the ML window, and
+  rolls as a normal MS roll. History/display paths (sheet tab, cards,
+  session lines) keep the full list with `[WON]` — history stays.
 
 ### 3.3 Unreserved drops (not on the sheet)
 

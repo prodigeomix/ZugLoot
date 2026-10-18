@@ -93,6 +93,30 @@ ok(not SRData.HasWon(s2, 6724, "Zizz"), "other not won")
 SRData.ClearWon(s2)
 ok(not SRData.HasWon(s2, 6724, "Carbon"), "won cleared")
 
+-- 5b. Spent SRs: SRHolders lists live holders only; badge + names
+-- follow, so a re-drop with only won SRs shows no SR indication.
+local sW = SRData.NewSheet()
+sW.items[700] = { quality = 4, rollers = {
+  { name = "A", rolls = 2, sr_plus = 10 },
+  { name = "B", rolls = 1, sr_plus = nil },
+} }
+eq(#SRData.SRHolders(sW, 700), 2, "both holders live")
+eq(SRData.ReserveBadge(sW, 700), "SR:2", "badge counts live holders")
+eq(table.concat(SRData.SRNames(sW, 700), ","), "A,B", "names list live holders")
+SRData.MarkWon(sW, 700, "A", 4)
+eq(#SRData.SRHolders(sW, 700), 1, "spent holder drops out")
+eq(SRData.SRHolders(sW, 700)[1].name, "B", "live holder remains")
+eq(SRData.ReserveBadge(sW, 700), "SR", "badge recounts")
+eq(table.concat(SRData.SRNames(sW, 700), ","), "B", "names recount")
+SRData.MarkWon(sW, 700, "B", 4)
+eq(#SRData.SRHolders(sW, 700), 0, "no live holders left")
+eq(SRData.ReserveBadge(sW, 700), "", "all spent: no badge")
+eq(#SRData.SRNames(sW, 700), 0, "all spent: no names")
+-- HR still wins over spent SRs; unknown items stay empty.
+sW.hardres[700] = { quality = 5 }
+eq(SRData.ReserveBadge(sW, 700), "HR", "hardres beats spent")
+eq(#SRData.SRHolders(sW, 9999), 0, "unknown item: no holders")
+
 -- 6. Example file parses.
 local f = io.open("CustomData_example/ZugLoot_SR.txt", "r")
 if f then

@@ -248,34 +248,37 @@ function M.IntakeChatRoll(line)
   M.AddRoll(player, rv, minR, maxR)
 end
 
--- SR+ bonus for a reserve holder's SR roll, else 0. Single lookup so
--- the stored roll, both windows, and the award all see one number.
+-- SR+ bonus for a LIVE reserve holder's SR roll, else 0. Single lookup
+-- so the stored roll, both windows, and the award all see one number.
+-- Spent SRs (already won) grant no bonus — the re-drop is a normal roll.
 function M.SRBonus(itemID, player, rtype)
   if rtype ~= "SR" then return 0 end
-  if Z.DB.sheet and Z.SRData.GetRollers then
-    local rollers = Z.SRData.GetRollers(Z.DB.sheet, itemID)
-    for i = 1, Z.Util.ArrayCount(rollers) do
-      if rollers[i].name == player then return rollers[i].sr_plus or 0 end
+  if Z.DB.sheet and Z.SRData.SRHolders then
+    local holders = Z.SRData.SRHolders(Z.DB.sheet, itemID)
+    for i = 1, Z.Util.ArrayCount(holders) do
+      if holders[i].name == player then return holders[i].sr_plus or 0 end
     end
   end
   return 0
 end
 
 -- One roll lands on the open roll (up to the player's allowance). The
--- RANGE the player chose decides the kind; 1-100 is SR only for reserve
--- holders, otherwise MS. Sheet lookups here so window, award, and
--- resolver all see the same kind.
+-- RANGE the player chose decides the kind; 1-100 is SR only for LIVE
+-- reserve holders, otherwise MS (a spent holder's 1-100 is a plain MS
+-- roll — the re-drop is a normal roll without SRs). Sheet lookups here
+-- so window, award, and resolver all see the same kind.
 --
 -- Allowance: a player may roll as many times as they SR'd the item
 -- (sheet `rolls`: x2 = two rolls, default one). The resolver judges
 -- every roll but keeps each player's best, so extra rolls are extra
 -- chances, never extra winners. Anything past the allowance is ignored.
+-- A spent SR (already won) rolls like everyone else: allowance 1.
 function M.RollAllowance(itemID, player)
-  if Z.DB and Z.DB.sheet and Z.SRData.GetRollers then
-    local rollers = Z.SRData.GetRollers(Z.DB.sheet, itemID)
-    for i = 1, Z.Util.ArrayCount(rollers) do
-      if rollers[i].name == player then
-        local n = tonumber(rollers[i].rolls) or 1
+  if Z.DB and Z.DB.sheet and Z.SRData.SRHolders then
+    local holders = Z.SRData.SRHolders(Z.DB.sheet, itemID)
+    for i = 1, Z.Util.ArrayCount(holders) do
+      if holders[i].name == player then
+        local n = tonumber(holders[i].rolls) or 1
         if n < 1 then n = 1 end
         return n
       end
@@ -305,10 +308,10 @@ function M.AddRoll(player, rv, minR, maxR, opts)
   elseif minR == 1 and maxR == Z.Caps.TMOG then rtype = "TMOG"
   elseif minR == 1 and maxR == Z.Caps.SR then
     rtype = "MS"
-    if Z.DB.sheet and Z.SRData.GetRollers then
-      local rollers = Z.SRData.GetRollers(Z.DB.sheet, roll.itemID)
-      for i = 1, Z.Util.ArrayCount(rollers) do
-        if rollers[i].name == player then rtype = "SR" break end
+    if Z.DB.sheet and Z.SRData.SRHolders then
+      local holders = Z.SRData.SRHolders(Z.DB.sheet, roll.itemID)
+      for i = 1, Z.Util.ArrayCount(holders) do
+        if holders[i].name == player then rtype = "SR" break end
       end
     end
   end

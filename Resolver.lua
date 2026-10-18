@@ -47,6 +47,8 @@ end
 function M.BuildEntries(sheetLike, itemID, rolls, opts)
   opts = opts or {}
   local cap = opts.cap or 100
+  local wonMap = {}
+  if sheetLike and sheetLike.won and sheetLike.won[itemID] then wonMap = sheetLike.won[itemID] end
   local srMap = {}
   local rollers = {}
   if sheetLike and sheetLike.items and sheetLike.items[itemID] then
@@ -55,7 +57,12 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
   local i = 1
   while rollers[i] ~= nil do
     local r = rollers[i]
-    srMap[r.name] = { bonus = r.sr_plus or 0, rolls = r.rolls or 1 }
+    -- Spent SRs (already won this item) hold no contest: only live
+    -- holders name the SR kind. A re-drop with only won SRs resolves
+    -- with an empty SR contest — best MS wins, like an unreserved item.
+    if r.name and wonMap[r.name] ~= true then
+      srMap[r.name] = { bonus = r.sr_plus or 0, rolls = r.rolls or 1 }
+    end
     i = i + 1
   end
   if opts.srPlusByName then
@@ -64,8 +71,6 @@ function M.BuildEntries(sheetLike, itemID, rolls, opts)
       srMap[n].bonus = b or 0
     end
   end
-  local wonMap = {}
-  if sheetLike and sheetLike.won and sheetLike.won[itemID] then wonMap = sheetLike.won[itemID] end
   -- One-win-per-item blocks the SR contest ONLY: an already-won player
   -- may still roll MS/OS/TMOG (e.g. rolling transmog after winning mainspec).
   -- Normalize a raw roll type to the four known kinds.
@@ -383,9 +388,13 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
   end
   local rolls = {}
   local skip = {}
-  -- SR holders roll SR (their reserve) up to their allowance: a player
-  -- who SR'd the item N times may roll N times (their best stands).
+  -- Live SR holders roll SR (their reserve) up to their allowance: a
+  -- player who SR'd the item N times may roll N times (their best
+  -- stands). Spent holders (already won) roll with the filler pool
+  -- instead — a re-drop sims as a normal roll without SRs.
   -- A tmog-forced holder rolls TMOG instead.
+  local wonMap = {}
+  if sheetLike and sheetLike.won and sheetLike.won[itemID] then wonMap = sheetLike.won[itemID] end
   if sheetLike and sheetLike.items and sheetLike.items[itemID] then
     local rollers = sheetLike.items[itemID].rollers or {}
     local i = 1
@@ -393,7 +402,7 @@ function M.FakeRolls(sheetLike, itemID, opts, rng)
       local nm = rollers[i].name
       local times = tonumber(rollers[i].rolls) or 1
       if times < 1 then times = 1 end
-      if nm and nm ~= "" then
+      if nm and nm ~= "" and wonMap[nm] ~= true then
         local kind = tmogSet[nm] and "TMOG" or "SR"
         local k = 1
         while k <= times and count(rolls) < total do

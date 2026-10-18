@@ -544,4 +544,46 @@ UnitHealthMax = nil
 ZugLoot.SRSecurity.AmLeader = function() return true end
 grouping = "solo"
 
+-- 14. Spent SR, end to end: Aaa wins 1001 (SR spent), the item drops
+-- again — no SR badge, no single-holder shortcut, and the roll is a
+-- normal MS roll even though both rollers held SRs.
+resetHarness()
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+LW.OpenDetail(1001)
+eq(LW.doAction(1001, "roll"), "rolling", "first roll starts")
+ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+ML.IntakeChatRoll("Bbb rolls 80 (1-100)")
+eq(LW.doAction(1001, "finish"), "finished", "first roll finishes")
+eq(LW.detail.menu.winners[1].name, "Aaa", "SR+ wins first drop")
+ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "first win won-marks")
+-- Re-drop: fresh corpse scan rebuilds the row off the spent sheet.
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.Find(1001).badge, "SR", "one live SR left: badge recounts")
+LW.OpenDetail(1001)
+ok(LW.detail.single, "one live SR left: single shortcut")
+eq(table.concat(LW.detail.rollers, ","), "Bbb", "spent holder off the detail list")
+eq(LW.doAction(1001, "roll"), "rolling", "re-drop roll starts")
+ML.IntakeChatRoll("Aaa rolls 99 (1-100)") -- spent: types MS, no bonus
+ML.IntakeChatRoll("Bbb rolls 80 (1-100)")
+eq(LW.doAction(1001, "finish"), "finished", "re-drop finishes")
+eq(LW.detail.menu.winners[1].name, "Bbb", "live holder wins the re-drop")
+ML.AwardChosen({ name = "Bbb", via = "winner" }, 1001)
+ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Bbb"), "second win won-marks")
+-- Third drop: every SR spent — no badge, no shortcut, plain MS roll.
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+eq(LW.Find(1001).badge, "", "all spent: no SR badge on the ML window")
+LW.OpenDetail(1001)
+ok(not LW.detail.single, "all spent: no single shortcut")
+eq(#LW.detail.rollers, 0, "all spent: no SR roller list")
+eq(LW.doAction(1001, "roll"), "rolling", "open roll starts")
+ML.IntakeChatRoll("Aaa rolls 99 (1-100)")
+ML.IntakeChatRoll("Bbb rolls 10 (1-100)")
+eq(LW.doAction(1001, "finish"), "finished", "open roll finishes")
+eq(LW.detail.menu.winners[1].name, "Aaa", "no live SRs: best MS wins")
+eq(LW.detail.menu.winners[1].rollType, "MS", "won as MS, not SR")
+
 return T

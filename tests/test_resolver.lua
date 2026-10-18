@@ -276,4 +276,35 @@ eq(rollsX[1].name, "A", "first roll holder A")
 eq(rollsX[2].name, "A", "second roll still A (x2)")
 eq(rollsX[3].name, "B", "then B")
 
+-- 10. Spent SRs hold no contest: a won SR is consumed, even multi-SR.
+local sSpent = sheetWith(901, {
+  { name = "A", rolls = 2, sr_plus = 10 },
+  { name = "B", rolls = 1, sr_plus = nil },
+})
+SRData.MarkWon(sSpent, 901, "A", 4)
+-- The spent holder's SR-kind roll is excluded (shown [already won]),
+-- never contesting — the live holder wins despite the lower roll.
+local resSpent = R.ResolveItem(sSpent, 901, {
+  { name = "A", roll = 99, type = "SR" },
+  { name = "B", roll = 10, type = "SR" },
+}, { cap = 100 })
+eq(resSpent.winners[1].name, "B", "spent SR cannot win twice")
+ok(resSpent.entries[1].excludedWon, "spent roll flagged already-won")
+-- All SRs spent: the re-drop resolves with an empty SR contest — best
+-- MS wins, exactly like an item with no SRs.
+SRData.MarkWon(sSpent, 901, "B", 4)
+local resSpent2 = R.ResolveItem(sSpent, 901, {
+  { name = "A", roll = 99, type = "MS" },
+  { name = "B", roll = 10, type = "MS" },
+}, { cap = 100 })
+eq(resSpent2.winners[1].name, "A", "no live SRs: best MS wins")
+ok(resSpent2.perType.SR.entry == nil, "no SR contest without live holders")
+-- Sim fakes for a spent sheet: nobody pre-rolls SR.
+math.random = kindRig({ 70, 60, 50 })
+local rollsW = R.FakeRolls(sSpent, 901, { count = 3 })
+math.random = realRandom
+local srFakes = 0
+for i = 1, #rollsW do if rollsW[i].type == "SR" then srFakes = srFakes + 1 end end
+eq(srFakes, 0, "spent holders roll filler kinds, never SR")
+
 return T
