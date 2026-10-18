@@ -38,6 +38,22 @@ function M.Channel()
   return "PARTY"
 end
 
+-- Sim speaker: true while a SIM round owns the roll window (the open
+-- roll, or the finished round parked for award/continue). Live rolls
+-- and idle windows read false. Lets the shared SayGroup/WarnGroup path
+-- route sim traffic to the group without every caller threading a flag
+-- (a sim is an explicit test action, never background echo).
+-- Nil-safe headless (no roll module -> false).
+function M.SimSpeaker()
+  local MLUI = Z.MasterLootUI
+  if not MLUI then return false end
+  local roll = MLUI.roll
+  if roll and roll.mode == "SIM" then return true end
+  local stamp = MLUI.lastRound
+  if stamp and stamp.mode == "SIM" then return true end
+  return false
+end
+
 -- SHEET_REQ: ask the group for the current sheet. Only the ML answers
 -- with a sheet they actually hold (AnySheet), else the raid leader /
 -- assistant with theirs — priority ML > leader, never anyone else.
@@ -254,7 +270,10 @@ end
 -- the group — a sim is an explicit user action ("show the raid this
 -- test roll"), never background echo, so the simulator reads exactly
 -- like the real roll would even when the simmer isn't the ML. A solo
--- sim stays local. Callers never touch SendChatMessage directly.
+-- sim stays local. SayGroup/WarnGroup sniff the sim out via
+-- SimSpeaker (open SIM roll / parked SIM round), so callers don't
+-- thread the flag; SaySim/WarnSim force it. Callers never touch
+-- SendChatMessage directly.
 --
 -- Verifiable by design: every roll line goes through here, so tests pin
 -- the channel (`SendChatMessage` stub) + text (`Z.Print` stub) per
@@ -281,7 +300,13 @@ function M.Say(msg, warn, isSim)
       SendChatMessage(msg, warn and "RAID_WARNING" or "RAID")
       return warn and "RAID_WARNING" or "RAID"
     end
-    Z.Print(msg)
+    -- Grouped but headless (or client API missing): the raid WOULD
+    -- see this line. Mirror it into the log tagged, never silently
+    -- drop it — the ML must be able to verify (and paste) exactly
+    -- what the group saw. Suppressed only for quiet traffic (Z.Hush).
+    if not (Z.Hush and Z.Hush()) then
+      Z.Print("(raid) " .. msg)
+    end
     return "local"
   end
   if Z.SRSecurity and Z.SRSecurity.IsInGroup and Z.SRSecurity.IsInGroup() then
@@ -290,7 +315,9 @@ function M.Say(msg, warn, isSim)
       SendChatMessage(msg, "PARTY")
       return "PARTY"
     end
-    Z.Print(msg)
+    if not (Z.Hush and Z.Hush()) then
+      Z.Print("(party) " .. msg)
+    end
     return "local"
   end
   Z.Print(msg)
@@ -298,20 +325,23 @@ function M.Say(msg, warn, isSim)
 end
 
 -- Roll-traffic chat: live ML-only (raid -> RAID, party -> PARTY,
--- solo/raiders -> ZugLoot log); sim via SaySim/WarnSim always speaks.
--- Sim and live share this path; only the speaker + channel differ by
--- role and grouping.
+-- solo/raiders -> ZugLoot log). SayGroup/WarnGroup route sim traffic
+-- to the group too (SimSpeaker): a sim is an explicit test action,
+-- never background echo. Sim and live share this path; only the
+-- speaker + channel differ by role and grouping.
 function M.SayGroup(msg)
-  M.Say(msg, false)
+  M.Say(msg, false, M.SimSpeaker())
 end
 
 function M.WarnGroup(msg)
-  M.Say(msg, true)
+  M.Say(msg, true, M.SimSpeaker())
 end
 
--- Sim-traffic chat: same channels as SayGroup/WarnGroup, but sim lines
--- bypass the ML-only speaker gate (see M.Say) — whoever runs the sim
--- wants the group to see the test lines. Solo sims still stay local.
+-- Sim-traffic chat: explicit sim routing (same channels, speaker gate
+-- bypassed — whoever runs the sim wants the group to see the test
+-- lines). Mostly redundant with the SimSpeaker sniffing above; kept
+-- for callers that already know the line is sim traffic. Solo sims
+-- still stay local.
 function M.SaySim(msg)
   M.Say(msg, false, true)
 end

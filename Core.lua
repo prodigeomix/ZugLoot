@@ -13,6 +13,23 @@ function Z.Print(msg)
   end
 end
 
+-- Hush: true while quiet traffic is being composed (chat mirror
+-- suppression). The router (Comm.Say) consults it before mirroring
+-- grouped traffic into the local log: quiet senders (drop announces,
+-- version checks, sheet sync chatter) set it around their sends so a
+-- double never lands in the log. Plain Z.Print callers are unaffected -
+-- only the (raid)/(party) mirror reads the flag. Nil-safe headless.
+Z._hush = 0
+function Z.Hush()
+  return (Z._hush or 0) > 0
+end
+function Z.HushAround(fn)
+  Z._hush = (Z._hush or 0) + 1
+  local ok, err = pcall(fn)
+  Z._hush = (Z._hush or 0) - 1
+  if not ok then error(err) end
+end
+
 -- Multi-line /zl help: grouped sections, one line per command with a
 -- real description. Headless-testable (returns the lines too).
 -- Slim command set: windows do the rest via buttons/menus. Kept:

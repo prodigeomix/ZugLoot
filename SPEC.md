@@ -676,6 +676,13 @@ window owns everything; closing it ends the roll — exactly like live.
   text). Sim sessions stay silent on
   the addon channel (no `ROLL_REQ` broadcast), so other clients'
   windows and auto-rolls never fire.
+  QUIET GROUPED TRAFFIC: lines the group already sees on its channel
+  (drop announces) never echo into the ML's log — `Z.HushAround`
+  suppresses the headless `(raid)`/`(party)` mirror for them (the
+  mirror exists so headless runs can verify/paste the exact wire
+  text). Solo drop announces skip the log entirely (the window shows
+  the rows); solo roll traffic (start/verdict/award) still prints —
+  it IS the raid chat when soloing.
 - Every sim roll is **written back into the sheet**: roll history
   (`sheet.rolls`, mode `SIM`, same shape as live via
   `Resolver.ToHistoryEntry`), won marks, and drop-log entries

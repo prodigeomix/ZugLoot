@@ -32,12 +32,15 @@ ZugLoot.MainWindow = nil
 ZugLoot.SRView = nil
 time = time or os.time
 
-SendChatMessage = function() end
-UnitName = function() return "SoloPlayer" end
-GetNumRaidMembers = function() return 0 end
-GetRaidRosterInfo = function() return nil end
-
+local sent = {}
 local grouping = "solo"
+SendChatMessage = function(msg, chan) table.insert(sent, { msg = tostring(msg), chan = tostring(chan) }) end
+UnitName = function() return "SoloPlayer" end
+GetNumRaidMembers = function()
+  if grouping == "raid" then return 10 end
+  return 0
+end
+GetRaidRosterInfo = function() return nil end
 ZugLoot.SRSecurity = {
   IsInRaid = function() return grouping == "raid" end,
   IsInParty = function() return grouping == "party" end,
@@ -376,7 +379,9 @@ ok(LW.Find(1001) ~= nil, "epic rows park for resume")
 -- one announce names every roll item — the ML never re-loots to see
 -- the rest. (The client shows ~5 slots per page; GetNumLootItems
 -- reports the full corpse, and ScanCorpse reads slots 1..n.)
+-- Grouped so the announce rides the raid channel (solo skips it).
 resetHarness()
+grouping = "raid"
 lootSlots = {
   { link = "item:17001:0:0:0", quality = 4 },
   { link = "item:17002:0:0:0", quality = 4 },
@@ -392,17 +397,19 @@ eq(#sf, 6, "scan reads all six roll items past page one")
 eq(#sfr, 2, "scan reads both free rows")
 eq(#sc + #sg, 0, "no coin or group rows")
 printed = {}
+sent = {}
 ML.OnLootOpened() -- single open: full rows + full announce
 ok(LW.Find(17006) ~= nil, "page-two epic listed without re-loot")
 ok(LW.Find(5002) ~= nil, "second grey listed without re-loot")
 eq(#LW.items, 8, "all eight slots listed in one scan")
 local sawHead, numbered = false, 0
-for i = 1, #printed do
-  if string.find(printed[i], "dropped 6 items", 1, true) then sawHead = true end
-  if string.find(printed[i], "^%d+%. ") then numbered = numbered + 1 end
+for i = 1, #sent do
+  if string.find(sent[i].msg, "dropped 6 items", 1, true) then sawHead = true end
+  if string.find(sent[i].msg, "^%d+%. ") then numbered = numbered + 1 end
 end
 ok(sawHead, "announce counts all six roll items")
 eq(numbered, 6, "announce names every roll item")
+grouping = "solo"
 
 -- 11. Chat names the item, never a bare item:id.
 resetHarness()

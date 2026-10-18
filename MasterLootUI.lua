@@ -73,10 +73,10 @@ function M.BeginRoll(itemID, itemLink, mode, silent)
   -- real roll even when the simmer isn't the ML. Verifiable: tests pin
   -- text + channel per grouping and role (tests/test_chat_routing.lua).
   local label = M.StartLine(itemID, itemLink, mode)
-  if mode == "SIM" and Z.Comm and Z.Comm.WarnSim then
-    Z.Comm.WarnSim(label)
-  elseif Z.Comm and Z.Comm.WarnGroup then
+  if Z.Comm and Z.Comm.WarnGroup then
     Z.Comm.WarnGroup(label)
+  elseif mode == "SIM" and Z.Comm and Z.Comm.WarnSim then
+    Z.Comm.WarnSim(label)
   else
     Z.Print(label)
   end
@@ -343,10 +343,12 @@ function M.RollLine(entry)
 end
 function M.AnnounceRoll(entry)
   -- Sim-only line (the sole opts.announce=true caller is Sim.RequestRoll;
-  -- live intake stays quiet by design): SaySim so the group sees the
-  -- fake rolls even when the simmer isn't the ML.
+  -- live intake stays quiet by design): SayGroup sniffs the SIM round
+  -- via SimSpeaker, so the group sees the fakes even when the simmer
+  -- isn't the ML (SaySim fallback kept for lean Comm stubs).
   local line = M.RollLine(entry)
-  if Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
+  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  elseif Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
   elseif Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false)
   else Z.Print(line) end
   return line
@@ -623,8 +625,8 @@ function M.AwardLine(itemID, link, winnerName, tradeTo)
 end
 function M.AnnounceAward(itemID, link, winnerName, tradeTo, isSim)
   local line = M.AwardLine(itemID, link, winnerName, tradeTo)
-  if isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
-  elseif Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  elseif isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
   else Z.Print(line) end
   return line
 end
@@ -640,8 +642,8 @@ function M.SandLine(itemID, link, winnerName, qty, total)
 end
 function M.AnnounceSand(itemID, link, winnerName, qty, total, isSim)
   local line = M.SandLine(itemID, link, winnerName, qty, total)
-  if isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
-  elseif Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  elseif isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
   else Z.Print(line) end
   return line
 end
@@ -669,8 +671,8 @@ function M.ResultLine(roll, res)
   return tostring(itemTxt) .. ": no eligible rolls."
 end
 function M.AnnounceVerdict(line, isSim)
-  if isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
-  elseif Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  elseif isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
   else Z.Print(line) end
   return line
 end
@@ -2195,16 +2197,28 @@ function M.OnLootOpened()
   end
   mobName = mobName or M.lootTarget or "Loot"
   if Z.Util.ArrayCount(found) > 0 and Z.Comm and Z.Comm.WarnGroup then
-    Z.Comm.WarnGroup(mobName .. " dropped " .. Z.Util.ArrayCount(found)
-      .. " item" .. (Z.Util.ArrayCount(found) == 1 and ":" or "s:"))
-    for i = 1, Z.Util.ArrayCount(found) do
-      local f = found[i]
-      local nm = f.link
-      if Z.LootWindow and Z.LootWindow.DisplayName then
-        nm = Z.LootWindow.DisplayName({ link = f.link, name = f.name,
-          itemID = Z.Util.ItemID(f.link) })
-      end
-      Z.Comm.WarnGroup(i .. ". " .. tostring(nm))
+    -- Solo: the drop announce stays OFF the log — the loot window
+    -- already shows every row, and a solo corpse needs no chat record.
+    -- (Grouped announces ride SayGroup to the raid/party channel;
+    -- quiet there too via HushAround — the group already sees them.)
+    -- Guarded: harnesses may load MasterLootUI without Core (no Hush).
+    local solo = Z.SRSecurity and Z.SRSecurity.IsSolo
+      and Z.SRSecurity.IsSolo()
+    local hushed = Z.HushAround or function(fn) fn() end
+    if not solo then
+      hushed(function()
+        Z.Comm.WarnGroup(mobName .. " dropped " .. Z.Util.ArrayCount(found)
+          .. " item" .. (Z.Util.ArrayCount(found) == 1 and ":" or "s:"))
+        for i = 1, Z.Util.ArrayCount(found) do
+          local f = found[i]
+          local nm = f.link
+          if Z.LootWindow and Z.LootWindow.DisplayName then
+            nm = Z.LootWindow.DisplayName({ link = f.link, name = f.name,
+              itemID = Z.Util.ItemID(f.link) })
+          end
+          Z.Comm.WarnGroup(i .. ". " .. tostring(nm))
+        end
+      end)
     end
   end
   for i = 1, Z.Util.ArrayCount(found) do
