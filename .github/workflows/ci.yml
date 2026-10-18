@@ -53,6 +53,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Install Lua 5.1
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq lua5.1
       - name: Gate 1 - Global Guard & Lua 5.0 Compatibility
         run: node tests/run.mjs tests/test_global_guard.lua
       - name: Gate 2 - Network MTU (254B) & Throttle Discipline

@@ -138,7 +138,7 @@ Comm.RequestSheet()
 eq(#sentPackets, 2, "RequestSheet sends after debounce cooldown")
 
 -- 6. Verification of AWARD message sender authentication
-local markedItem, markedWinner = nil, nil
+local markedItem, markedWinner
 ZugLoot.DB = { sheet = SRData.NewSheet() }
 SRData.MarkWon = function(sheet, itemID, winner, q)
   markedItem = itemID
