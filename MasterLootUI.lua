@@ -621,8 +621,9 @@ end
 
 -- Roll verdict lines: pure text builders (testable) + shared sender.
 -- Sim and live resolve through the same AnnounceResult — identical
--- lines, only the channel differs (Comm.Say: solo local, party PARTY,
--- raid RAID). Verifiable: tests pin text + channel per grouping.
+-- lines, only the speaker + channel differ (Comm.Say: ML to raid RAID,
+-- party PARTY, solo/raiders local). Verifiable: tests pin text +
+-- channel per grouping and role.
 function M.ResultLine(roll, res)
   local itemTxt = M.ChatItemLink(roll.itemID, roll.itemLink)
   local winners = res.winners or {}

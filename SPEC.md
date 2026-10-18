@@ -650,8 +650,9 @@ window owns everything; closing it ends the roll — exactly like live.
   pre-resolve name/quality (`Sim.syncWindow`) so bare-id sim entries
   link correctly too.
   Verifiable without a raid: `tests/test_chat_routing.lua` pins
-  text + channel per grouping (solo log only, party PARTY-only, raid
-  RAID/RAID_WARNING-only, identical text). Sim sessions stay silent on
+  text + channel per grouping and role (ML: party PARTY-only, raid
+  RAID/RAID_WARNING-only; solo and non-ML raiders log-only, identical
+  text). Sim sessions stay silent on
   the addon channel (no `ROLL_REQ` broadcast), so other clients'
   windows and auto-rolls never fire.
 - Every sim roll is **written back into the sheet**: roll history

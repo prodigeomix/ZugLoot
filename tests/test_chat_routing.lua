@@ -213,7 +213,26 @@ ok(string.find(awardBuilt, "Aaa wins ", 1, true) ~= nil, "AwardLine names the wi
 ok(string.find(awardBuilt, "|Hitem:1001", 1, true) ~= nil, "AwardLine links the item")
 ok(string.find(awardBuilt, "[Dragonfang Blade]", 1, true) ~= nil, "AwardLine names the item")
 
--- 5. Pure builders: tie / no-winner verdicts + sand line + start line.
+-- 5. Non-ML raider in raid/party: the same flow stays local, nothing
+-- reaches group chat — only the master looter speaks to the group.
+ZugLoot.SRSecurity.AmML = function() return false end
+for _, g in ipairs({ "raid", "party" }) do
+  reset()
+  grouping = g
+  math.random = rigged({ 90, 80 })
+  Sim.SimItem("|cffa335ee|Hitem:1001:::::::::|h[Dragonfang Blade]|h|r")
+  math.random = realRandom
+  LW.doAction(1001, "finish")
+  ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
+  eq(#sent, 0, g .. " raider sends nothing (ML-only chat)")
+  local raiderLog = logText()
+  ok(string.find(raiderLog, "Aaa rolls 90 (1-100)", 1, true) ~= nil, g .. " raider still sees roll lines locally")
+  ok(string.find(raiderLog, "won by Aaa (100)", 1, true) ~= nil, g .. " raider still sees the verdict locally")
+  ok(string.find(raiderLog, "Aaa wins ", 1, true) ~= nil, g .. " raider still sees the award locally")
+end
+ZugLoot.SRSecurity.AmML = function() return true end
+
+-- 6. Pure builders: tie / no-winner verdicts + sand line + start line.
 reset()
 LW.SetItems({
   { itemID = 1001, link = "item:1001", name = "Dragonfang Blade" },

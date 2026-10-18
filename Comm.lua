@@ -237,8 +237,10 @@ function M.ApplyRollSession(raidID, itemID, tail, sender)
 end
 
 -- Single chat router for ALL roll traffic — sim AND live share it.
--- One policy, channel only: solo -> the ZugLoot log (local chat frame),
--- party -> PARTY, raid -> RAID (RAID_WARNING when warn=true). No loot-
+-- One policy, speaker + channel: solo -> the ZugLoot log (local chat
+-- frame); grouped, only the master looter speaks — party -> PARTY,
+-- raid -> RAID (RAID_WARNING when warn=true), while raiders see the
+-- same lines locally. No loot-
 -- method branching, no sim special-casing: a sim in a raid reads exactly
 -- like the real roll would, and a solo sim stays local. Callers never
 -- touch SendChatMessage directly.
@@ -251,6 +253,13 @@ end
 function M.Say(msg, warn)
   msg = tostring(msg)
   if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then
+    Z.Print(msg)
+    return "local"
+  end
+  -- Only the master looter speaks to the group: a raider's client sees
+  -- the exact same lines locally instead of echoing them into /raid
+  -- (or /party). Real /rolls are client rolls, never this path.
+  if not (Z.SRSecurity and Z.SRSecurity.AmML and Z.SRSecurity.AmML()) then
     Z.Print(msg)
     return "local"
   end
@@ -275,8 +284,9 @@ function M.Say(msg, warn)
   return "local"
 end
 
--- Roll-traffic chat: raid -> RAID, party -> PARTY, solo -> ZugLoot log.
--- Sim and live share this path; only the channel differs by grouping.
+-- Roll-traffic chat: ML to raid -> RAID, party -> PARTY, solo/raiders ->
+-- ZugLoot log. Sim and live share this path; only the speaker + channel
+-- differ by role and grouping.
 function M.SayGroup(msg)
   M.Say(msg, false)
 end
