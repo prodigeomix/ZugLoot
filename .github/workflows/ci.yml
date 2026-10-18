@@ -41,6 +41,29 @@ jobs:
       - run: luacheck --version
       - run: luacheck .
 
+  # Runtime Invariants & LLM Acceptance Gates (GATES.md):
+  # Enforces hard MTU bounds (254B), corpse slot reconciliation,
+  # Lua 5.0 memory churn limits, and fuzz resilience so LLM-generated
+  # code cannot regress low-level client safety invariants.
+  acceptance-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Gate 1 - Global Guard & Lua 5.0 Compatibility
+        run: node tests/run.mjs tests/test_global_guard.lua
+      - name: Gate 2 - Network MTU (254B) & Throttle Discipline
+        run: node tests/run.mjs tests/test_network_mtu_throttle.lua
+      - name: Gate 3 - Corpse Slot Shift & Candidate Invariants
+        run: node tests/run.mjs tests/test_corpse_slot_shift.lua
+      - name: Gate 4 - Deserialization Fuzzing & Injection Defense
+        run: node tests/run.mjs tests/test_fuzz_deserialization.lua
+      - name: Gate 5 - Memory Churn & SavedVariables Bounds
+        run: node tests/run.mjs tests/test_memory_churn_bounds.lua
+
   # Release zips (only runs on version tags like v0.2.0): the zip holds
   # exactly what the client loads — toc + shipped lua + Media assets.
   # Left out: tests/, CustomData_example/ (test fixtures only),
