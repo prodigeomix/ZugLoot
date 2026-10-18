@@ -503,15 +503,41 @@ function M.HideBlizzardFallback() end
 -- the slot-keyed rescan drops exactly that row and keeps the rest.
 -- LOOT_CLOSED with an empty tracked list hides the window.
 -- Nil-safe headless (no corpse APIs -> no-op).
+-- Actionable roll rows: above-threshold items outside group loot (no
+-- coin/free/group flag) that the ML hasn't ignored. ONLY these keep
+-- the window up on walk-away — everything else is trash the window
+-- should not linger on (coin, below-threshold leftovers, Blizzard's
+-- group rolls, already-ignored rows).
+local function hasActionableRolls()
+  for i = 1, Z.Util.ArrayCount(M.items or {}) do
+    local it = (M.items or {})[i]
+    if it and not it.coin and not it.free and not it.group
+        and not it.ignored then
+      return true
+    end
+  end
+  return false
+end
+
 function M.OnEvent(event, _arg1)
   if event == "LOOT_CLOSED" then
-    -- Walk-away with leftovers: park the rows so re-looting resumes the
-    -- list. An open roll keeps collecting (its window is open); a closed
-    -- one already ended. Only a fully-distributed corpse hides the window.
+    -- Walk-away: park the rows so re-looting resumes the list. The
+    -- window itself stays ONLY when there is still something to roll:
+    -- an open roll keeps collecting (never kill a live roll), or
+    -- actionable roll rows remain under the ML. Trash leftovers
+    -- (coin/free/group/ignored-only) close the window — re-looting
+    -- resumes the parked rows. Only a fully-distributed corpse hides
+    -- without parking.
     if Z.Util.ArrayCount(M.items or {}) == 0 then
       M.Hide()
-    elseif Z.MasterLootUI and Z.MasterLootUI.ParkCorpse then
-      Z.MasterLootUI.ParkCorpse()
+    else
+      local rolling = Z.MasterLootUI and Z.MasterLootUI.roll
+      if Z.MasterLootUI and Z.MasterLootUI.ParkCorpse then
+        Z.MasterLootUI.ParkCorpse()
+      end
+      if not rolling and not hasActionableRolls() then
+        M.Hide()
+      end
     end
   elseif event == "LOOT_SLOT_CLEARED" then
     -- Slots confirmed off the corpse: the last actionable row may just

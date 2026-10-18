@@ -338,6 +338,40 @@ ok(ML.roll ~= nil, "roll still live after walk-back")
 eq(LW.doAction(1001, "finish"), "finished", "finish after walk-back")
 ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 ok(SRData.HasWon(ZugLoot.DB.sheet, 1001, "Aaa"), "award after walk-back")
+-- 10b. Trash walk-away closes the window (rows park for resume);
+-- roll-worthy leftovers keep it up to allow rolling.
+resetHarness()
+lootSlots = { { link = "item:5001:0:0:0", quality = 0 } } -- grey trash
+ML.OnLootOpened()
+ok(LW.Find(5001) ~= nil and LW.Find(5001).free, "trash row listed as free")
+local hidden = false
+LW.frame = { Hide = function() hidden = true end }
+LW.OnEvent("LOOT_CLOSED")
+LW.frame = nil
+ok(hidden, "trash walk-away closes the window")
+ok(LW.Find(5001) ~= nil, "trash rows park for resume")
+ML.OnLootOpened() -- walk back: rows resume around re-loot
+ok(LW.Find(5001) ~= nil, "trash rows resume on re-loot")
+-- Ignored-only leftovers close too: nothing left to roll.
+resetHarness()
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+LW.Find(1001).ignored = true
+hidden = false
+LW.frame = { Hide = function() hidden = true end }
+LW.OnEvent("LOOT_CLOSED")
+LW.frame = nil
+ok(hidden, "ignored-only walk-away closes the window")
+-- Above-threshold leftovers persist for rolling.
+resetHarness()
+lootSlots = { { link = "item:1001:0:0:0", quality = 4 } }
+ML.OnLootOpened()
+hidden = false
+LW.frame = { Hide = function() hidden = true end }
+LW.OnEvent("LOOT_CLOSED")
+LW.frame = nil
+ok(not hidden, "epic leftovers keep the window up")
+ok(LW.Find(1001) ~= nil, "epic rows park for resume")
 
 -- 11. Chat names the item, never a bare item:id.
 resetHarness()

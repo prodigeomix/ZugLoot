@@ -379,9 +379,13 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   the same second return; GUIDs double as unit tokens). The corpse key is
   `guid:<guid>` when available, else `fp:<name>|<sorted ids>[|+coin]`.
   Walk-away-and-back reuses the window: `LOOT_CLOSED` with leftovers
-  keeps the rows, and re-looting the SAME corpse (key match) reconciles
+  parks the rows, and re-looting the SAME corpse (key match) reconciles
   instead of wiping — an open roll keeps collecting while its window is
-  open. A different corpse rebuilds as before.
+  open. A different corpse rebuilds as before. The window itself stays
+  up on walk-away ONLY while there is still something to roll (an open
+  roll, or actionable above-threshold rows under the ML); trash
+  leftovers (coin / below-threshold / group / ignored-only) close the
+  window — the parked rows resume on re-loot.
   Row corpse cache (`MasterLootUI.corpseCache`, never persisted — empty
   at load, no SavedVariables): each not-fully-looted corpse owns its rows
   (+ open detail, click arms) under its key. Restore takes (no stale
