@@ -137,6 +137,27 @@ currentTime = currentTime + 2.0
 Comm.RequestSheet()
 eq(#sentPackets, 2, "RequestSheet sends after debounce cooldown")
 
+-- 6. Verification of AWARD message sender authentication
+local markedItem, markedWinner
+ZugLoot.DB = { sheet = SRData.NewSheet() }
+SRData.MarkWon = function(sheet, itemID, winner, q)
+  markedItem = itemID
+  markedWinner = winner
+end
+
+Sec.CanAcceptFrom = function(s) return s == "TrustedML" end
+
+-- Unauthorized sender attempts to spoof an award
+markedItem, markedWinner = nil, nil
+Comm.OnMessage("AWARD:19019:MaliciousRaider", "MaliciousRaider", "RAID")
+eq(markedItem, nil, "spoofed AWARD from non-officer rejected")
+eq(markedWinner, nil, "spoofed winner not marked")
+
+-- Authorized sender broadcasts award
+Comm.OnMessage("AWARD:19019:DeservingRaider", "TrustedML", "RAID")
+eq(markedItem, 19019, "legitimate AWARD from ML accepted")
+eq(markedWinner, "DeservingRaider", "legitimate winner marked won")
+
 if T.fail == 0 then
   print("network mtu and throttle discipline passed")
 else

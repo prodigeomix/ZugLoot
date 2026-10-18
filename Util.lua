@@ -139,6 +139,7 @@ function M.JsonDecode(s)
       else break end
     end
   end
+  local depth = 0
   local parseValue, parseString, parseNumber, parseArray, parseObject
   parseString = function()
     pos = pos + 1 -- opening quote
@@ -171,6 +172,7 @@ function M.JsonDecode(s)
   parseNumber = function()
     local sub = string.sub(s, pos)
     local num = string.match(sub, "^%-?%d+%.?%d*[eE]?[+%-]?%d*")
+    if not num or num == "" then error("expected value at " .. pos) end
     pos = pos + string.len(num)
     return tonumber(num)
   end
@@ -213,14 +215,19 @@ function M.JsonDecode(s)
   end
   parseValue = function()
     skip()
+    depth = depth + 1
+    if depth > 64 then error("JSON recursion depth limit exceeded (> 64)") end
     local c = string.sub(s, pos, pos)
-    if c == "{" then return parseObject() end
-    if c == "[" then return parseArray() end
-    if c == '"' then return parseString() end
-    if c == "t" and string.sub(s, pos, pos + 3) == "true" then pos = pos + 4 return true end
-    if c == "f" and string.sub(s, pos, pos + 4) == "false" then pos = pos + 5 return false end
-    if c == "n" and string.sub(s, pos, pos + 3) == "null" then pos = pos + 4 return nil end
-    return parseNumber()
+    local res
+    if c == "{" then res = parseObject()
+    elseif c == "[" then res = parseArray()
+    elseif c == '"' then res = parseString()
+    elseif c == "t" and string.sub(s, pos, pos + 3) == "true" then pos = pos + 4 res = true
+    elseif c == "f" and string.sub(s, pos, pos + 4) == "false" then pos = pos + 5 res = false
+    elseif c == "n" and string.sub(s, pos, pos + 3) == "null" then pos = pos + 4 res = nil
+    else res = parseNumber() end
+    depth = depth - 1
+    return res
   end
   local ok, val = pcall(parseValue)
   if not ok then return nil, val end

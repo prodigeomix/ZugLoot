@@ -60,6 +60,7 @@ local resultText = nil
 local timeLeft = 0
 local duration = 15
 local active = false
+local lastSec = -1
 
 M.rolls = {}
 
@@ -320,9 +321,10 @@ function M.Build()
     timeLeft = timeLeft - (arg1 or 0)
     local remaining = timeLeft
     if remaining < 0 then remaining = 0 end
+    local curSec = math.floor(remaining)
     if statusBar and statusBar:IsShown() then
       statusBar:SetValue(remaining)
-      if statusText then statusText:SetText(string.format("%.0fs", remaining)) end
+      if statusText and curSec ~= lastSec then statusText:SetText(string.format("%.0fs", remaining)) end
       local pct = (duration > 0) and (remaining / duration) or 0
       if pct < 0.25 then
         statusBar:SetStatusBarColor(1, 0.1, 0.1)
@@ -337,7 +339,8 @@ function M.Build()
         statusBar:SetAlpha(1)
       end
     end
-    if timerText then timerText:SetText(string.format("%.0f", remaining)) end
+    if timerText and curSec ~= lastSec then timerText:SetText(string.format("%.0f", remaining)) end
+    lastSec = curSec
     if timeLeft <= 0 then
       if statusBar then statusBar:Hide() statusBar:SetAlpha(1) end
       local autoClose = (Z.DB and Z.DB.autoClose ~= false)
@@ -387,6 +390,7 @@ function M.ShowItem(itemLink, seconds)
   if not frame then M.Build() end
   duration = seconds or (Z.DB and Z.DB.rollTime) or 15
   timeLeft = duration
+  lastSec = -1
   ClearRolls()
   SetItemInfo(itemLink)
   if statusBar then

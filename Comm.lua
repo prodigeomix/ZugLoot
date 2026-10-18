@@ -421,6 +421,10 @@ function M.OnMessage(msg, sender, channel)
     return
   end
   if string.sub(msg, 1, 6) == "AWARD:" then
+    if not Z.SRSecurity.CanAcceptFrom(sender) then
+      Z.Print("Ignored award from " .. tostring(sender) .. " (not ML/leader).")
+      return
+    end
     local itemID, winner = string.match(msg, "AWARD:(%d+):(.+)$")
     if itemID and Z.DB and Z.DB.sheet and Z.SRData then
       -- Sheet log floor (sender-side parity): a known below-rare award
