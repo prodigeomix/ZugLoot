@@ -56,6 +56,24 @@ eq(CC.ColoredName("SheetPal", sheet), "|cFFF58CBASheetPal|r", "colored display")
 eq(CC.ColoredName("Nobody", sheet), "Nobody", "unknown stays plain")
 eq(CC.ColoredName(nil, sheet), "", "nil safe")
 
+-- PlayerLink: clickable + class-colored chat link.
+eq(CC.PlayerLink("SheetPal", sheet),
+  "|cFFF58CBA|Hplayer:SheetPal|h[SheetPal]|h|r", "paladin link")
+eq(CC.PlayerLink("Nobody", sheet),
+  "|cFFFFFFFF|Hplayer:Nobody|h[Nobody]|h|r", "unknown class links white")
+eq(CC.PlayerLink(nil, sheet), "", "nil safe")
+eq(CC.PlayerLink("", sheet), "", "empty safe")
+-- Defensive: already-linked/colored input never nests.
+eq(CC.PlayerLink("|cFFF58CBASheetPal|r", sheet),
+  "|cFFF58CBA|Hplayer:SheetPal|h[SheetPal]|h|r", "color wrap peeled")
+eq(CC.PlayerLink("|cFFF58CBA|Hplayer:SheetPal|h[SheetPal]|h|r", sheet),
+  "|cFFF58CBA|Hplayer:SheetPal|h[SheetPal]|h|r", "link idempotent")
+-- Sheet class colors the link (Priest reads white — still linked).
+local linkSheet = SRData.NewSheet()
+SRData.SetPlayerClass(linkSheet, "LinkBoth", "PaladinHoly")
+eq(CC.PlayerLink("LinkBoth", linkSheet),
+  "|cFFF58CBA|Hplayer:LinkBoth|h[LinkBoth]|h|r", "sheet class colors the link")
+
 -- 4. Roster beats the sheet when both know the name.
 local roster = { Both = "MAGE" }
 local sheet2 = SRData.NewSheet()

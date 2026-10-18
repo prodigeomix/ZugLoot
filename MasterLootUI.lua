@@ -30,6 +30,34 @@ function M.RequireML()
   return true
 end
 
+-- Name rendering: PName (class-colored, frames/text UI) vs ChatName
+-- (clickable class-colored player link, ALL chat lines). Declared up
+-- here so every line builder below can use them (Lua locals are only
+-- visible after declaration).
+-- Class-colored display name. Chat-bound lines stay PLAIN (no color
+-- codes in addon chat), everything rendered in a frame/text UI is colored.
+local function PName(name)
+  if Z.ClassColors and Z.ClassColors.ColoredName then
+    return Z.ClassColors.ColoredName(name)
+  end
+  return tostring(name or "")
+end
+
+-- Chat player link: clickable + class-colored ("|cHEX|Hplayer:Name|h[Name]|h|r").
+-- Click opens the whisper menu, color reads class — same as Blizzard's
+-- own chat name rendering. Unknown class: still linked, white.
+-- Stored data stays raw; links are built at the send boundary only.
+-- Headless-safe: plain name when ClassColors is absent. Never nil.
+local function ChatName(name)
+  if Z.ClassColors and Z.ClassColors.PlayerLink then
+    return Z.ClassColors.PlayerLink(name)
+  end
+  local s = tostring(name or "")
+  local inner = string.match(s, "^|c%x%x%x%x%x%x%x%x(.+)|r$")
+  if inner then return inner end
+  return s
+end
+
 -- Start the one roll. Refuses when a roll is already open (finish,
 -- award, or close it first). silent=true skips the addon-message
 -- broadcast (sim must not pop other clients' roller windows).
@@ -40,11 +68,14 @@ function M.BeginRoll(itemID, itemLink, mode, silent)
   M.roll = roll
   -- Roll-start line: ONE format for sim and live ("Roll <Item> — SR/MS
   -- 1-100, roll now!"; raid-roll keeps its own "Raid rolling ...").
-  -- WarnGroup routes it (raid RAID_WARNING, party PARTY, solo local) so
-  -- the raid sees the same line the sim prints. Verifiable: tests pin
-  -- text + channel per grouping (tests/test_chat_routing.lua).
+  -- Live warns the group ML-only (WarnGroup); sim warns whoever runs it
+  -- (WarnSim bypasses the speaker gate) so a raid sim reads like the
+  -- real roll even when the simmer isn't the ML. Verifiable: tests pin
+  -- text + channel per grouping and role (tests/test_chat_routing.lua).
   local label = M.StartLine(itemID, itemLink, mode)
-  if Z.Comm and Z.Comm.WarnGroup then
+  if mode == "SIM" and Z.Comm and Z.Comm.WarnSim then
+    Z.Comm.WarnSim(label)
+  elseif Z.Comm and Z.Comm.WarnGroup then
     Z.Comm.WarnGroup(label)
   else
     Z.Print(label)
@@ -136,7 +167,7 @@ function M.StartRaidRoll(itemID)
   -- Numbered raid, chunked so no chat line exceeds limits.
   local buf = ""
   for i = 1, Z.Util.ArrayCount(roster) do
-    local bit = "[" .. i .. "]:" .. roster[i]
+    local bit = "[" .. i .. "]:" .. ChatName(roster[i])
     if buf == "" then buf = bit
     elseif string.len(buf) + string.len(bit) + 2 > 200 then
       if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(buf) else Z.Print(buf) end
@@ -304,12 +335,17 @@ end
 -- sim and live; the ROUTER (Comm.Say) picks the channel by grouping.
 -- Pure text builder (testable) + sender split for the harness.
 function M.RollLine(entry)
-  return tostring(entry.name) .. " rolls " .. tostring(entry.roll)
+  return ChatName(entry.name) .. " rolls " .. tostring(entry.roll)
     .. " (" .. tostring(entry.min) .. "-" .. tostring(entry.max) .. ")"
 end
 function M.AnnounceRoll(entry)
+  -- Sim-only line (the sole opts.announce=true caller is Sim.RequestRoll;
+  -- live intake stays quiet by design): SaySim so the group sees the
+  -- fake rolls even when the simmer isn't the ML.
   local line = M.RollLine(entry)
-  if Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false) else Z.Print(line) end
+  if Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
+  elseif Z.Comm and Z.Comm.Say then Z.Comm.Say(line, false)
+  else Z.Print(line) end
   return line
 end
 
@@ -507,24 +543,6 @@ function M.FinishRoll(itemID)
   return "finished"
 end
 
--- Class-colored display name. Chat-bound lines stay PLAIN (no color
--- codes in addon chat), everything rendered in a frame/text UI is colored.
-local function PName(name)
-  if Z.ClassColors and Z.ClassColors.ColoredName then
-    return Z.ClassColors.ColoredName(name)
-  end
-  return tostring(name or "")
-end
-
--- Chat carries no color codes: strip any "|c..name|r" wrap the resolver
--- may hand back (defensive; stored data is raw by contract).
-local function ChatName(name)
-  local s = tostring(name or "")
-  local inner = string.match(s, "^|c%x%x%x%x%x%x%x%x(.+)|r$")
-  if inner then return inner end
-  return s
-end
-
 -- Clickable item link for CHAT lines (start, verdict, award, sand).
 -- Chat must carry a REAL link (|c..|Hitem:..|h[Name]|h|r): bare white
 -- text can't be hovered or shift-clicked. Resolution order: a full link
@@ -587,7 +605,8 @@ end
 
 -- Award line: pure text builder (testable) + shared sender (below).
 -- "Name wins <link>." — one format for sim and live; the ROUTER
--- (Comm.Say via SayGroup) picks the channel by grouping. When the item
+-- picks the channel by grouping and role (live ML-only, sim always
+-- speaks). When the item
 -- goes to the TMOG winner, tradeTo names the normal (SR/MS/OS) winner
 -- and a "Trade to <player> after equipping." note follows; nil/empty
 -- tradeTo (or TMOG-only rolls) leaves the plain line alone.
@@ -599,31 +618,36 @@ function M.AwardLine(itemID, link, winnerName, tradeTo)
   end
   return line
 end
-function M.AnnounceAward(itemID, link, winnerName, tradeTo)
+function M.AnnounceAward(itemID, link, winnerName, tradeTo, isSim)
   local line = M.AwardLine(itemID, link, winnerName, tradeTo)
-  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
+  if isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
+  elseif Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  else Z.Print(line) end
   return line
 end
 
 -- Sand line: pure text builder (testable) + shared sender.
 -- "Sand xN -> Name (T total) [Item]" — one format for sim and live;
--- the ROUTER (Comm.Say via SayGroup) picks the channel by grouping.
+-- the ROUTER picks the channel by grouping and role (live ML-only,
+-- sim always speaks).
 function M.SandLine(itemID, link, winnerName, qty, total)
   local disp = M.ChatItemLink(itemID, link)
   return "Sand x" .. tostring(qty) .. " -> " .. ChatName(winnerName)
     .. " (" .. tostring(total) .. " total) [" .. tostring(disp) .. "]"
 end
-function M.AnnounceSand(itemID, link, winnerName, qty, total)
+function M.AnnounceSand(itemID, link, winnerName, qty, total, isSim)
   local line = M.SandLine(itemID, link, winnerName, qty, total)
-  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
+  if isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
+  elseif Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  else Z.Print(line) end
   return line
 end
 
 -- Roll verdict lines: pure text builders (testable) + shared sender.
 -- Sim and live resolve through the same AnnounceResult — identical
--- lines, only the speaker + channel differ (Comm.Say: ML to raid RAID,
--- party PARTY, solo/raiders local). Verifiable: tests pin text +
--- channel per grouping and role.
+-- lines, only the speaker + channel differ (Comm.Say: live ML-only to
+-- raid RAID / party PARTY / solo+raiders local; sim always speaks).
+-- Verifiable: tests pin text + channel per grouping and role.
 function M.ResultLine(roll, res)
   local itemTxt = M.ChatItemLink(roll.itemID, roll.itemLink)
   local winners = res.winners or {}
@@ -641,8 +665,10 @@ function M.ResultLine(roll, res)
   end
   return tostring(itemTxt) .. ": no eligible rolls."
 end
-function M.AnnounceVerdict(line)
-  if Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line) else Z.Print(line) end
+function M.AnnounceVerdict(line, isSim)
+  if isSim and Z.Comm and Z.Comm.SaySim then Z.Comm.SaySim(line)
+  elseif Z.Comm and Z.Comm.SayGroup then Z.Comm.SayGroup(line)
+  else Z.Print(line) end
   return line
 end
 
@@ -650,7 +676,9 @@ end
 -- already shows every roll with its kind — chat gets the verdict only.
 function M.AnnounceResult(roll, res)
   local line = M.ResultLine(roll, res)
-  M.AnnounceVerdict(line)
+  -- Sim verdicts speak to the group even when the simmer isn't the ML
+  -- (SaySim bypasses the speaker gate); live keeps the ML-only gate.
+  M.AnnounceVerdict(line, roll and roll.mode == "SIM")
   local winners = res.winners or {}
   if Z.Util.ArrayCount(winners) > 0 then
     if Z.RaiderLootUI and Z.RaiderLootUI.ShowResult then
@@ -1020,7 +1048,7 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
           -- below; a dead call un-dims via the watchdog.
           if dbg then trace(dbgLine("MASTER-FALLBACK")) end
         else
-          if Z.Print then Z.Print("Can't award " .. tostring(winnerName) .. ": not a loot candidate.") end
+          if Z.Print then Z.Print("Can't award " .. ChatName(winnerName) .. ": not a loot candidate.") end
           return false
         end
       elseif giveML then
@@ -1037,7 +1065,7 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
         -- Corpse open, handoff certain, but no API: never fake the award
         -- (won-mark + vanished row while the item sits on the corpse).
         -- Refuse with the row kept.
-        if Z.Print then Z.Print("Can't award " .. tostring(winnerName) .. ": master loot unavailable.") end
+        if Z.Print then Z.Print("Can't award " .. ChatName(winnerName) .. ": master loot unavailable.") end
         return false
       end
       -- selfTake with no usable handoff: plain LootSlot below.
@@ -1256,7 +1284,7 @@ function M.Award(itemID, winnerName, source, tradeTo)
   local row0 = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
   local liveRow = row0 and row0.slot ~= nil
   if source ~= "sim" and not M.lootOpen and liveRow then
-    Z.Print("Not awarding " .. tostring(winnerName)
+    Z.Print("Not awarding " .. ChatName(winnerName)
       .. ": no loot open. Loot the corpse again, then award.")
     return false
   end
@@ -1294,7 +1322,7 @@ function M.Award(itemID, winnerName, source, tradeTo)
   -- (Comm.Say) picks the channel by grouping — solo lands in the
   -- ZugLoot log, party in PARTY, raid in RAID. Verifiable: tests pin
   -- text + channel per grouping (tests/test_chat_routing.lua).
-  M.AnnounceAward(itemID, link, winnerName, tradeTo)
+  M.AnnounceAward(itemID, link, winnerName, tradeTo, source == "sim")
   if Z.SRView then Z.SRView.Refresh() end
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
@@ -1626,7 +1654,7 @@ function M.SandDistribute(itemID, source)
   local row0 = Z.LootWindow and Z.LootWindow.Find(itemID) or nil
   local liveRow = row0 and row0.slot ~= nil
   if source ~= "sim" and not M.lootOpen and liveRow then
-    Z.Print("Not distributing sand to " .. tostring(winnerName)
+    Z.Print("Not distributing sand to " .. ChatName(winnerName)
       .. ": no loot open. Loot the corpse again, then distribute.")
     return false
   end
@@ -1640,7 +1668,7 @@ function M.SandDistribute(itemID, source)
   if Z.DropLog then Z.DropLog.Add(itemID, link, source, "sand", winnerName) end
   -- Sand line: same shared path as awards ("Sand xN -> Name (T total)
   -- [Item]") — one format, router picks the channel by grouping.
-  M.AnnounceSand(itemID, link, winnerName, qty, ledger[winnerName])
+  M.AnnounceSand(itemID, link, winnerName, qty, ledger[winnerName], source == "sim")
   if Z.SRView then Z.SRView.Refresh() end
   if Z.LootWindow and Z.LootWindow.RemoveItem then Z.LootWindow.RemoveItem(itemID) end
   if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
@@ -1680,7 +1708,7 @@ function M.SandCommand(argText)
     for i = 1, Z.Util.ArrayCount(totals) do
       local t = totals[i]
       grand = grand + t.count
-      Z.Print("Sand: " .. tostring(t.name) .. " x" .. tostring(t.count))
+      Z.Print("Sand: " .. ChatName(t.name) .. " x" .. tostring(t.count))
     end
     Z.Print("Sand total: x" .. tostring(grand))
     return true

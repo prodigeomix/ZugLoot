@@ -59,7 +59,11 @@ function M.OnVersion(sender, version)
     local key = tostring(sender) .. "@" .. theirs
     if not M.warned[key] then
       M.warned[key] = true
-      Z.Print("Version mismatch: " .. tostring(sender) .. " runs v"
+      local disp = tostring(sender)
+      if Z.ClassColors and Z.ClassColors.PlayerLink then
+        disp = Z.ClassColors.PlayerLink(sender)
+      end
+      Z.Print("Version mismatch: " .. disp .. " runs v"
         .. tostring(version) .. " (stream " .. theirs
         .. "), you run v" .. tostring(Z.VERSION) .. " (stream " .. mine
         .. "). Update so the raid matches.")
@@ -202,7 +206,9 @@ function M.PrintList()
     local g = grid[i]
     local n = g.name
     local disp = n
-    if Z.ClassColors and Z.ClassColors.ColoredName then
+    if Z.ClassColors and Z.ClassColors.PlayerLink then
+      disp = Z.ClassColors.PlayerLink(n)
+    elseif Z.ClassColors and Z.ClassColors.ColoredName then
       disp = Z.ClassColors.ColoredName(n)
     end
     local tag = M.StatusFor(n, g.inGroup)

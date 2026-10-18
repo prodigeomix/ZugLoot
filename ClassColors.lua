@@ -289,6 +289,28 @@ function M.ColoredName(name, sheet)
   return "|c" .. (M.COLORS[c] or "FFFFFFFF") .. name .. "|r"
 end
 
+-- Clickable player link for CHAT ("|Hplayer:Name|h[Name]|h"), wrapped
+-- in the class color so the eye reads class AND the mouse reads
+-- player: click -> whisper menu, color -> class, same as Blizzard's
+-- own chat name rendering. Unknown class: uncolored but still linked.
+-- Defensive: an already-linked/colored input is stripped to the bare
+-- name first so links never nest. Stored data stays raw — link at the
+-- print/send boundary only. Nil-safe (headless): returns "" on empty.
+function M.PlayerLink(name, sheet)
+  local bare = tostring(name or "")
+  -- Peel an |Hplayer wrapper: prefer the bracket display.
+  local disp = string.match(bare, "|Hplayer:[^|]*|h%[(.-)%]|h")
+  if disp and disp ~= "" then bare = disp end
+  -- Peel a color wrap (|cXXXXXXXXName|r).
+  local inner = string.match(bare, "^|c%x%x%x%x%x%x%x%x(.-)|r$")
+  if inner then bare = inner end
+  bare = tostring(bare or "")
+  if bare == "" then return "" end
+  local c = M.ClassOf(bare, sheet)
+  local hex = (c and M.COLORS[c]) or "FFFFFFFF"
+  return "|c" .. hex .. "|Hplayer:" .. bare .. "|h[" .. bare .. "]|h|r"
+end
+
 -- Colored join for winner/candidate/roll lists.
 function M.ColorList(names, sep, sheet)
   local out = {}

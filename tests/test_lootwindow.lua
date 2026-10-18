@@ -514,8 +514,9 @@ printed = {}
 eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "tmog row award")
 local tradeSaid = false
 for i = 1, #printed do
-  if string.find(printed[i], "Tmog wins ", 1, true)
-      and string.find(printed[i], "Trade to Aaa after equipping.", 1, true) then
+  if string.find(printed[i], "|Hplayer:Tmog|h[Tmog]|h", 1, true)
+      and string.find(printed[i], "|Hplayer:Aaa|h[Aaa]|h", 1, true)
+      and string.find(printed[i], "after equipping.", 1, true) then
     tradeSaid = true break
   end
 end
@@ -533,8 +534,9 @@ printed = {}
 eq(LW.doAction(1001, "award-name", { name = "Tmog", via = "tmog" }), "awarded Tmog", "tmog-only award")
 local tradeSecond = false
 for i = 1, #printed do
-  if string.find(printed[i], "Tmog wins ", 1, true)
-      and string.find(printed[i], "Trade to Oz after equipping.", 1, true) then
+  if string.find(printed[i], "|Hplayer:Tmog|h[Tmog]|h", 1, true)
+      and string.find(printed[i], "|Hplayer:Oz|h[Oz]|h", 1, true)
+      and string.find(printed[i], "after equipping.", 1, true) then
     tradeSecond = true break
   end
 end
@@ -555,7 +557,10 @@ for i = 1, #printed do
 end
 ok(tradeOmitted, "lone tmog award omits the trade note")
 -- Plain line builder: note only with a trade recipient.
-ok(string.find(ML.AwardLine(1001, "item:1001", "Tmog", "Aaa"), "Trade to Aaa after equipping.", 1, true) ~= nil, "AwardLine appends the trade note")
+local tradeBuilt = ML.AwardLine(1001, "item:1001", "Tmog", "Aaa")
+ok(string.find(tradeBuilt, "|Hplayer:Tmog|h[Tmog]|h", 1, true) ~= nil, "AwardLine links the winner")
+ok(string.find(tradeBuilt, "|Hplayer:Aaa|h[Aaa]|h", 1, true) ~= nil
+  and string.find(tradeBuilt, "after equipping.", 1, true) ~= nil, "AwardLine appends the trade note")
 ok(string.find(ML.AwardLine(1001, "item:1001", "Aaa"), "Trade to ", 1, true) == nil, "AwardLine plain without trade recipient")
 
 -- 6d. Raid roll button, mid-roll: old roll ends, the

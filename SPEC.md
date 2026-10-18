@@ -169,7 +169,10 @@ Sheet = {
   SR, MS, OS or TMOG winner; anything after the award (e.g. a trade) is
   outside the addon. Chat follows the raid-roll style (Pysanka parity):
   one `Name: roll (TYPE)` line per roller (already-won tagged inline),
-  then `Name wins Item.` on award.
+  then `Name wins Item.` on award. Player names in chat are clickable
+  class-colored links (`|Hplayer:` wrapped in the class color): click
+  opens the whisper menu, color reads class — same as Blizzard's own
+  chat name rendering (unknown class links white).
 - Raid-roll (loot `Raid roll` button — RollFor +
   Pysanka parity): the raid is announced numbered (`[1]:Name, ...`,
   chunked), the ML rolls 1-N with `/roll`, the number IS the winner
@@ -650,8 +653,9 @@ window owns everything; closing it ends the roll — exactly like live.
   pre-resolve name/quality (`Sim.syncWindow`) so bare-id sim entries
   link correctly too.
   Verifiable without a raid: `tests/test_chat_routing.lua` pins
-  text + channel per grouping and role (ML: party PARTY-only, raid
-  RAID/RAID_WARNING-only; solo and non-ML raiders log-only, identical
+  text + channel per grouping and role (live ML-only: party PARTY-only,
+  raid RAID/RAID_WARNING-only, solo and non-ML raiders log-only;
+  sim always speaks to the group so the raid sees test rolls, identical
   text). Sim sessions stay silent on
   the addon channel (no `ROLL_REQ` broadcast), so other clients'
   windows and auto-rolls never fire.

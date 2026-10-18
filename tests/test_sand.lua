@@ -237,7 +237,8 @@ printed = {}
 ok(ML.SandCommand(""), "ledger prints")
 local sawBbb, sawTotal = false, false
 for i = 1, #printed do
-  if string.find(printed[i], "Bbb x1", 1, true) then sawBbb = true end
+  if string.find(printed[i], "|Hplayer:Bbb|h[Bbb]|h", 1, true)
+      and string.find(printed[i], "x1", 1, true) then sawBbb = true end
   if string.find(printed[i], "Sand total: x4", 1, true) then sawTotal = true end
 end
 ok(sawBbb and sawTotal, "ledger lines + grand total")

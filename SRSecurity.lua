@@ -227,7 +227,11 @@ function M.AnswerSheetReq(role, channel)
     local raidID = sheet.meta and sheet.meta.raidID or "sheet"
     Z.Comm.BroadcastSheet(sheet, raidID, channel)
     local me = (UnitName and UnitName("player")) or "?"
-    Z.Print("Sheet sent to the group by " .. tostring(me)
+    local disp = tostring(me)
+    if Z.ClassColors and Z.ClassColors.PlayerLink then
+      disp = Z.ClassColors.PlayerLink(me)
+    end
+    Z.Print("Sheet sent to the group by " .. disp
       .. " (" .. tostring(role) .. ").")
     return true
   end

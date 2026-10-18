@@ -34,7 +34,8 @@ No dependencies. Interface 11200.
   roll against the loaded sheet (sheet required): full live replay
   with timers, both windows, the shared loot window (simboss/simraid queue
   boss drops + trash batches; you roll each), the award menu, and
-  group-routed chat (ML: raid→RAID, party→PARTY; solo/raiders→local); results written
+  group-routed chat (live ML-only: raid→RAID, party→PARTY; sim always
+  speaks so the raid sees test rolls; solo→local); results written
   back; `/zl simstop` stops the queue. `/zl simtmog` demos the TMOG kind
   award. Boss/raid drops come from the live Atlas-CFM loot tables
   (optional dependency, nothing copied).

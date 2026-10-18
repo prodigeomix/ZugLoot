@@ -6,6 +6,16 @@ local Z = ZugLoot
 local M = {}
 Z.Comm = M
 
+-- Player name for CHAT: clickable class-colored link (|cHEX|Hplayer:N|h[N]|h|r),
+-- plain name when ClassColors is absent (headless). Stored data stays raw;
+-- links are built at the print/send boundary only. Never nil.
+local function ChatPlayer(name)
+  if Z.ClassColors and Z.ClassColors.PlayerLink then
+    return Z.ClassColors.PlayerLink(name)
+  end
+  return tostring(name or "")
+end
+
 local function send(msg, channel)
   channel = channel or M.Channel() or "RAID"
   if ChatThrottleLib and ChatThrottleLib.SendAddonMessage then
@@ -129,7 +139,7 @@ function M.RequestSheet()
   M.lastSheetReqTime = now
   local me = (UnitName and UnitName("player")) or "?"
   send("SHEET_REQ", c)
-  Z.Print("Sheet requested from the master looter (" .. tostring(me) .. " asked).")
+  Z.Print("Sheet requested from the master looter (" .. ChatPlayer(me) .. " asked).")
 end
 
 -- Ask ONE player for their sheet (/zl sync <name>): targeted request.
@@ -149,7 +159,7 @@ function M.RequestSheetFrom(rawName)
     return
   end
   send("SHEET_REQ:" .. name, c)
-  Z.Print("Sheet requested from " .. name .. ".")
+  Z.Print("Sheet requested from " .. ChatPlayer(name) .. ".")
 end
 function M.AnnounceVersion()
   local c = M.Channel()
@@ -206,7 +216,7 @@ end
 -- underneath.
 function M.ApplyRollSession(raidID, itemID, tail, sender)
   if not Z.SRSecurity.CanAcceptFrom(sender) then
-    Z.Print("Ignored roll session from " .. tostring(sender) .. " (not ML/leader).")
+    Z.Print("Ignored roll session from " .. ChatPlayer(sender) .. " (not ML/leader).")
     return
   end
   local sheet = Z.DB and Z.DB.sheet
@@ -240,26 +250,29 @@ end
 -- One policy, speaker + channel: solo -> the ZugLoot log (local chat
 -- frame); grouped, only the master looter speaks — party -> PARTY,
 -- raid -> RAID (RAID_WARNING when warn=true), while raiders see the
--- same lines locally. No loot-
--- method branching, no sim special-casing: a sim in a raid reads exactly
--- like the real roll would, and a solo sim stays local. Callers never
--- touch SendChatMessage directly.
+-- same lines locally. EXCEPTION: sim lines (isSim) always speak to
+-- the group — a sim is an explicit user action ("show the raid this
+-- test roll"), never background echo, so the simulator reads exactly
+-- like the real roll would even when the simmer isn't the ML. A solo
+-- sim stays local. Callers never touch SendChatMessage directly.
 --
 -- Verifiable by design: every roll line goes through here, so tests pin
 -- the channel (`SendChatMessage` stub) + text (`Z.Print` stub) per
 -- grouping (see tests/test_chat_routing.lua) — solo prints locally,
 -- party sends PARTY, raid sends RAID/RAID_WARNING, all with identical
 -- text for sim and live rolls.
-function M.Say(msg, warn)
+function M.Say(msg, warn, isSim)
   msg = tostring(msg)
   if Z.SRSecurity and Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then
     Z.Print(msg)
     return "local"
   end
-  -- Only the master looter speaks to the group: a raider's client sees
-  -- the exact same lines locally instead of echoing them into /raid
-  -- (or /party). Real /rolls are client rolls, never this path.
-  if not (Z.SRSecurity and Z.SRSecurity.AmML and Z.SRSecurity.AmML()) then
+  -- Only the master looter speaks LIVE lines to the group: a raider's
+  -- client sees the exact same lines locally instead of echoing them
+  -- into /raid (or /party). Real /rolls are client rolls, never this
+  -- path. Sim lines bypass the gate (see above).
+  if not isSim
+      and not (Z.SRSecurity and Z.SRSecurity.AmML and Z.SRSecurity.AmML()) then
     Z.Print(msg)
     return "local"
   end
@@ -284,15 +297,27 @@ function M.Say(msg, warn)
   return "local"
 end
 
--- Roll-traffic chat: ML to raid -> RAID, party -> PARTY, solo/raiders ->
--- ZugLoot log. Sim and live share this path; only the speaker + channel
--- differ by role and grouping.
+-- Roll-traffic chat: live ML-only (raid -> RAID, party -> PARTY,
+-- solo/raiders -> ZugLoot log); sim via SaySim/WarnSim always speaks.
+-- Sim and live share this path; only the speaker + channel differ by
+-- role and grouping.
 function M.SayGroup(msg)
   M.Say(msg, false)
 end
 
 function M.WarnGroup(msg)
   M.Say(msg, true)
+end
+
+-- Sim-traffic chat: same channels as SayGroup/WarnGroup, but sim lines
+-- bypass the ML-only speaker gate (see M.Say) — whoever runs the sim
+-- wants the group to see the test lines. Solo sims still stay local.
+function M.SaySim(msg)
+  M.Say(msg, false, true)
+end
+
+function M.WarnSim(msg)
+  M.Say(msg, true, true)
 end
 
 function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
@@ -303,7 +328,7 @@ function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
   end
   -- SECURITY: only ML or raid leader/assistant may push sheets.
   if not Z.SRSecurity.CanAcceptFrom(sender) then
-    Z.Print("Ignored sheet from " .. tostring(sender) .. " (not ML/leader).")
+    Z.Print("Ignored sheet from " .. ChatPlayer(sender) .. " (not ML/leader).")
     return
   end
   local sheet, err = Z.SRImport.DeserializeSheet(payload)
@@ -342,7 +367,7 @@ function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
   if Z.RaidArchive then
     Z.RaidArchive.SyncActive(Z.DB, (time and time()) or 0)
   end
-  Z.Print("Sheet received from " .. tostring(sender) .. " (" .. tostring(raidID) .. ")")
+  Z.Print("Sheet received from " .. ChatPlayer(sender) .. " (" .. tostring(raidID) .. ")")
   if Z.MainWindow then Z.MainWindow.Refresh() end
   if Z.SRView then Z.SRView.Refresh() end
 end
@@ -393,7 +418,7 @@ function M.OnMessage(msg, sender, channel)
   end
   if string.sub(msg, 1, 8) == "ROLLLOG:" then
     local _ver, raidID, itemID, tail = string.match(msg, "^ROLLLOG:(%d+):([^:]+):(%d+):(.*)$")
-    if not tail then Z.Print("Bad roll session from " .. tostring(sender)) return end
+    if not tail then Z.Print("Bad roll session from " .. ChatPlayer(sender)) return end
     M.ApplyRollSession(raidID, tonumber(itemID), tail, sender)
     return
   end
@@ -403,11 +428,11 @@ function M.OnMessage(msg, sender, channel)
     local seq = tonumber(seqStr)
     local total = tonumber(totStr)
     if not (seq and total and chunk) then
-      Z.Print("Bad roll session chunk from " .. tostring(sender))
+      Z.Print("Bad roll session chunk from " .. ChatPlayer(sender))
       return
     end
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored roll session chunk from " .. tostring(sender) .. " (not ML/leader).")
+      Z.Print("Ignored roll session chunk from " .. ChatPlayer(sender) .. " (not ML/leader).")
       return
     end
     local now = (GetTime and GetTime()) or (time and time()) or 0
@@ -432,7 +457,7 @@ function M.OnMessage(msg, sender, channel)
   end
   if string.sub(msg, 1, 6) == "AWARD:" then
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored award from " .. tostring(sender) .. " (not ML/leader).")
+      Z.Print("Ignored award from " .. ChatPlayer(sender) .. " (not ML/leader).")
       return
     end
     local itemID, winner = string.match(msg, "AWARD:(%d+):(.+)$")
@@ -455,11 +480,11 @@ function M.OnMessage(msg, sender, channel)
     local seq = tonumber(seqStr)
     local total = tonumber(totStr)
     if not (seq and total and chunk) then
-      Z.Print("Bad sheet chunk from " .. tostring(sender))
+      Z.Print("Bad sheet chunk from " .. ChatPlayer(sender))
       return
     end
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored sheet chunk from " .. tostring(sender) .. " (not ML/leader).")
+      Z.Print("Ignored sheet chunk from " .. ChatPlayer(sender) .. " (not ML/leader).")
       return
     end
     local now = (GetTime and GetTime()) or (time and time()) or 0
@@ -484,7 +509,7 @@ function M.OnMessage(msg, sender, channel)
   end
   if string.sub(msg, 1, 6) == "SHEET:" then
     local ver, raidID, payload = string.match(msg, "SHEET:(%d+):([^:]+):(.+)$")
-    if not payload then Z.Print("Bad sheet message from " .. tostring(sender)) return end
+    if not payload then Z.Print("Bad sheet message from " .. ChatPlayer(sender)) return end
     M.ApplyReceivedSheet(tonumber(ver) or 1, raidID, payload, sender)
     return
   end

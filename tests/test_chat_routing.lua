@@ -65,8 +65,15 @@ local function makeSheet()
     { name = "Aaa", rolls = 1, sr_plus = 10 },
     { name = "Bbb", rolls = 2, sr_plus = nil },
   } }
+  -- Sheet classes so chat pins cover the class color, not just the link.
+  SRData.SetPlayerClass(s, "Aaa", "Paladin")
+  SRData.SetPlayerClass(s, "Bbb", "Mage")
   return s
 end
+
+-- Player-link pins: clickable class color per name.
+local LINK_AAA = "|cFFF58CBA|Hplayer:Aaa|h[Aaa]|h|r"
+local LINK_BBB = "|cFF69CCF0|Hplayer:Bbb|h[Bbb]|h|r"
 
 local function reset()
   ZugLoot.Timer.CancelAll()
@@ -137,9 +144,9 @@ ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 eq(#sent, 0, "solo sends nothing (log only)")
 local soloLog = logText()
 ok(string.find(soloLog, "Roll ", 1, true) ~= nil, "solo log has roll-start")
-ok(string.find(soloLog, "Aaa rolls 90 (1-100)", 1, true) ~= nil, "solo log has fake roll line")
-ok(string.find(soloLog, "won by Aaa (100)", 1, true) ~= nil, "solo log has verdict")
-ok(string.find(soloLog, "Aaa wins ", 1, true) ~= nil, "solo log has award line")
+ok(string.find(soloLog, LINK_AAA .. " rolls 90 (1-100)", 1, true) ~= nil, "solo log has fake roll line (linked)")
+ok(string.find(soloLog, "won by " .. LINK_AAA .. " (100)", 1, true) ~= nil, "solo log has verdict (linked)")
+ok(string.find(soloLog, LINK_AAA .. " wins ", 1, true) ~= nil, "solo log has award line (linked)")
 -- Canonical roll text: the ROLL lines from the solo log (harness notes
 -- stripped) — raid/party group-chat must match these byte-for-byte.
 local soloRolls = rollLines(printed)
@@ -155,9 +162,9 @@ ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
 ok(#sent > 0, "raid sim reaches group chat")
 -- Line builders produce the same text solo printed locally...
 local raidChat = chatText()
-ok(string.find(raidChat, "Aaa rolls 90 (1-100)", 1, true) ~= nil, "raid sim roll line matches solo text")
-ok(string.find(raidChat, "won by Aaa (100)", 1, true) ~= nil, "raid sim verdict matches solo text")
-ok(string.find(raidChat, "Aaa wins ", 1, true) ~= nil, "raid sim award matches solo text")
+ok(string.find(raidChat, LINK_AAA .. " rolls 90 (1-100)", 1, true) ~= nil, "raid sim roll line matches solo text")
+ok(string.find(raidChat, "won by " .. LINK_AAA .. " (100)", 1, true) ~= nil, "raid sim verdict matches solo text")
+ok(string.find(raidChat, LINK_AAA .. " wins ", 1, true) ~= nil, "raid sim award matches solo text")
 eq(raidChat, soloRolls,
   "raid sim group-chat text == solo log roll lines")
 -- ...on the group channels only (start is a warning).
@@ -200,21 +207,23 @@ ok(string.find(liveChat, "Roll |c", 1, true) ~= nil, "live roll-start is quality
 -- Live intake does NOT re-announce (the player's own /roll system
 -- message is already in chat): only start + verdict + award go out.
 ok(string.find(liveChat, "Aaa rolls 90", 1, true) == nil, "live intake stays quiet (no double line)")
-ok(string.find(liveChat, "won by Aaa (100)", 1, true) ~= nil, "live verdict shares the builder")
-ok(string.find(liveChat, "Aaa wins |c", 1, true) ~= nil, "live award shares the builder (linked)")
+ok(string.find(liveChat, "won by " .. LINK_AAA .. " (100)", 1, true) ~= nil, "live verdict shares the builder")
+ok(string.find(liveChat, LINK_AAA .. " wins |c", 1, true) ~= nil, "live award shares the builder (linked)")
 for i = 1, #sent do
   ok(sent[i].chan == "RAID" or sent[i].chan == "RAID_WARNING", "live raid sends RAID/RAID_WARNING only")
 end
 -- The sim fake line and the shared builder agree word-for-word.
-eq(ML.RollLine({ name = "Aaa", roll = 90, min = 1, max = 100 }), "Aaa rolls 90 (1-100)", "RollLine format pinned")
+eq(ML.RollLine({ name = "Aaa", roll = 90, min = 1, max = 100 }), LINK_AAA .. " rolls 90 (1-100)", "RollLine format pinned")
 LW.SetItems({ { itemID = 1001, link = "item:1001", name = "Dragonfang Blade" } }, "loot")
 local awardBuilt = ML.AwardLine(1001, "item:1001", "Aaa")
-ok(string.find(awardBuilt, "Aaa wins ", 1, true) ~= nil, "AwardLine names the winner")
+ok(string.find(awardBuilt, LINK_AAA .. " wins ", 1, true) ~= nil, "AwardLine names the winner (linked)")
 ok(string.find(awardBuilt, "|Hitem:1001", 1, true) ~= nil, "AwardLine links the item")
 ok(string.find(awardBuilt, "[Dragonfang Blade]", 1, true) ~= nil, "AwardLine names the item")
 
--- 5. Non-ML raider in raid/party: the same flow stays local, nothing
--- reaches group chat — only the master looter speaks to the group.
+-- 5. Non-ML simmer in raid/party: the sim speaks to the group — a sim
+-- is an explicit test action, never background echo, so the speaker
+-- gate doesn't apply. Same text the ML's sim produces, on the same
+-- channels (start warns).
 ZugLoot.SRSecurity.AmML = function() return false end
 for _, g in ipairs({ "raid", "party" }) do
   reset()
@@ -224,13 +233,54 @@ for _, g in ipairs({ "raid", "party" }) do
   math.random = realRandom
   LW.doAction(1001, "finish")
   ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
-  eq(#sent, 0, g .. " raider sends nothing (ML-only chat)")
+  ok(#sent > 0, g .. " simmer reaches group chat")
+  eq(chatText(), raidChat, g .. " simmer text == ML sim text")
+  for i = 1, #sent do
+    if g == "raid" then
+      ok(sent[i].chan == "RAID" or sent[i].chan == "RAID_WARNING", "raid simmer sends RAID/RAID_WARNING only")
+    else
+      eq(sent[i].chan, "PARTY", "party simmer sends PARTY only")
+    end
+  end
+end
+
+-- 5b. Non-ML LIVE flow stays local: only the master looter speaks live
+-- lines to the group (no background echo from raiders' clients).
+for _, g in ipairs({ "raid", "party" }) do
+  reset()
+  grouping = g
+  LW.SetItems({ { itemID = 1001, link = "item:1001", name = "Dragonfang Blade" } }, "loot")
+  LW.OpenDetail(1001)
+  LW.doAction(1001, "roll")
+  ML.IntakeChatRoll("Aaa rolls 90 (1-100)")
+  ML.IntakeChatRoll("Bbb rolls 80 (1-100)")
+  LW.doAction(1001, "finish")
+  ML.AwardChosen({ name = "Aaa", via = "winner" }, 1001)
+  eq(#sent, 0, g .. " raider sends no live lines (ML-only chat)")
   local raiderLog = logText()
-  ok(string.find(raiderLog, "Aaa rolls 90 (1-100)", 1, true) ~= nil, g .. " raider still sees roll lines locally")
-  ok(string.find(raiderLog, "won by Aaa (100)", 1, true) ~= nil, g .. " raider still sees the verdict locally")
-  ok(string.find(raiderLog, "Aaa wins ", 1, true) ~= nil, g .. " raider still sees the award locally")
+  ok(string.find(raiderLog, "won by " .. LINK_AAA .. " (100)", 1, true) ~= nil, g .. " raider still sees the verdict locally")
+  ok(string.find(raiderLog, LINK_AAA .. " wins ", 1, true) ~= nil, g .. " raider still sees the award locally")
 end
 ZugLoot.SRSecurity.AmML = function() return true end
+
+-- 5c. Player names in chat are clickable class-colored links
+-- (|cHEX|Hplayer:Name|h[Name]|h|r): click -> whisper menu, color ->
+-- class. Unknown classes still link (white). Roll/verdict/award/sand
+-- all share the builder, so one pin covers every chat line.
+reset()
+local linkBuilt = ML.AwardLine(1001, "item:1001", "Aaa")
+ok(string.find(linkBuilt, "|Hplayer:Aaa|h[Aaa]|h", 1, true) ~= nil, "award names the winner as a player link")
+local linkRoll = ML.RollLine({ name = "Aaa", roll = 90, min = 1, max = 100 })
+ok(string.find(linkRoll, "|Hplayer:Aaa|h[Aaa]|h", 1, true) ~= nil, "roll line links the roller")
+eq(ML.RollLine({ name = "Aaa", roll = 90, min = 1, max = 100 }),
+  ZugLoot.ClassColors.PlayerLink("Aaa") .. " rolls 90 (1-100)", "RollLine links, format pinned")
+local linkTied = ML.ResultLine({ itemID = 1001, itemLink = "item:1001" },
+  { winners = {}, tied = { { name = "Bbb" } } })
+ok(string.find(linkTied, "|Hplayer:Bbb|h[Bbb]|h", 1, true) ~= nil, "tie verdict links the tied")
+local linkSand = ML.SandLine(19183, "item:19183", "Bbb", 1, 6)
+ok(string.find(linkSand, "|Hplayer:Bbb|h[Bbb]|h", 1, true) ~= nil, "sand line links the winner")
+ok(string.find(ML.AwardLine(1001, "item:1001", "Tmog", "Aaa"),
+  "|Hplayer:Aaa|h[Aaa]|h", 1, true) ~= nil, "trade-to recipient links too")
 
 -- 6. Pure builders: tie / no-winner verdicts + sand line + start line.
 reset()
@@ -239,11 +289,11 @@ LW.SetItems({
   { itemID = 19183, link = "item:19183", name = "Hourglass Sand" },
 }, "loot")
 local tieRes = { winners = {}, tied = { { name = "Aaa" }, { name = "Bbb" } } }
-ok(string.find(ML.ResultLine({ itemID = 1001, itemLink = "item:1001" }, tieRes), "tie between Aaa, Bbb", 1, true) ~= nil, "tie verdict pinned")
+ok(string.find(ML.ResultLine({ itemID = 1001, itemLink = "item:1001" }, tieRes), "tie between " .. LINK_AAA .. ", " .. LINK_BBB, 1, true) ~= nil, "tie verdict pinned")
 local noRes = { winners = {}, tied = {} }
 ok(string.find(ML.ResultLine({ itemID = 1001, itemLink = "item:1001" }, noRes), "no eligible rolls", 1, true) ~= nil, "no-winner verdict pinned")
 local sandBuilt = ML.SandLine(19183, "item:19183", "Bbb", 1, 6)
-ok(string.find(sandBuilt, "Sand x1 -> Bbb (6 total)", 1, true) ~= nil, "sand line pinned")
+ok(string.find(sandBuilt, "Sand x1 -> " .. LINK_BBB .. " (6 total)", 1, true) ~= nil, "sand line pinned")
 ok(string.find(sandBuilt, "|Hitem:19183", 1, true) ~= nil, "sand line links the item")
 local startBuilt = ML.StartLine(1001, "item:1001", "SR")
 ok(string.find(startBuilt, "Roll ", 1, true) ~= nil, "start line pinned")
