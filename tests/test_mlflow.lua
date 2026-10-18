@@ -372,6 +372,37 @@ LW.OnEvent("LOOT_CLOSED")
 LW.frame = nil
 ok(not hidden, "epic leftovers keep the window up")
 ok(LW.Find(1001) ~= nil, "epic rows park for resume")
+-- 10c. Big drops: one scan reads the WHOLE corpse (every loot page),
+-- one announce names every roll item — the ML never re-loots to see
+-- the rest. (The client shows ~5 slots per page; GetNumLootItems
+-- reports the full corpse, and ScanCorpse reads slots 1..n.)
+resetHarness()
+lootSlots = {
+  { link = "item:17001:0:0:0", quality = 4 },
+  { link = "item:17002:0:0:0", quality = 4 },
+  { link = "item:17003:0:0:0", quality = 4 },
+  { link = "item:17004:0:0:0", quality = 4 },
+  { link = "item:17005:0:0:0", quality = 4 },
+  { link = "item:17006:0:0:0", quality = 4 },
+  { link = "item:5001:0:0:0", quality = 0 },
+  { link = "item:5002:0:0:0", quality = 0 },
+}
+local sf, sc, sfr, sg = ML.ScanCorpse(2)
+eq(#sf, 6, "scan reads all six roll items past page one")
+eq(#sfr, 2, "scan reads both free rows")
+eq(#sc + #sg, 0, "no coin or group rows")
+printed = {}
+ML.OnLootOpened() -- single open: full rows + full announce
+ok(LW.Find(17006) ~= nil, "page-two epic listed without re-loot")
+ok(LW.Find(5002) ~= nil, "second grey listed without re-loot")
+eq(#LW.items, 8, "all eight slots listed in one scan")
+local sawHead, numbered = false, 0
+for i = 1, #printed do
+  if string.find(printed[i], "dropped 6 items", 1, true) then sawHead = true end
+  if string.find(printed[i], "^%d+%. ") then numbered = numbered + 1 end
+end
+ok(sawHead, "announce counts all six roll items")
+eq(numbered, 6, "announce names every roll item")
 
 -- 11. Chat names the item, never a bare item:id.
 resetHarness()

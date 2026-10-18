@@ -1889,6 +1889,33 @@ function M.ScanSlot(slot, threshold)
   return entry
 end
 
+-- Full corpse read: EVERY slot the client reports, bucketed by kind.
+-- Pure scan (no row writes): OnLootOpened builds rows from it, the drop
+-- announce counts from it.
+-- PAGING: the client shows ~5 slots per loot page, but GetNumLootItems
+-- reports the WHOLE corpse (all pages) — this loop reads slots 1..n, so
+-- a 12-item boss is one scan, one row list, one announce. Never gate on
+-- a visible-page size: items past the first page are real drops, and
+-- the ML must see them without re-looting.
+-- Returns found, coin, free, grouped (all tables, possibly empty).
+-- Nil-safe headless (no corpse APIs -> four empty tables).
+function M.ScanCorpse(threshold)
+  local found, coin, free, grouped = {}, {}, {}, {}
+  if not GetNumLootItems then return found, coin, free, grouped end
+  threshold = threshold or M.LootThreshold()
+  local n = GetNumLootItems() or 0
+  for slot = 1, n do
+    local e = M.ScanSlot(slot, threshold)
+    if e then
+      if e.coin then table.insert(coin, e)
+      elseif e.group then table.insert(grouped, e)
+      elseif e.free then table.insert(free, e)
+      else table.insert(found, e) end
+    end
+  end
+  return found, coin, free, grouped
+end
+
 -- Re-scan the corpse and patch the TRACKED rows (LOOT_SLOT_CLEARED /
 -- Close path): drop rows whose slots went empty, keep badge/status of the
 -- rest, append genuinely new slots. M.items here is the LootWindow list
@@ -2150,17 +2177,7 @@ function M.OnLootOpened()
   -- then build fresh below.
   if M.lootKey and M.lootKey ~= key then M.ParkCorpse() end
   local threshold = M.LootThreshold()
-  local found, coin, free, grouped = {}, {}, {}, {}
-  local n = GetNumLootItems()
-  for slot = 1, n do
-    local e = M.ScanSlot(slot, threshold)
-    if e then
-      if e.coin then table.insert(coin, e)
-      elseif e.group then table.insert(grouped, e)
-      elseif e.free then table.insert(free, e)
-      else table.insert(found, e) end
-    end
-  end
+  local found, coin, free, grouped = M.ScanCorpse(threshold)
   if Z.Util.ArrayCount(found) == 0
       and Z.Util.ArrayCount(coin) == 0
       and Z.Util.ArrayCount(free) == 0

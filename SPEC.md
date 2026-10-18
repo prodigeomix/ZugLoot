@@ -331,7 +331,11 @@ lines, raid-roll numbering, bare names and non-ML senders never trigger.
   not), EVERY corpse slot gets a row (RollFor parity): coin first, then
   roll-worthy items (quality ≥ the party's `GetLootThreshold`, 1 common
   .. 4 epic), then below-threshold leftovers (grey quality 0 always) as
-  one-click free rows that loot straight to the player in any loot method. Blizzard's `LootFrame`
+  one-click free rows that loot straight to the player in any loot method.
+  PAGING: the client shows ~5 slots per loot page, but `GetNumLootItems`
+  reports the WHOLE corpse — `ScanCorpse` reads slots 1..n, so one open
+  lists every page and the drop announce names every roll item with no
+  re-loot. Blizzard's `LootFrame`
   is DETACHED session-wide (RollFor `main.lua:on_player_login` parity:
   `UnregisterAllEvents` + `OnHide` stripped at `ADDON_LOADED`, re-armed
   per `LOOT_OPENED`) — one-shot hiding is NOT enough, FrameXML re-shows
