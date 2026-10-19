@@ -460,8 +460,35 @@ end
 -- line format. CSV is NOT accepted: CSV-looking input is refused with
 -- a pointer at the RollFor export. Used by paste import + Load from File.
 function M.ParseAnyImport(text)
-  local sheet = Z.SRData.ParseRaidResExport(text)
+  local sheet, rrErr = Z.SRData.ParseRaidResExport(text)
   if sheet then return sheet, nil end
+  -- A paste carrying a raidres payload candidate (JSON / long-base64
+  -- line) was *trying* to be a RollFor export: report the specific
+  -- raidres error (truncated, bad JSON, unsupported encoding) and NEVER
+  -- fall through to CSV/line format — whose "missing ';'" is
+  -- misleading here (';' is not valid base64). CSV import stays
+  -- disabled, so this path must not reach the CSV parser either.
+  -- Short fragments (a truncated copy, a partial line) have no payload
+  -- line but are clearly not line format either: a single `;`-less line
+  -- in the base64 alphabet is a broken RollFor copy, not a hand-written
+  -- sheet, so the raidres error wins there too. (Minimum length keeps
+  -- trivial words like "hello" on the line-format path.)
+  local isCandidate = Z.SRData.ExtractPayload and Z.SRData.ExtractPayload(text)
+  if not isCandidate then
+    local t = (Z.Util and Z.Util.Trim and Z.Util.Trim(text)) or tostring(text or "")
+    local stripped = string.gsub(t, "%s", "")
+    local hasHeader = Z.SRData.HasCSVHeader and Z.SRData.HasCSVHeader(text)
+    if not hasHeader
+      and string.len(stripped) >= 16
+      and not string.find(t, ";", 1, true)
+      and not string.find(t, "\n")
+      and string.find(stripped, "^[A-Za-z0-9+/=]+$") then
+      isCandidate = true
+    end
+  end
+  if isCandidate then
+    return nil, rrErr
+  end
   -- A CSV whose header matched must report the RollFor-only rule — NOT
   -- fall through to a confusing line-format error like "line 1: missing ';'".
   if Z.SRData.HasCSVHeader and Z.SRData.HasCSVHeader(text) then

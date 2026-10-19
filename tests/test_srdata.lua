@@ -127,47 +127,20 @@ else
   T.fail = T.fail + 1 table.insert(T.errors, "FAIL example file missing")
 end
 
--- 6b. CSV example file parses (second SR-sheet format).
-local cf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
-if cf then
-  local cex = cf:read("*a") cf:close()
-  local cs, cserr = SRData.ParseCSVFormat(cex)
-  ok(cs ~= nil, "csv example parses: " .. tostring(cserr))
-  if cs then
-    -- Pysanka dupes merge: rolls 2, max SR+ wins.
-    local byN = {}
-    for _, r in ipairs(cs.items[18814].rollers) do byN[r.name] = r end
-    eq(byN["Pysanka"].rolls, 2, "csv dupe counts rolls")
-    eq(byN["Pysanka"].sr_plus, 70, "csv max sr+ wins")
-    eq(byN["Ivkoo"].sr_plus, nil, "csv sr+ 0 is nil")
-    -- Class+spec stored raw (no spaces) for RoleOf/SpecName.
-    eq(cs.players["Pysanka"].class, "Paladin", "csv class canonical")
-    eq(cs.players["Pysanka"].raw, "PaladinProtection", "csv raw class+spec")
-    eq(cs.players["Akiruy"].class, "Warlock", "csv warlock class")
-    -- Dispatch: CSV reaches ParseAnyImport; preamble above it is dropped.
-    -- (SRImport loads in section 8 below; dispatch checked there.)
-    -- STRICT: any row missing its numeric ID / attendee blocks the whole
-    -- import (never half-imports). Header aliases still ok.
-    local mn = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n")
-    ok(mn ~= nil, "csv min-fields header ok")
-    local names = SRData.AllPlayerNames(mn)
-    eq(#names, 1, "csv min-fields keeps good row")
-    eq(names[1], "Aaa", "csv min-fields keeps good name")
-    local badId, badIdErr = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n,1002\n")
-    ok(badId == nil and badIdErr ~= nil, "csv row missing attendee blocks import")
-    ok(string.find(tostring(badIdErr), "CSV line 3", 1, true) ~= nil, "csv block names the line")
-    local badNm, badNmErr = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\nBbb,\n")
-    ok(badNm == nil and badNmErr ~= nil, "csv row missing ID blocks import")
-    ok(string.find(tostring(badNmErr), "CSV line 3", 1, true) ~= nil, "csv ID block names the line")
-    -- Preamble above base64 is dropped; garbage still rejected.
-    local b64pre = "copy below this line:\neyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119\n"
-    local pb, pberr = SRData.ParseRaidResExport(b64pre)
-    ok(pb ~= nil, "base64 preamble dropped: " .. tostring(pberr))
-    if pb then eq(pb.meta.raidID, "R1", "preamble body intact") end
-  end
-else
-  T.fail = T.fail + 1 table.insert(T.errors, "FAIL csv example file missing")
-end
+-- 6b. CSV import is DISABLED: the parser is defused (refuses with the
+-- RollFor-only rule), the tripwire still recognizes CSV headers, and
+-- preamble above base64 is dropped; garbage still rejected.
+local defS, defErr = SRData.ParseCSVFormat("Player,ItemID\nAaa,1001\n")
+ok(defS == nil, "defused CSV parser refuses even valid input")
+ok(string.find(tostring(defErr), "only RollFor export", 1, true) ~= nil,
+  "defused CSV refusal names the RollFor export")
+ok(SRData.HasCSVHeader("Player,ItemID\nAaa,1001\n"), "csv tripwire still recognizes header")
+ok(not SRData.HasCSVHeader("Aaa;1001:1\n"), "line format is not CSV")
+-- Preamble above base64 is dropped; garbage still rejected.
+local b64pre = "copy below this line:\neyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119\n"
+local pb, pberr = SRData.ParseRaidResExport(b64pre)
+ok(pb ~= nil, "base64 preamble dropped: " .. tostring(pberr))
+if pb then eq(pb.meta.raidID, "R1", "preamble body intact") end
 
 -- 8. Real-world file content: base64 raidres export parses via the same
 -- path LoadFromFile uses (regression: LoadFromFile only tried line format).
@@ -182,9 +155,6 @@ ZugLoot.Print = function() end
 ZugLoot.DB = {}
 ZugLoot.Comm = {}
 dofile("SRImport.lua")
-local blob = nil
-local bf = io.open("CustomData_example/ZugLoot_SR.txt.csv", "r")
-if bf then blob = bf:read("*a") bf:close() end
 -- Synthesize a raidres-style base64 blob: {"softreserves":[...]} minimal.
 -- (Full export decode is covered by section 3; here we check dispatch.)
 local b64blob = "eyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119"
@@ -194,10 +164,25 @@ local badSheet, badErr = ZugLoot.SRImport.ParseAnyImport("not a sheet at all !!!
 ok(badSheet == nil and badErr ~= nil, "ParseAnyImport rejects garbage")
 -- CSV is disabled: CSV input (incl. preamble above the header) is
 -- refused with the RollFor-only rule, never dispatched to the parser.
-local csvPre, csvPreErr = ZugLoot.SRImport.ParseAnyImport("copy everything below this line:\n" .. (blob or ""))
-ok(csvPre == nil, "ParseAnyImport refuses CSV with preamble")
+local csvPre, csvPreErr = ZugLoot.SRImport.ParseAnyImport("ID,Item,Attendee\n1,Choker,Aaa\n")
+ok(csvPre == nil, "ParseAnyImport refuses CSV")
 ok(string.find(tostring(csvPreErr), "only RollFor export", 1, true) ~= nil,
-  "CSV preamble refusal names the RollFor export")
+  "CSV refusal names the RollFor export")
+ok(string.find(tostring(csvPreErr), "missing ';'", 1, true) == nil,
+  "CSV error is not the line-format fallthrough")
+-- Failed raidres blobs report the REAL error, never the line-format
+-- fallthrough. (';' is not valid base64, so "missing ';'" is always
+-- the wrong message for a RollFor copy.)
+local truncS, truncErr = ZugLoot.SRImport.ParseAnyImport("eyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2Vyd")
+ok(truncS == nil, "truncated RollFor refused")
+ok(string.find(tostring(truncErr), "truncated", 1, true) ~= nil,
+  "truncated RollFor names truncation: " .. tostring(truncErr))
+ok(string.find(tostring(truncErr), "missing ';'", 1, true) == nil,
+  "truncated RollFor error is not the line-format fallthrough")
+local fragS, fragErr = ZugLoot.SRImport.ParseAnyImport("eyJtZXRhZGF0YSI6eyJ")
+ok(fragS == nil, "short RollFor fragment refused")
+ok(string.find(tostring(fragErr), "missing ';'", 1, true) == nil,
+  "short fragment error is not the line-format fallthrough: " .. tostring(fragErr))
 -- Static line format still dispatches.
 local lineSheet, lineErr = ZugLoot.SRImport.ParseAnyImport("Aaa;1001:1\n")
 ok(lineSheet ~= nil, "ParseAnyImport accepts line format: " .. tostring(lineErr))
@@ -261,9 +246,9 @@ eq(ZugLoot.DB.sheet.meta.raidID, "R2", "raid switched")
 -- (regression: importing a truncated CustomData file hung the client —
 -- JsonDecode ran on a partial payload).
 -- Truncated base64 (length not a multiple of 4 after whitespace strip).
-local trunc, truncErr = SRData.ParseRaidResExport("eyJtZXRhZGF0YSI6eyJ")
-ok(trunc == nil and truncErr ~= nil, "truncated base64 refused")
-ok(string.find(tostring(truncErr), "truncated", 1, true) ~= nil, "truncated message")
+local trunc, truncErr2 = SRData.ParseRaidResExport("eyJtZXRhZGF0YSI6eyJ")
+ok(trunc == nil and truncErr2 ~= nil, "truncated base64 refused")
+ok(string.find(tostring(truncErr2), "truncated", 1, true) ~= nil, "truncated message")
 -- Valid-length but JSON-cut payload also refuses cleanly.
 local cutJson = "eyJhIjox" -- base64("{") + junk -> decodes, tail isn't }/]
 local cut = SRData.ParseRaidResExport(cutJson)

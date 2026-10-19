@@ -439,6 +439,10 @@ local function csvFindHeader(lines)
 end
 
 function M.ParseCSVFormat(text)
+  if M.CSV_DISABLED ~= false then
+    return nil, "only RollFor export is supported — paste the RollFor export "
+      .. "from raidres (CSV imports are disabled)"
+  end
   local lines = {}
   for line in Gfind(tostring(text or "") .. "\n", "([^\n]*)\n") do
     table.insert(lines, line)
@@ -506,9 +510,13 @@ function M.ParseCSVFormat(text)
   return sheet, nil
 end
 
+-- DEFUSED (CSV import disabled): ParseCSVFormat is dead code — it must
+-- never run on a paste/file import (ParseAnyImport never calls it).
+-- It stays in the file only so old tests/docs referencing it keep
+-- loading; any live call path must be treated as a bug.
 -- True when the text carries a recognizable CSV header (ID+Attendee).
--- ParseAnyImport uses it to report a header-matched-but-useless CSV as
--- a CSV problem instead of a confusing line-format error.
+-- ParseAnyImport uses it ONLY as a tripwire to report the RollFor-only
+-- rule — never to dispatch into ParseCSVFormat.
 function M.HasCSVHeader(text)
   local lines = {}
   for line in Gfind(tostring(text or "") .. "\n", "([^\n]*)\n") do
