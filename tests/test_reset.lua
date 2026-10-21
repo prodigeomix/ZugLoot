@@ -19,20 +19,24 @@ dofile("SRData.lua")
 dofile("Resolver.lua")
 
 -- Mock group state (same shape as test_security.lua).
+-- Mock group state: ML rigged via GetLootMethod index (RollFor parity).
+-- lootId 0 = me, N = raid/party slot N. Leader rank is irrelevant.
 local raidMembers, partyMembers = 0, 0
-local meIsPartyLeader = false
-local meIsML = false
-local meIsRaidOfficer = false
+local lootMethod, lootId = nil, nil
 local raidRoster = {}
+local partyNames = {}
 
 GetNumRaidMembers = function() return raidMembers end
 GetNumPartyMembers = function() return partyMembers end
-IsPartyLeader = function() return meIsPartyLeader end
-IsRaidLeader = function() return false end
-IsRaidOfficer = function() return meIsRaidOfficer end
-GetLootMethod = function() return meIsML and "master" or nil end
-GetLootMaster = function() return meIsML and "SoloPlayer" or nil end
-UnitName = function() return "SoloPlayer" end
+GetLootMethod = function() return lootMethod, lootId end
+UnitName = function(unit)
+  if unit == "player" or unit == nil then return "SoloPlayer" end
+  if type(unit) == "string" then
+    local slot = string.match(unit, "^party(%d+)$")
+    if slot then return partyNames[tonumber(slot)] end
+  end
+  return nil
+end
 GetRaidRosterInfo = function(i)
   local r = raidRoster[i]
   if not r then return nil end
@@ -92,43 +96,47 @@ eq(c0.won, 0, "no sheet: 0 won")
 
 -- 3. Solo: allowed.
 raidMembers, partyMembers = 0, 0
-meIsML, meIsPartyLeader, meIsRaidOfficer = false, false, false
+lootMethod, lootId = nil, nil
 ok(RI.CanResetRollLog(), "solo can reset")
 
--- 4. Raid raider (not ML/leader): blocked.
+-- 4. Raid raider (not ML): blocked. ML is slot 7, leader rank on slot 1
+-- confers nothing.
 raidMembers = 40
 raidRoster = {}
 for i = 1, 40 do raidRoster[i] = { "Player" .. i, 0 } end
+raidRoster[1] = { "Player1", 1 }
+lootMethod, lootId = "master", 7
 ok(not RI.CanResetRollLog(), "raid raider blocked")
 
--- 5. Raid ML: allowed.
-meIsML = true
+-- 5. Raid ML (index 0): allowed.
+lootMethod, lootId = "master", 0
 ok(RI.CanResetRollLog(), "raid ML allowed")
-meIsML = false
 
--- 6. Raid assistant: allowed.
-raidRoster[1] = { "SoloPlayer", 1 }
-ok(RI.CanResetRollLog(), "raid assistant allowed")
-raidRoster[1] = { "Player1", 0 }
+-- 6. Raid leader rank WITHOUT the ML index: still blocked.
+lootMethod, lootId = "master", 7
+ok(not RI.CanResetRollLog(), "raid leader-without-ML blocked")
 
--- 7. Party leader: allowed; party non-leader: blocked.
+-- 7. Party ML: allowed; party non-ML: blocked.
 raidMembers = 0
 raidRoster = {}
 partyMembers = 4
-meIsPartyLeader = true
-ok(RI.CanResetRollLog(), "party leader allowed")
-meIsPartyLeader = false
-ok(not RI.CanResetRollLog(), "party non-leader blocked")
+partyNames = { "P1", "P2", "P3", "P4" }
+lootMethod, lootId = "master", 0
+ok(RI.CanResetRollLog(), "party ML allowed")
+lootMethod, lootId = "master", 2
+ok(not RI.CanResetRollLog(), "party non-ML blocked")
 
 -- 8. RequestResetRollLog without popup API: gated path still applies.
 -- Blocked raider gets the denial message and data is untouched.
 raidMembers = 40
+partyMembers = 0
 raidRoster = {}
 for i = 1, 40 do raidRoster[i] = { "Player" .. i, 0 } end
+lootMethod, lootId = "master", 3 -- ML is Player3, not me
 ZugLoot.DB = { sheet = makeUsedSheet() }
 printed = {}
 RI.RequestResetRollLog()
-ok(string.find(printed[#printed], "Only the master looter or raid leader"), "blocked request denied")
+ok(string.find(printed[#printed], "Only the master looter"), "blocked request denied")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 2, "blocked request leaves data alone")
 
 -- 9. Allowed request (solo) performs the reset directly without popup API.
@@ -140,17 +148,25 @@ eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "solo request cleared rolls")
 
 -- 10. /zl reset path (ResetWon) shares the gate + core.
 raidMembers = 40
+partyMembers = 0
 raidRoster = {}
 for i = 1, 40 do raidRoster[i] = { "Player" .. i, 0 } end
+lootMethod, lootId = "master", 3 -- ML is Player3, not me
 ZugLoot.DB = { sheet = makeUsedSheet() }
 printed = {}
 RI.ResetWon()
-ok(string.find(printed[#printed], "Only the master looter or raid leader"), "slash reset blocked for raider")
+ok(string.find(printed[#printed], "Only the master looter"), "slash reset blocked for raider")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 2, "slash reset leaves data alone for raider")
-meIsML = true
+lootMethod, lootId = "master", 0
 RI.ResetWon()
 ok(string.find(printed[#printed], "cleared"), "slash reset works for ML")
 eq(SRData.RollCount(ZugLoot.DB.sheet, 1001), 0, "slash reset cleared for ML")
-meIsML = false
+lootMethod, lootId = "master", 7
+
+-- Leave no ML behind: later files run in the same state and most rig
+-- their own loot method (nil = solo/group default, like the client
+-- with no group). A leaked ("master", id) would force every later
+-- award down the master-loot handoff.
+lootMethod, lootId = nil, nil
 
 return T

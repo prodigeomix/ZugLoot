@@ -57,5 +57,17 @@ for w in string.gmatch("a b c", "(%S+)") do table.insert(seen, w) end
 eq(table.concat(seen, ","), "a,b,c", "polyfill: gmatch iterates")
 string.match, string.gmatch = realMatch, realGmatch
 string.gfind = nil -- 5.5 has no gfind; don't leak the harness shim
+-- Base64Decode is STRICT: well-formed blobs decode, anything else
+-- returns nil (never garbage). Regression: unknown chars mapped to 0,
+-- so raw-JSON/line pastes "decoded" to junk and failed downstream as
+-- misleading "bad JSON" / "truncated" errors.
+eq(Util.Base64Decode("e30="), "{}", "padded blob decodes")
+ok(Util.Base64Decode("{\"a\":1}") == nil, "raw JSON refused")
+ok(Util.Base64Decode("Aaa;1001:1") == nil, "line format refused")
+ok(Util.Base64Decode("eyJtZXRhZGF0YSI6eyJ") == nil, "bad-length blob refused")
+ok(Util.Base64Decode("") == nil, "empty refused")
+ok(Util.Base64Decode(nil) == nil, "nil refused")
+-- Whitespace tolerance: multi-line copies still decode.
+eq(Util.Base64Decode("e30=\n"), "{}", "trailing newline tolerated")
 
 return T

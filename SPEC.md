@@ -27,23 +27,21 @@ dependencies, minimap button art. These are extension points, not blockers.
 | Role | How detected (1.12 APIs) | Powers |
 |------|--------------------------|--------|
 | Loot runner (anyone) | whoever opens the corpse — solo, any loot method, ML or not | Collect loot, start/finish/cancel rolls, award loot |
-| Master Looter (ML) | `GetLootMethod()` returns `"master"` + `GetLootMaster()` == player | As loot runner, plus group-chat announces + `ROLL_REQ` to rollers |
-| Raid leader / assistant | `IsRaidLeader()` / `IsRaidOfficer()` (fallback: party leader) | Import + broadcast sheet (same as ML) |
-| Raider | everyone else | View sheet, roll, auto-roll, sim |
+| Master Looter (ML) | `GetLootMethod()` returns `("master", id)` with `id == 0` for you, or the sender's name at roster slot `id` (RollFor parity) | As loot runner, plus group-chat announces + `ROLL_REQ` to rollers, sheet broadcast + receipt |
+| Raider | everyone else (including the raid/party leader when they are not the ML — leader rank confers no ML rights) | View sheet, roll, auto-roll, sim |
 
 Rules:
 
-1. **Only ML or raid leader/assistant may broadcast a sheet.** This is enforced
+1. **Only the ML may broadcast a sheet.** This is enforced
    *twice*:
    - sender side: `SRSecurity.CanBroadcast()` gates sending; `ApplySheet` only
      broadcasts when it is true;
-   - receiver side: `Comm.OnSheetReceived` verifies the sender `IsML(sender) or
-     IsRaidLeaderOrAssistant(sender)` against the *current* roster and drops +
-     warns on violation.
+   - receiver side: `Comm.OnSheetReceived` verifies the sender `IsML(sender)`
+     (RollFor-parity index check) and drops + warns on violation.
 1b. **Anyone may load a sheet locally** (paste or `Load from File`, solo or
 grouped) for their own view/sim — importing never pushes anything.
-Broadcasting stays ML/leader-only (`CanBroadcast()`); synced sheets are
-trusted from ML/leader only (`CanAcceptFrom()`). No broadcast happens solo
+Broadcasting stays ML-only (`CanBroadcast()`); synced sheets are
+trusted from the ML only (`CanAcceptFrom()`). No broadcast happens solo
 (`Comm.Channel()` is nil there; `VER_REQ`/`AWARD` also skip).
 2. Sheet broadcasts carry `raidID` (= leader name + import timestamp), `version`,
    and a META envelope (raid name + revision stamp). Same-raid updates keep
@@ -83,20 +81,23 @@ Sheet = {
 
 ### 3.1 Supported import formats
 
-1. **raidres.top / raidres.fly.dev / softres.it export** (paste path): base64-encoded
-   JSON with any of `reservations[]` (new: `character.name`, `raidItemId`,
+1. **raidres.top / raidres.fly.dev / softres.it export** (paste path): the base64-encoded
+   JSON RollFor export (one long base64 line) with any of `reservations[]` (new:
+   `character.name`, `raidItemId`,
    `srPlus` as number|string|`{value,isValid}`), `softreserves[]`
    (`name/role/items[{id,quality,sr_plus}]`), `hardreserves[]`. `sr_plus` also
    accepts `rollBonus`/`roll_bonus` (softres.it). Numeric strings coerced.
    `isValid=false` still counts (raidres defaults it to false when validation is
-   off) — value is what matters.
+   off) — value is what matters. Only this encoding is accepted: anything
+   that is not well-formed base64 is refused as "not a RollFor export"
+   (never garbage-decoded into a misleading JSON error).
 2. **Static file** (`CustomData/ZugLoot_SR.txt`, via Load from File): accepts
-   *either* a raw raidres export blob pasted into the file (base64, exactly
-   what raidres.top gives you), the CSV export below, *or* the static line
-   format. Paste-import accepts all three as well; format is auto-detected
-   (export first, CSV second, lines third). Lines above the payload
+   *either* the base64 RollFor export blob pasted into the file as-is
+   (exactly what raidres gives you), *or* the static line
+   format. Paste-import accepts both as well; format is auto-detected
+   (export first, lines second). Lines above the payload
    (tool headers, "copy below this line" notes) are dropped for the
-   export and CSV formats.
+   export format.
 3. **Static line format** (hand-written sheets, either path):
    `#` comments, blank lines ignored.
    ```
@@ -107,25 +108,9 @@ Sheet = {
    ```
    Grammar per entry: `itemID` (required number), `:count` (default 1),
    `+srplus` (default 0). `HARDRES;` line lists hard-reserved item IDs.
-4. **CSV export** (either path): header-matched, so column order and extra
-   columns (`Item`, `Boss`, `Comment`, `Date`) don't matter. Minimum
-   columns: `ID` (+`Attendee`); minimum per row: numeric ID + non-empty
-   attendee (other rows skipped). `Class` feeds the sheet class store
-   (unknown still imports, just uncolored); `Specialization` is optional
-   (missing = class-default role); `SR+` defaults to 0. Header aliases:
-   `ID`/`ItemID`, `Attendee`/`Player`/`Name`/`Character`/`Raider`,
-   `Specialization`/`Spec`, `SR+`/`SRPlus`. Lines above the header
-   (preamble) are dropped.
-   ```
-   ID,Item,Boss,Attendee,Class,Specialization,SR+
-   18814,"Choker of the Fire Lord",Ragnaros,Pysanka,Paladin,Protection,70
-   ```
-   STRICT, all-or-nothing: every data row must carry a numeric item ID +
-   non-empty attendee. ONE bad row blocks the WHOLE import with its line
-   number (e.g. `CSV line 4: missing numeric item ID (got 'Choker ...'
-   for attendee 'Pysanka')`) — never half-imports, never a silent
-   0-item sheet. Header with zero data rows below it is likewise a loud
-   error. Blank lines / `#` comments are ignored, not rows.
+4. **CSV export is disabled.** CSV-looking input is refused with the
+   RollFor-only rule (paste the base64 RollFor export from raidres) —
+   never parsed, never a line-format fallthrough.
 5. Anything else → import error naming the first bad line (never half-imports).
 6. **Empty-content sheets never move.** A sheet with 0 items and no hard
    reserves is refused at every boundary, live data kept: `ApplySheet`
@@ -189,7 +174,7 @@ Sheet = {
   one corpse slot = one handoff of the whole stack. Never touches the
   SR sheet (no SR, no won mark, no roll history) — DropLog records it
   as `sand`. `/zl sand` prints the ledger, `/zl sand reset` clears it
-  (solo always; in group ML/leader only).
+  (solo always; in group ML only).
 - One-win-per-item: after award, `won[itemID][winner]=true`. Sheet view renders
   `WON: Name`; the resolver excludes them from later SR contests for that itemID.
   Excluded rollers stay visible everywhere: their rolls are kept in a separate
@@ -285,8 +270,10 @@ Sheet = {
   | N items | M rolled`. Setup tab: Import (paste),
   Load from File, auto-roll toggle, clear won marks, **Reset all settings**
   (factory reset with confirmation: sheet, raid history, drop log and all
-  options back to defaults; local data only, no permission gate),
-  auto loot-method switching (**ML on boss**: as raid leader, flip
+  options back to defaults, plus session state — import-box text, open
+  rolls and their timers, sim staging, pending network chunks, corpse
+  cache; local data only, no permission gate),
+  auto loot-method switching (**ML on boss**: as master looter, flip
   to master loot when selecting a raid boss — worldboss flag or 100k+ HP
   (indoor bosses report elite; raid trash never reaches 100k), raid only; **Boss
   threshold** dropdown (Common 1 .. Epic 4, default Epic) rides along
@@ -540,17 +527,13 @@ the item); extra rolls ignored with notice. Auto-close timer configurable
 
 - `/zl ver` requests versions (`VER_REQ` → all clients answer `VER_ANS`).
 - Sheet fetch (Members tab “Request SR sheet” button, `/zl sheetreq`):
-  `SHEET_REQ` → the **master looter answers at once** with their sheet;
-  the **raid leader/assistant answers after a 5s delay, only when no ML
-  sheet exists** (no master loot, ML absent/unknown, or ML sheetless) —
-  an arriving SHEET cancels the pending leader reply, so the group never
-  gets two competing sheets. Raiders never answer. Receivers trust ONLY
-  ML/leader sheets (`CanAcceptFrom` — a raider's sheet is refused even if
-  one arrives). Solo: nobody to ask.
+  `SHEET_REQ` → only the **master looter answers** (at once, when they
+  hold a sheet). Nobody else answers broadcast requests. Receivers trust
+  ONLY ML sheets (`CanAcceptFrom` — anyone else's sheet is refused even
+  if one arrives). Solo: nobody to ask.
 - Targeted sync (`/zl sync <name>`, bare name or color-coded `[Name]`
   player link): `SHEET_REQ:<name>` → ONLY the named player answers,
   directly (anyone holding a sheet may answer — imports are open to
-  all). Trust stays on RECEIVE: a non-ML/leader answer still lands and
   is refused by `CanAcceptFrom` with the usual message.
 - Wire encoding (`Comm.EncodeSheetPayload` / `SRImport.DecodeSheetPayload`):
   base64-wrapped when an encoder exists, else `%`-escaped raw (`%` →
@@ -583,7 +566,7 @@ the item); extra rolls ignored with notice. Auto-close timer configurable
   chunked as `ROLLLOG_C:…:<seq>:<total>:<chunk>` past 160 bytes) — the
   raid learns what was rolled the moment it is recorded. Won marks
   follow at award time via the existing `AWARD:<itemID>:<winner>`.
-  Send-side: `CanBroadcast` (ML/leader) + non-solo channel; receive-side:
+  Send-side: `CanBroadcast` (ML) + non-solo channel; receive-side:
   `CanAcceptFrom` trust + live sheet of the SAME raidID (anything else
   ignored — the next full SHEET recovers), appended via `RecordRolls`
   with views refreshed underneath.
@@ -714,7 +697,7 @@ ZugLoot/
   SRData.lua         PURE: parse line/base64 formats, SR+ extract, won helpers
   Resolver.lua       PURE: effective-roll winner/tie/missroll/two-win logic
   Comm.lua           addon-message send/receive, sheet guard (security)
-  SRSecurity.lua     IsML/IsLeader/CanImport/CanBroadcast
+  SRSecurity.lua     MLOffset/IsML/AmML/CanImport/CanBroadcast
   SRImport.lua       paste frame + "Load from File" (CustomData/ZugLoot_SR.txt)
   SRView.lua         fancy sheet window (sorted by item, xN, +SR+, WON)
   MasterLootUI.lua   ML console + session control + award menu + confirm
@@ -775,13 +758,16 @@ via `Util.Count` so it parses on 5.0 and runs on 5.5 tests).
 /zl rollauto [on|off] auto-start rolls as corpses are looted (default OFF:
                     the ML picks each item's Roll button).
 /zl reset            clear roll log: sessions + won marks (ML/RL in group, anyone solo)
-                    (Setup tab "Reset all settings" = full factory reset with confirm)
+                    (Setup tab "Reset all settings" = full factory reset with confirm:
+                    sheet, history, options AND session state)
 /zl help
 ```
 
 ## 7. Testing
 
 - Outside client: `lua tests/run_tests.lua` (repo root = `ZugLoot/`). Covers:
+  strict base64 decode, base64-only RollFor export path, aggressive factory
+  reset (session state),
   line-format parse, base64/raidres transform incl. all `srPlus` spellings,
   max-not-sum SR+, winner/tie/miss-roll/one-win-per-item/2x, file-example parse.
 - In game: `/zl sim` + `/zl simboss` exercise the same `Resolver`; import a sheet

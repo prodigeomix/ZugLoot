@@ -46,10 +46,8 @@ No dependencies. Interface 11200.
 
 ## Static file (`CustomData/ZugLoot_SR.txt`)
 
-Easiest: paste the raw raidres.top export string into the file as-is
-(single base64 blob, no editing needed). Or paste a CSV export
-(`ID,Attendee,Class,Specialization,SR+` header, extra columns ignored —
-see `CustomData_example/ZugLoot_SR.txt.csv`), or hand-write the line format:
+Easiest: paste the raidres.top RollFor export string into the file as-is
+(single base64 blob, no editing needed). Or hand-write the line format:
 
 ```
 # comments start with #
@@ -58,10 +56,10 @@ Carbon; 18646:1+60
 HARDRES; 17782, 18564
 ```
 
-Per entry: `itemID[:count][+srplus]`. Lines above a base64 blob or the
-CSV header (tool notes, "copy below this line") are ignored.
+Per entry: `itemID[:count][+srplus]`. Lines above a base64 blob
+(tool notes, "copy below this line") are ignored.
 Requires Nampower (`ReadCustomFile`).
-Only ML / raid leader / assistant can import or broadcast.
+Anyone can import (local view only); only the master looter can broadcast.
 
 ## Tests (outside WoW)
 

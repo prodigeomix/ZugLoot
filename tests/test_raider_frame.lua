@@ -28,12 +28,13 @@ ZugLoot.Caps = ZugLoot.Caps or { SR = 100, MS = 100, OS = 99, TMOG = 98 }
 ZugLoot.Print = function() end
 time = time or os.time
 
--- Group + loot-method rig.
+-- Group + loot-method rig (RollFor parity: GetLootMethod's second
+-- return is the ML slot index; 0 = self). ML is raid slot 1 here
+-- (MasterLou), never the test player.
 local grouping = "solo" -- solo | party | raid
 local lootMethod = nil -- nil | "master" | "group"
-local mlName = "MasterLou"
-GetLootMethod = function() return lootMethod end
-GetLootMaster = function() return mlName end
+local lootId = nil -- ML slot index under master loot
+GetLootMethod = function() return lootMethod, lootId end
 UnitName = function(u)
   if u == "player" or u == nil then return "SoloPlayer" end
   return nil
@@ -54,10 +55,9 @@ ZugLoot.SRSecurity = {
   LootMethod = function() return lootMethod end,
 }
 dofile("SRSecurity.lua")
--- Real SRSecurity on the rigged globals (IsML/IsLeader verified there).
+-- Real SRSecurity on the rigged globals (IsML/AmML verified there).
 local Sec = ZugLoot.SRSecurity
 ZugLoot.SRSecurity.IsML = Sec.IsML
-ZugLoot.SRSecurity.IsLeader = Sec.IsLeader
 ZugLoot.SRSecurity.AmML = Sec.AmML
 
 -- Headless frame stub: records visibility so the POLICY result
@@ -94,6 +94,7 @@ local LINK = "|cffa335ee|Hitem:17063:0:0:0|h[Thunderfury]|h|r"
 local function reset()
   grouping = "solo"
   lootMethod = nil
+  lootId = nil
   ZugLoot.DB.raiderFrame = nil
   RL.groupRollID = nil
 end
@@ -111,9 +112,9 @@ reset()
 eq(RL.AllowMasterFrame(), false, "solo shut by default")
 grouping = "raid" lootMethod = "group"
 eq(RL.AllowMasterFrame(), false, "raid group-loot shut by default")
-grouping = "raid" lootMethod = "master"
+grouping = "raid" lootMethod, lootId = "master", 1
 eq(RL.AllowMasterFrame(), true, "raid master-loot opens")
-grouping = "party" lootMethod = "master"
+grouping = "party" lootMethod, lootId = "master", 1
 eq(RL.AllowMasterFrame(), true, "party master-loot opens")
 grouping = "party" lootMethod = "group"
 eq(RL.AllowMasterFrame(), false, "party group-loot shut by default")
@@ -134,7 +135,7 @@ eq(shownFlag, false, "solo frame stays hidden")
 grouping = "raid" lootMethod = "group"
 eq(RL.ShowItem(LINK, 15), false, "group-loot ShowItem refused")
 eq(shownFlag, false, "group-loot frame stays hidden")
-grouping = "raid" lootMethod = "master"
+grouping = "raid" lootMethod, lootId = "master", 1
 eq(RL.ShowItem(LINK, 15), true, "raid master-loot shows")
 eq(shownFlag, true, "raid master-loot frame visible")
 reset()
@@ -145,7 +146,7 @@ ok(RL.MayShow(false), "all mode passes the gate anywhere")
 
 -- 4. ROLL_REQ from the ML opens only under master loot (default).
 reset()
-grouping = "raid" lootMethod = "master"
+grouping = "raid" lootMethod, lootId = "master", 1
 local opened = 0
 local realShow = RL.ShowItem
 RL.ShowItem = function(...) opened = opened + 1 return true end
@@ -164,7 +165,7 @@ RL.ShowItem = realShow
 eq(RL.ShowItem(LINK, 15), false, "group-loot ROLL_REQ refused at ShowItem")
 -- Non-ML sender never opens (LootBlare rule, unchanged).
 reset()
-grouping = "raid" lootMethod = "master"
+grouping = "raid" lootMethod, lootId = "master", 1
 opened = 0
 RL.ShowItem = function(...) opened = opened + 1 return true end
 RL.OnRollReq("ROLL_REQ:17063:" .. LINK .. ":SR", "RandomRaider")
@@ -173,7 +174,7 @@ RL.ShowItem = realShow
 
 -- 5. RW roll call from the ML opens only under master loot (default).
 reset()
-grouping = "raid" lootMethod = "master"
+grouping = "raid" lootMethod, lootId = "master", 1
 opened = 0
 RL.ShowItem = function(...) opened = opened + 1 return true end
 RL.OnEvent("CHAT_MSG_RAID_WARNING", "Roll for Thunderfury: /roll (MS)", "MasterLou")

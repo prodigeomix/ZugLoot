@@ -151,7 +151,7 @@ ZugLoot.DB = { sheet = rs2 }
 printed = {}
 Comm.OnMessage(sent[1].msg, "RandomRaider")
 eq(SRData.RollCount(rs2, 1001), 1, "untrusted session refused (no double-append)")
-ok(string.find(printed[#printed] or "", "not ML/leader", 1, true) ~= nil, "untrusted refusal explains itself")
+ok(string.find(printed[#printed] or "", "not ML", 1, true) ~= nil, "untrusted refusal explains itself")
 -- Solo: nothing goes on the wire.
 grouping = "solo"
 sent = {}

@@ -22,8 +22,9 @@ function M.Add(itemID, itemLink, source, outcome, winner)
 end
 
 function M.Clear()
-  if not Z.SRSecurity.CanImport() then
-    Z.Print("Only the master looter or raid leader can clear the log.")
+  if not (Z.SRSecurity and Z.SRSecurity.CanBroadcast
+      and Z.SRSecurity.CanBroadcast()) then
+    Z.Print("Only the master looter can clear the log.")
     return
   end
   Z.DB.drops = {}

@@ -778,8 +778,8 @@ Z.RaiderLootUI.ShowResult("The winner is Jaina (50) !");
 -- ML roll call is a genuine master-loot roll (gate open) and the
 -- non-trigger lines prove the MATCHER stays tight (not the gate).
 Z.DB.raiderFrame = nil;
-GetLootMethod = function() return "master" end;
-GetLootMaster = function() return "Pysanka" end;
+GetLootMethod = function() return "master", 2 end;
+GetRaidRosterInfo = function(i) if i == 2 then return "Pysanka" end return nil end;
 GetNumRaidMembers = function() return 3 end;
 Z.RaiderLootUI.Hide();
 Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Roll for Nemesis Gloves: /roll (MS) or /roll 99 (OS) or /roll 98 (TMOG)", "Pysanka");
@@ -803,7 +803,7 @@ assert(Z.RaiderLootUI.itemNameText ~= "[1]:Evilson, [2]:Broman", "raid-roll numb
 Z.RaiderLootUI.OnEvent("CHAT_MSG_RAID_WARNING", "Roll for Nemesis Gloves: /roll (MS)", "RandomRaider");
 assert(Z.RaiderLootUI.itemNameText ~= "Nemesis Gloves", "non-ML sender does not pop window");
 GetLootMethod = nil;
-GetLootMaster = nil;
+GetRaidRosterInfo = function() return nil end;
 GetNumRaidMembers = function() return 0 end;
 print("roll-call trigger OK");
 -- Roll-window icon hover: full link -> SetHyperlink tooltip; bare name

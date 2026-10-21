@@ -94,4 +94,57 @@ eq(Z.DB.sheet, nil, "sheet cleared on accept")
 StaticPopupDialogs = nil
 StaticPopup_Show = nil
 
+-- 4. Aggressive reset: runtime session artifacts beyond SavedVariables
+-- are dropped too. Regression: timers, open rolls, sim staging, pending
+-- network chunks and the stale import-box text survived the wipe, so the
+-- NEXT import failed byte-identically ("reset did nothing").
+-- Rollover-safe headless: Z.Init() built Core's frame on blank stubs;
+-- all modules below load on those same stubs.
+dofile("Timer.lua")
+dofile("SRSecurity.lua")
+dofile("Sim.lua")
+dofile("Comm.lua")
+dofile("MasterLootUI.lua")
+dofile("LootWindow.lua")
+dofile("RaiderLootUI.lua")
+dofile("SRImport.lua")
+Z.Print = function(m) table.insert(printed, tostring(m)) end
+seedDirty()
+-- Seed session dirt (none of this lives in SavedVariables).
+Z.Timer.After(60, function() end)
+Z.MasterLootUI.roll = { itemID = 1001, mode = "SR" }
+Z.MasterLootUI.lastRound = { itemID = 1001, mode = "SR" }
+Z.MasterLootUI.pendingLoot = { [1] = true }
+Z.MasterLootUI.lootKey = "corpse:1"
+Z.MasterLootUI.corpseCache = { ["corpse:1"] = {} }
+Z.MasterLootUI.corpseOrder = { "corpse:1" }
+Z.MasterLootUI.autoML = true
+Z.Sim.pending = { { itemID = 1001 } }
+Z.Sim.running = true
+Z.Sim.raid = { key = "R" }
+Z.Comm.chunkBuffers = { R1 = { count = 1 } }
+Z.Comm.rollChunkBuffers = { ["R1#1001"] = { count = 1 } }
+Z._hush = 2
+Z.LootWindow.items = { { itemID = 1001, status = "done" } }
+Z.LootWindow.silentLootArms = { [1] = true }
+Z.RequestResetAllSettings()
+eq(Z.Timer.Pending(), 0, "timers drained")
+eq(Z.MasterLootUI.roll, nil, "open roll dropped")
+eq(Z.MasterLootUI.lastRound, nil, "finish stamp dropped")
+eq(Z.MasterLootUI.pendingLoot, nil, "loot arms dropped")
+eq(Z.MasterLootUI.lootKey, nil, "corpse key dropped")
+eq(next(Z.MasterLootUI.corpseCache), nil, "corpse cache dropped")
+eq(Z.MasterLootUI.corpseOrder[1], nil, "corpse order dropped")
+eq(Z.MasterLootUI.autoML, false, "autoML disarmed")
+eq(Z.Sim.pending[1], nil, "sim queue dropped")
+eq(Z.Sim.running, false, "sim stopped")
+eq(Z.Sim.raid, nil, "sim raid dropped")
+eq(next(Z.Comm.chunkBuffers), nil, "sheet chunks dropped")
+eq(next(Z.Comm.rollChunkBuffers), nil, "roll chunks dropped")
+eq(Z._hush, 0, "hush counter dropped")
+eq(Z.LootWindow.items[1], nil, "loot rows dropped")
+eq(Z.LootWindow.silentLootArms, nil, "silent arms dropped")
+eq(Z.DB.sheet, nil, "sheet still cleared")
+ok(string.find(printed[#printed], "reset to defaults"), "still reports")
+
 return T

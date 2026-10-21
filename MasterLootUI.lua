@@ -236,9 +236,11 @@ function M.IntakeChatRoll(line)
     local n = roll.n or Z.Util.ArrayCount(roll.roster or {})
     if roll.done or minR ~= 1 or maxR ~= n then return end
     local me = UnitName and UnitName("player") or nil
-    local mlName = Z.SRSecurity and Z.SRSecurity.MasterLooterName
-      and Z.SRSecurity.MasterLooterName() or nil
-    if player ~= me and player ~= mlName then return end
+    -- ML's own roll only (RAIDROLL is an ML-side flow; a non-ML number
+    -- here is someone else's client echoing).
+    local amML = Z.SRSecurity and Z.SRSecurity.AmML
+      and Z.SRSecurity.AmML() or false
+    if player ~= me or not amML then return end
     if not roll.roster or not roll.roster[rv] then return end
     roll.done = true
     M.AddRoll(roll.roster[rv], rv, 1, Z.Caps.SR)
@@ -1008,20 +1010,16 @@ function M.LootCorpseSlot(link, itemID, winnerName, slotHint)
       and liveQ >= thresh
     -- Routing inputs for the debug line (printed BEFORE the call, so a
     -- dead call still leaves its decision behind).
-    local amML, mlName = nil, nil
+    local amML = nil
     if Z.SRSecurity and Z.SRSecurity.AmML then
       local ok, v = pcall(Z.SRSecurity.AmML)
       if ok then amML = v end
-    end
-    if GetLootMaster then
-      local ok, v = pcall(GetLootMaster)
-      if ok then mlName = v end
     end
     local function dbgLine(call)
       return "lootdebug: call=" .. tostring(call)
         .. " slot=" .. tostring(slot)
         .. " winner=" .. tostring(winnerName)
-        .. " amML=" .. tostring(amML) .. " ml=" .. tostring(mlName)
+        .. " amML=" .. tostring(amML)
         .. " method=" .. tostring(method)
         .. " liveQ=" .. tostring(liveQ) .. " thresh=" .. tostring(thresh)
         .. " link=" .. tostring(link)
@@ -1349,10 +1347,10 @@ function M.Award(itemID, winnerName, source, tradeTo)
   return true
 end
 
--- Auto loot-method switching (party-leader boss flow, Setup options):
--- mlOnBoss flips to master loot when the leader selects a boss;
+-- Auto loot-method switching (ML-only boss flow, Setup options):
+-- mlOnBoss flips to master loot when the ML selects a boss;
 -- backToGroup flips back to group loot once the boss is fully looted
--- (every row gone). Only ever acts on the leader's own client, only
+-- (every row gone). Only ever acts on the ML's own client, only
 -- when WE made the switch (M.autoML), so a manual change by anyone is
 -- never yanked back. All client calls pcall-guarded + nil-safe.
 M.autoML = false
@@ -1383,8 +1381,8 @@ end
 
 function M.CanAutoSwitch()
   if not (Z.DB and Z.DB.mlOnBoss) then return false end
-  if not (Z.SRSecurity and Z.SRSecurity.AmLeader
-      and Z.SRSecurity.AmLeader()) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.AmML
+      and Z.SRSecurity.AmML()) then return false end
   if not (Z.SRSecurity and Z.SRSecurity.IsInGroup
       and Z.SRSecurity.IsInGroup()) then return false end
   return true
@@ -1461,9 +1459,9 @@ function M.TrySetThreshold(n)
   return ok and true or false
 end
 
--- Leader selected a boss: flip to master loot (once — already-master
--- or already-switched is a no-op). Master is self: only the leader's
--- own client runs this, so handing master to self is always right.
+-- ML selected a boss: flip to master loot (once — already-master
+-- or already-switched is a no-op). Master is self: only the ML's own
+-- client runs this, so handing master to self is always right.
 -- The Setup threshold rides along (previous one remembered for the
 -- switch-back).
 function M.MaybeMasterOnBoss()
@@ -1496,8 +1494,8 @@ function M.MaybeGroupAfterBoss(source)
   if source == "sim" then return false end
   if not M.autoML then return false end
   if not (Z.DB and Z.DB.backToGroup) then return false end
-  if not (Z.SRSecurity and Z.SRSecurity.AmLeader
-      and Z.SRSecurity.AmLeader()) then return false end
+  if not (Z.SRSecurity and Z.SRSecurity.AmML
+      and Z.SRSecurity.AmML()) then return false end
   if Z.LootWindow and Z.LootWindow.LootingFinished
       and not Z.LootWindow.LootingFinished() then return false end
   if M.TrySetLoot("group") then
@@ -1689,7 +1687,7 @@ function M.SandDistribute(itemID, source)
   return true
 end
 -- /zl sand: print the ledger (highest first, grand total last).
--- /zl sand reset: clear it (solo always; in group ML/leader only,
+-- /zl sand reset: clear it (solo always; in group ML only,
 -- same gate as the roll-log reset). Returns counts for feedback.
 function M.SandReset()
   local ledger = M.SandLedger()
@@ -1726,7 +1724,7 @@ function M.SandCommand(argText)
       allowed = true
     end
     if not allowed then
-      Z.Print("Only the master looter or raid leader can reset the sand ledger.")
+      Z.Print("Only the master looter can reset the sand ledger.")
       return false
     end
     local c = M.SandReset()
@@ -2292,8 +2290,8 @@ function M.OnEvent(event, a1, _a2)
   elseif event == "LOOT_CLOSED" then
     M.lootOpen = false
   elseif event == "PLAYER_TARGET_CHANGED" then
-    -- Party-leader boss flow: selecting a boss flips to master loot
-    -- (Setup option, leader only, no-op unless everything lines up).
+    -- ML boss flow: selecting a boss flips to master loot
+    -- (Setup option, ML only, no-op unless everything lines up).
     M.MaybeMasterOnBoss()
   elseif event == "LOOT_BIND_CONFIRM" then
     -- BoP take: confirm every armed click-to-loot slot. a1 is the slot

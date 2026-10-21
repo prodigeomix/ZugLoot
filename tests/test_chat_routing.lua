@@ -41,7 +41,6 @@ ZugLoot.SRSecurity = {
   IsInGroup = function() return grouping ~= "solo" end,
   IsSolo = function() return grouping == "solo" end,
   AmML = function() return true end,
-  MasterLooterName = function() return "SoloPlayer" end,
 }
 ZugLoot.RaiderLootUI = { ShowItem = function() end, OnRoll = function() end, Hide = function() end }
 ZugLoot.DropLog = { Add = function() end }

@@ -84,7 +84,12 @@ function M.ItemID(linkOrID)
   return nil
 end
 
--- Minimal base64 decode (pure lua, 5.0-safe). Ignores whitespace, handles `=`.
+-- Minimal base64 decode (pure lua, 5.0-safe). STRICT: returns nil unless
+-- the input is well-formed base64 (alphabet A-Za-z0-9+/ plus up to two
+-- trailing "=" pads, total length a multiple of 4). Anything else is not
+-- a RollFor export blob — never garbage-decode it (that failure mode
+-- once swallowed every raw-JSON paste into a misleading JSON error).
+-- Whitespace is ignored (multi-line copies, wrapped chat text).
 local B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 local B64REV = nil
 local function b64rev()
@@ -100,11 +105,28 @@ end
 function M.Base64Decode(data)
   if not data or data == "" then return nil end
   data = string.gsub(tostring(data), "%s", "")
+  -- Strict shape check BEFORE decoding: alphabet + padding + length.
+  -- Unknown characters ("{", ";", "-", unicode, ...) mean this was
+  -- never base64 — refuse, don't decode to garbage (an unknown char
+  -- mapping to 0 used to turn every raw-JSON/line paste into junk that
+  -- then failed downstream as "bad JSON" / "truncated").
+  local len = string.len(data)
+  if M.Mod(len, 4) ~= 0 then return nil end
+  if len == 0 then return nil end
+  local tail = string.sub(data, -2)
+  if string.find(tail, "=", 1, true) then
+    if not (tail == "==" or string.sub(tail, 2, 2) == "=") then return nil end
+    if string.find(string.sub(data, 1, len - 2), "=", 1, true) then return nil end
+  end
+  local body = data
+  if string.sub(data, -1) == "=" then
+    body = string.sub(data, 1, len - 1)
+    if string.sub(data, -2, -2) == "=" then body = string.sub(data, 1, len - 2) end
+  end
+  if string.find(body, "[^A-Za-z0-9+/]") then return nil end
   local rev = b64rev()
   local out = {}
   local i = 1
-  -- luacheck: ignore
-  local len = string.len(data)
   while i <= len do
     local c1 = rev[string.sub(data, i, i)] or 0
     local c2 = rev[string.sub(data, i + 1, i + 1)] or 0

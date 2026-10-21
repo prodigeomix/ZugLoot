@@ -55,8 +55,7 @@ function M.SimSpeaker()
 end
 
 -- SHEET_REQ: ask the group for the current sheet. Only the ML answers
--- with a sheet they actually hold (AnySheet), else the raid leader /
--- assistant with theirs — priority ML > leader, never anyone else.
+-- (with a sheet they actually hold).
 -- SHEET:<ver>:<raidID>:<payload>. Payload encoding: base64-wrapped when
 -- the encoder exists, else escape-quoted raw. NEVER raw: the line format
 -- uses "|" as its row separator and ChatThrottleLib (bundled with other
@@ -142,7 +141,7 @@ function M.StripPlayerLink(s)
 end
 
 -- Ask the group for the SR sheet (Members tab button, /zl sheetreq).
--- Solo: nobody to ask. Everyone hears it; only the ML (or the leader
+-- Solo: nobody to ask. Everyone hears it; only the ML answers.
 -- when no ML sheet exists) answers — see OnMessage/SHEET_REQ.
 function M.RequestSheet()
   local c = M.Channel()
@@ -160,7 +159,7 @@ end
 
 -- Ask ONE player for their sheet (/zl sync <name>): targeted request.
 -- Anyone may hold a sheet worth syncing (imports are open to all), but
--- the RECEIVE side still only trusts ML/leader sheets (CanAcceptFrom) —
+-- the RECEIVE side still only trusts ML sheets (CanAcceptFrom) —
 -- a raider's answer arrives and is refused with the usual message.
 -- Name accepts player links (color-coded [Name]) as well as bare names.
 function M.RequestSheetFrom(rawName)
@@ -194,8 +193,8 @@ end
 -- encoding), chunked as ROLLLOG_C:<ver>:<raidID>:<itemID>:<seq>:<total>:
 -- <chunk> past CHUNK_SIZE. Won marks ride the existing AWARD message;
 -- full history rides the SHEET payload — this covers the live record.
--- Send-side gate mirrors the sheet broadcast path (ML/leader only,
--- never solo); receivers trust ML/leader only (CanAcceptFrom) and only
+-- Send-side gate mirrors the sheet broadcast path (ML only,
+-- never solo); receivers trust ML only (CanAcceptFrom) and only
 -- apply to the live sheet of the SAME raid.
 M.rollChunkBuffers = {}
 function M.BroadcastRollSession(sheet, itemID, sess)
@@ -232,7 +231,7 @@ end
 -- underneath.
 function M.ApplyRollSession(raidID, itemID, tail, sender)
   if not Z.SRSecurity.CanAcceptFrom(sender) then
-    Z.Print("Ignored roll session from " .. ChatPlayer(sender) .. " (not ML/leader).")
+    Z.Print("Ignored roll session from " .. ChatPlayer(sender) .. " (not ML).")
     return
   end
   local sheet = Z.DB and Z.DB.sheet
@@ -351,14 +350,9 @@ function M.WarnSim(msg)
 end
 
 function M.ApplyReceivedSheet(_ver, raidID, payload, sender)
-  -- A sheet landed: cancel any pending leader reply (the ML answered
-  -- first — the group must never get two competing sheets).
-  if Z.SRSecurity and Z.SRSecurity.NoteSheetArrived then
-    Z.SRSecurity.NoteSheetArrived()
-  end
-  -- SECURITY: only ML or raid leader/assistant may push sheets.
+  -- SECURITY: only the master looter may push sheets.
   if not Z.SRSecurity.CanAcceptFrom(sender) then
-    Z.Print("Ignored sheet from " .. ChatPlayer(sender) .. " (not ML/leader).")
+    Z.Print("Ignored sheet from " .. ChatPlayer(sender) .. " (not ML).")
     return
   end
   local sheet, err = Z.SRImport.DeserializeSheet(payload)
@@ -412,13 +406,9 @@ end
 
 function M.OnMessage(msg, sender, channel)
   local tag = string.match(msg, "^(%S+):")
-  -- Sheet request: answer ONLY when entitled, ML first. The ML answers
-  -- at once when they hold a sheet; the raid leader/assistant answers
-  -- after a short delay — but ONLY when no ML sheet exists in the group
-  -- (no ML in the group, ML has no sheet/addon). The delay lets the ML's
-  -- answer arrive first; a SHEET landing meanwhile cancels the leader's
-  -- reply so the client never gets two competing sheets. Nobody else
-  -- answers, ever — receivers only trust ML/leader sheets (CanAcceptFrom).
+  -- Sheet request: the ML answers at once when they hold a sheet.
+  -- Nobody else answers broadcast requests — receivers only trust ML
+  -- sheets (CanAcceptFrom).
   if msg == "SHEET_REQ" or tag == "SHEET_REQ" then
     -- Targeted form "SHEET_REQ:<name>": only answer when WE are the
     -- named player (exact name match after link-strip). Anyone may be
@@ -462,7 +452,7 @@ function M.OnMessage(msg, sender, channel)
       return
     end
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored roll session chunk from " .. ChatPlayer(sender) .. " (not ML/leader).")
+      Z.Print("Ignored roll session chunk from " .. ChatPlayer(sender) .. " (not ML).")
       return
     end
     local now = (GetTime and GetTime()) or (time and time()) or 0
@@ -487,7 +477,7 @@ function M.OnMessage(msg, sender, channel)
   end
   if string.sub(msg, 1, 6) == "AWARD:" then
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored award from " .. ChatPlayer(sender) .. " (not ML/leader).")
+      Z.Print("Ignored award from " .. ChatPlayer(sender) .. " (not ML).")
       return
     end
     local itemID, winner = string.match(msg, "AWARD:(%d+):(.+)$")
@@ -514,7 +504,7 @@ function M.OnMessage(msg, sender, channel)
       return
     end
     if not Z.SRSecurity.CanAcceptFrom(sender) then
-      Z.Print("Ignored sheet chunk from " .. ChatPlayer(sender) .. " (not ML/leader).")
+      Z.Print("Ignored sheet chunk from " .. ChatPlayer(sender) .. " (not ML).")
       return
     end
     local now = (GetTime and GetTime()) or (time and time()) or 0

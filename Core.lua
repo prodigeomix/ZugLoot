@@ -43,7 +43,7 @@ function Z.HelpLines()
     "    raidforget <id> .. permanently delete an archived raid",
     "    import ........... paste a raidres export or line-format sheet",
     "    loadfile ......... import from CustomData/ZugLoot_SR.txt",
-    "    sheetreq ......... ask the group for the current sheet (ML/leader answers)",
+    "    sheetreq ......... ask the group for the current sheet (ML answers)",
     "    sync <name> ...... ask ONE player for their sheet (player link works)",
     "    simboss <boss> ... queue a boss's drops, you roll each",
     "    simraid <raid> ... condensed full raid: one boss at a time (+ trash), you roll each",
@@ -75,8 +75,8 @@ function Z.InitDB()
   -- (a broken loot path won't fix itself on relog); re-arm via Setup tab
   -- or /zl lootframe. Never nil-guarded away: false is a valid state.
   if ZugLootDB.lootTakeover == nil then ZugLootDB.lootTakeover = true end
-  -- Auto loot-method switching (party-leader boss flow, Setup tab):
-  -- flip to master loot when the leader selects a boss, flip back to
+  -- Auto loot-method switching (ML boss flow, Setup tab):
+  -- flip to master loot when the ML selects a boss, flip back to
   -- group loot once the boss is fully looted. Absent = off.
   if ZugLootDB.mlOnBoss == nil then ZugLootDB.mlOnBoss = false end
   if ZugLootDB.backToGroup == nil then ZugLootDB.backToGroup = false end
@@ -103,15 +103,64 @@ end
 
 -- Factory reset: wipe all SavedVariables (account + character) and reapply
 -- defaults via InitDB. Clears session data too (active sheet, raid archive,
--- drop log). Deliberately NOT permission-gated: everything touched is local
--- client state (a raider must be able to recover a broken local setup, and
--- the raid can always rebroadcast the sheet). Testable core.
+-- drop log). AGGRESSIVE: also drops every runtime session artifact that
+-- survives a SavedVariables wipe and would otherwise make the NEXT import
+-- fail byte-identically (stale import-box text, open rolls + their timers,
+-- sim staging, pending sheet/roll chunks, corpse cache, hush counter) —
+-- the "reset did nothing" report. Deliberately NOT permission-gated:
+-- everything touched is local client state (a raider must be able to
+-- recover a broken local setup, and the raid can always rebroadcast the
+-- sheet). Testable core.
 function Z.DoResetAllSettings()
   if ZugLootDB then for k in pairs(ZugLootDB) do ZugLootDB[k] = nil end end
   if ZugLootCharDB then for k in pairs(ZugLootCharDB) do ZugLootCharDB[k] = nil end end
   Z.InitDB()
   if Z.VersionGrid and Z.VersionGrid.seen then Z.VersionGrid.seen = {} end
   if Z.VersionGrid and Z.VersionGrid.warned then Z.VersionGrid.warned = {} end
+  -- Session state beyond SavedVariables (same client session, no reload):
+  -- every module is probed, never required (nil-safe headless).
+  -- Pending timers first: nothing scheduled may fire after the wipe.
+  if Z.Timer and Z.Timer.CancelAll then Z.Timer.CancelAll() end
+  -- Stale import text: the paste box keeps its (broken) content across
+  -- resets per character — re-clicking Import without re-pasting fails
+  -- byte-identically and looks like the reset did nothing.
+  if Z.SRImport and Z.SRImport.ClearImportBox then Z.SRImport.ClearImportBox() end
+  -- Open rolls + sim staging: a dead roll must never collect rolls or
+  -- auto-finish late; staged sim queues must not outlive the wipe.
+  if Z.MasterLootUI then
+    if Z.MasterLootUI.roll and Z.MasterLootUI.CancelRollTimer then
+      Z.MasterLootUI.CancelRollTimer(Z.MasterLootUI.roll)
+    end
+    Z.MasterLootUI.roll = nil
+    Z.MasterLootUI.lastRound = nil
+    Z.MasterLootUI.pendingLoot = nil
+    Z.MasterLootUI.lootKey = nil
+    Z.MasterLootUI.corpseCache = {}
+    Z.MasterLootUI.corpseOrder = {}
+    Z.MasterLootUI.autoML = false
+  end
+  if Z.Sim then
+    Z.Sim.pending = {}
+    Z.Sim.running = false
+    Z.Sim.raid = nil
+  end
+  -- Partial network reassemblies: stale chunks must never complete a
+  -- post-reset sheet/roll session.
+  if Z.Comm then
+    Z.Comm.chunkBuffers = {}
+    Z.Comm.rollChunkBuffers = {}
+  end
+  Z._hush = 0
+  -- Windows back to hidden; raider intake cleared.
+  if Z.LootWindow then
+    if Z.LootWindow.CloseDetail then Z.LootWindow.CloseDetail() end
+    if Z.LootWindow.CloseMoreDropdown then Z.LootWindow.CloseMoreDropdown() end
+    Z.LootWindow.items = {}
+    Z.LootWindow.watchdogs = nil
+    Z.LootWindow.silentLootArms = nil
+    if Z.LootWindow.Hide then Z.LootWindow.Hide() end
+  end
+  if Z.RaiderLootUI and Z.RaiderLootUI.Hide then Z.RaiderLootUI.Hide() end
   if Z.MainWindow then Z.MainWindow.Refresh() end
   if Z.SRView then Z.SRView.Refresh() end
 end

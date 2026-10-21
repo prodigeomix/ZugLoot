@@ -464,12 +464,7 @@ function M.MatchRollCall(text, sender)
   if t == "" then return "" end
   -- ML-only (raid-safe): never pop on anyone else's chat. Nil sender =
   -- untrusted in-client (tests pass explicit nil through the ML path).
-  if sender and Z.SRSecurity and not Z.SRSecurity.IsML(sender) then
-    -- ...unless the sender is the raid leader/assistant running the roll
-    -- (Pysanka runs rolls as RL). Accept ML or leader.
-    local okLeader = Z.SRSecurity.IsLeader and Z.SRSecurity.IsLeader(sender)
-    if not okLeader then return "" end
-  end
+  if sender and Z.SRSecurity and not Z.SRSecurity.IsML(sender) then return "" end
   -- Full item link anywhere in the line: the item, verbatim.
   local link = string.match(t, "(|c%x+|Hitem.-|h%[.-%]|h|r)")
   if link then return link end

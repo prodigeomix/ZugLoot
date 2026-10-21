@@ -47,7 +47,6 @@ ZugLoot.SRSecurity = {
   IsInGroup = function() return grouping ~= "solo" end,
   IsSolo = function() return grouping == "solo" end,
   AmML = function() return true end,
-  MasterLooterName = function() return "SoloPlayer" end,
 }
 
 local shownItems = {}
@@ -493,7 +492,7 @@ local targetCls = "worldboss"
 UnitExists = function(u) return u == "target" end
 UnitClassification = function(u) return targetCls end
 grouping = "raid"
-ZugLoot.SRSecurity.AmLeader = function() return true end
+ZugLoot.SRSecurity.AmML = function() return true end
 ZugLoot.SRSecurity.LootMethod = function() return "group" end
 ZugLoot.DB.mlOnBoss = true
 ZugLoot.DB.backToGroup = true
@@ -534,13 +533,14 @@ grouping = "party"
 ok(not ML.MaybeMasterOnBoss(), "party never switches")
 eq(#lootCalls, 1, "still one call")
 grouping = "raid"
--- Non-leader: no switch even on a boss.
+-- Non-ML: no switch even on a boss (ML-only flow: leader rank alone
+-- never flips the method).
 targetCls = "worldboss"
-ZugLoot.SRSecurity.AmLeader = function() return false end
-ok(not ML.MaybeMasterOnBoss(), "non-leader never switches")
+ZugLoot.SRSecurity.AmML = function() return false end
+ok(not ML.MaybeMasterOnBoss(), "non-ML never switches")
 eq(#lootCalls, 1, "still one call")
 -- Option off: no switch.
-ZugLoot.SRSecurity.AmLeader = function() return true end
+ZugLoot.SRSecurity.AmML = function() return true end
 ZugLoot.DB.mlOnBoss = false
 ok(not ML.MaybeMasterOnBoss(), "option off never switches")
 eq(#lootCalls, 1, "still one call")
@@ -596,7 +596,7 @@ SetLootThreshold = function(n) table.insert(threshCalls, n) return true end
 GetLootThreshold = function() return 2 end
 ML.autoML = false
 grouping = "raid"
-ZugLoot.SRSecurity.AmLeader = function() return true end
+ZugLoot.SRSecurity.AmML = function() return true end
 targetCls = "worldboss"
 ZugLoot.DB.mlOnBoss = true
 ok(ML.MaybeMasterOnBoss(), "switch with threshold")
@@ -613,7 +613,7 @@ SetLootMethod = nil
 UnitExists = nil
 UnitClassification = nil
 UnitHealthMax = nil
-ZugLoot.SRSecurity.AmLeader = function() return true end
+ZugLoot.SRSecurity.AmML = function() return true end
 grouping = "solo"
 
 -- 14. Spent SR, end to end: Aaa wins 1001 (SR spent), the item drops

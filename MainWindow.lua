@@ -1366,7 +1366,7 @@ function M.RenderSetup()
   row:SetWidth(BODY_WIDTH) row:SetHeight(200)
   local t = FS(row, "GameFontNormalLarge", "Import & options")
   t:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -6)
-  local sub = FS(row, "GameFontHighlightSmall", "Role: " .. Z.SRSecurity.RoleLabel() .. " — only ML / raid leader may broadcast sheets.")
+  local sub = FS(row, "GameFontHighlightSmall", "Role: " .. Z.SRSecurity.RoleLabel() .. " — only the master looter may broadcast sheets.")
   sub:SetPoint("TOPLEFT", row, "TOPLEFT", 4, -28)
   sub:SetWidth(BODY_WIDTH - 16) sub:SetJustifyH("LEFT")
   -- Import + File live in the header row now (no duplicates here).
@@ -1411,8 +1411,8 @@ function M.RenderSetup()
   end)
   Tip(b6, "Loot frame", "Which window handles corpse loot: ZugLoot or Blizzard's.",
     "Auto-switches to Blizzard if ZugLoot clicks stop reaching the server.")
-  -- Auto loot-method switching (party-leader boss flow): flip to master
-  -- loot when the leader selects a boss, flip back to group loot once
+  -- Auto loot-method switching (ML boss flow): flip to master
+  -- loot when the ML selects a boss, flip back to group loot once
   -- the boss is fully looted. Two independent toggles, off by default.
   local b8 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b8:SetWidth(150) b8:SetHeight(24)
@@ -1426,8 +1426,8 @@ function M.RenderSetup()
     if Z.DB then Z.DB.mlOnBoss = not Z.DB.mlOnBoss end
     b8:SetText(mlLabel())
   end)
-  Tip(b8, "ML on boss", "As raid leader, switch to master loot when you select a raid boss.",
-    "Leader only, raid only. Worldboss flag or 100k+ HP (trash never reaches it).")
+  Tip(b8, "ML on boss", "As master looter, switch to master loot when you select a raid boss.",
+    "Master looter only, raid only. Worldboss flag or 100k+ HP (trash never reaches it).")
   local b9 = CreateFrame("Button", nil, row, "UIPanelButtonTemplate")
   b9:SetWidth(150) b9:SetHeight(24)
   b9:SetPoint("TOPLEFT", b8, "BOTTOMLEFT", 0, -8)
@@ -1807,7 +1807,7 @@ function M.Build()
   -- from File. One row, no duplicates elsewhere: Setup keeps options
   -- only (no import/clear buttons there anymore).
   -- Reset-rolls button. Opens a confirmation window; in party/raid only
-  -- ML / raid leader may use it.
+  -- the master looter may use it.
   local resetB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   resetB:SetWidth(96) resetB:SetHeight(20)
   resetB:SetPoint("TOPRIGHT", f, "TOPRIGHT", -34, -32)
@@ -1815,11 +1815,11 @@ function M.Build()
   resetB:SetScript("OnClick", function() Z.SRImport.RequestResetRollLog() end)
   Tip(resetB, "Reset rolls",
     "Clear all recorded rolls and won marks for this raid. The SR sheet itself is kept.",
-    "Solo: always allowed. In party/raid: master looter or raid leader only.")
+    "Solo: always allowed. In party/raid: master looter only.")
   M.resetBtn = resetB
   M.headerBtns = M.headerBtns or {}
   M.headerBtns.reset = resetB
-  -- Request SR sheet: asks the ML (else the raid leader) for the sheet.
+  -- Request SR sheet: asks the ML for the sheet.
   -- Visible in-group only when we hold no sheet (nothing to fetch).
   local reqB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   reqB:SetWidth(96) reqB:SetHeight(20)
@@ -1829,7 +1829,7 @@ function M.Build()
     if Z.Comm and Z.Comm.RequestSheet then Z.Comm.RequestSheet() end
   end)
   Tip(reqB, "Request SR sheet",
-    "Asks the master looter for the current sheet (raid leader answers when no ML sheet exists).",
+    "Asks the master looter for the current sheet.",
     "Sheets from anyone else are ignored.")
   M.reqSheetBtn = reqB
   M.headerBtns = M.headerBtns or {}
@@ -1843,7 +1843,7 @@ function M.Build()
   M.headerBtns.import = impB
   impB:SetScript("OnClick", function() Z.SRImport.ShowPaste() end)
   Tip(impB, "Import", "Paste a raidres export or line-format sheet.",
-    "Anyone may import (local view); broadcast stays ML / raid leader.")
+    "Anyone may import (local view); broadcast stays master looter only.")
   -- Load from File: same entry as the old Setup button.
   local fileB = CreateFrame("Button", nil, f, "UIPanelButtonTemplate")
   fileB:SetWidth(70) fileB:SetHeight(20)

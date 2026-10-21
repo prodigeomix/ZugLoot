@@ -1,6 +1,6 @@
 -- ZugLoot/SRImport.lua
 -- Import UI: paste frame + Load-from-File button (CustomData/ZugLoot_SR.txt).
--- Broadcast gated to ML / raid leader+assistant.
+-- Broadcast gated to the master looter.
 ZugLoot = ZugLoot or {}
 local Z = ZugLoot
 local M = {}
@@ -41,6 +41,12 @@ end
 -- (geometry/focus asserts).
 function M.DebugImportBox()
   return editBox
+end
+-- Factory reset helper: drop the stale paste text (the box survives
+-- SavedVariables wipes — a broken paste would otherwise fail
+-- byte-identically on the next Import click). Nil-safe headless.
+function M.ClearImportBox()
+  if editBox and editBox.SetText then editBox:SetText("") end
 end
 function M.DebugImportScroll()
   return importScroll
@@ -456,18 +462,18 @@ function M.ApplySheet(sheet, source, importer)
   if Z.DropLog then Z.DropLog.Add(nil, nil, "sheet", "import", sheet.meta.importedBy) end
 end
 
--- Accept the raidres RollFor export blob (base64/json) or the static
--- line format. CSV is NOT accepted: CSV-looking input is refused with
--- a pointer at the RollFor export. Used by paste import + Load from File.
+-- Accept the base64 RollFor export blob or the static line format.
+-- CSV is NOT accepted: CSV-looking input is refused with a pointer at
+-- the RollFor export. Used by paste import + Load from File.
 function M.ParseAnyImport(text)
   local sheet, rrErr = Z.SRData.ParseRaidResExport(text)
   if sheet then return sheet, nil end
-  -- A paste carrying a raidres payload candidate (JSON / long-base64
-  -- line) was *trying* to be a RollFor export: report the specific
-  -- raidres error (truncated, bad JSON, unsupported encoding) and NEVER
-  -- fall through to CSV/line format — whose "missing ';'" is
-  -- misleading here (';' is not valid base64). CSV import stays
-  -- disabled, so this path must not reach the CSV parser either.
+  -- A paste carrying a raidres payload candidate (long-base64 line) was
+  -- *trying* to be a RollFor export: report the specific raidres error
+  -- (not-an-export, truncated, bad JSON) and NEVER fall through to
+  -- CSV/line format — whose "missing ';'" is misleading here (';'
+  -- is not valid base64). CSV import stays disabled, so this path must
+  -- not reach the CSV parser either.
   -- Short fragments (a truncated copy, a partial line) have no payload
   -- line but are clearly not line format either: a single `;`-less line
   -- in the base64 alphabet is a broken RollFor copy, not a hand-written
@@ -508,7 +514,7 @@ function M.DoPasteImport(text)
 end
 
 function M.LoadFromFile()
-  -- Anyone may import (local view only; broadcast stays ML/leader).
+  -- Anyone may import (local view only; broadcast stays ML-only).
   -- CanImport() is therefore always true; kept for API shape.
   local text, err = Z.FileIO.ReadSRFile()
   if not text then
@@ -525,7 +531,7 @@ end
 
 -- Permission for clearing the roll log (rolls history + won marks).
 -- Solo: always allowed (local preview data only). In party/raid: only the
--- master looter or raid leader/assistant. Testable: no WoW UI calls.
+-- master looter. Testable: no WoW UI calls.
 function M.CanResetRollLog()
   if not Z.SRSecurity then return false end
   if Z.SRSecurity.IsSolo and Z.SRSecurity.IsSolo() then return true end
@@ -619,7 +625,7 @@ end
 -- can exercise the full path.
 function M.RequestResetRollLog()
   if not M.CanResetRollLog() then
-    Z.Print("Only the master looter or raid leader can reset the roll log.")
+    Z.Print("Only the master looter can reset the roll log.")
     return
   end
   if not (StaticPopupDialogs and StaticPopup_Show) then
@@ -672,7 +678,7 @@ function M.ResetWon()
   -- /zl reset keeps its direct behavior (slash, no popup) but shares the
   -- permission gate and clearing core with the button path.
   if not M.CanResetRollLog() then
-    Z.Print("Only the master looter or raid leader can reset won marks.")
+    Z.Print("Only the master looter can reset won marks.")
     return
   end
   local c = M.DoResetRollLog()
@@ -824,7 +830,7 @@ function M.ShowPaste()
     importBtn:SetText("Import!")
     if importBtn.SetFrameLevel then importBtn:SetFrameLevel(baseLvl) end
     importBtn:SetScript("OnClick", function()
-      -- Anyone may import (local view only; broadcast stays ML/leader).
+      -- Anyone may import (local view only; broadcast stays ML-only).
       M.DoPasteImport(editBox:GetText())
       pasteFrame:Hide()
     end)
@@ -842,7 +848,7 @@ function M.ShowPaste()
     closeBtn:SetScript("OnClick", function() pasteFrame:Hide() end)
     SyncImportScroll()
   end
-  -- Non-privileged users may still open the frame to inspect, but Import is gated.
+  -- Anyone may open the frame to inspect; only the ML's import broadcasts.
   -- Re-pin on every show: the main window rebuilds on size changes, and a
   -- fresh main frame would otherwise reclaim the top spot.
   RaiseImportAboveMain()

@@ -117,12 +117,31 @@ sW.hardres[700] = { quality = 5 }
 eq(SRData.ReserveBadge(sW, 700), "HR", "hardres beats spent")
 eq(#SRData.SRHolders(sW, 9999), 0, "unknown item: no holders")
 
--- 6. Example file parses.
+-- 6. Example file parses through the REAL import path (the same
+-- ParseAnyImport dispatch LoadFromFile + paste use). The example is a
+-- base64 raidres RollFor export, not line format, so it must route to
+-- ParseRaidResExport — never to ParseLineFormat ("missing ';'").
+-- Minimal shims so SRImport loads outside the client.
+ZugLoot.Util = ZugLoot.Util or {}
+ZugLoot.SRData = SRData
+ZugLoot.SRSecurity = { CanImport = function() return true end,
+  CanBroadcast = function() return false end }
+ZugLoot.SRView = { Refresh = function() end }
+ZugLoot.DropLog = { Add = function() end }
+ZugLoot.Print = function() end
+ZugLoot.DB = {}
+ZugLoot.Comm = {}
+dofile("SRImport.lua")
 local f = io.open("CustomData_example/ZugLoot_SR.txt", "r")
 if f then
   local ex = f:read("*a") f:close()
-  local se, seerr = SRData.ParseLineFormat(ex)
+  local se, seerr = ZugLoot.SRImport.ParseAnyImport(ex)
   ok(se ~= nil, "example file parses: " .. tostring(seerr))
+  if se then
+    ok(ZugLoot.Util.TableCount(se.items) > 0, "example file has items")
+    ok(se.meta and se.meta.raidID ~= nil, "example file keeps raid id")
+    ok(not ZugLoot.SRData.SheetIsEmpty(se), "example file is not empty")
+  end
 else
   T.fail = T.fail + 1 table.insert(T.errors, "FAIL example file missing")
 end
@@ -142,19 +161,7 @@ local pb, pberr = SRData.ParseRaidResExport(b64pre)
 ok(pb ~= nil, "base64 preamble dropped: " .. tostring(pberr))
 if pb then eq(pb.meta.raidID, "R1", "preamble body intact") end
 
--- 8. Real-world file content: base64 raidres export parses via the same
--- path LoadFromFile uses (regression: LoadFromFile only tried line format).
-ZugLoot.Util = ZugLoot.Util or {}
--- minimal shims so SRImport loads outside the client
-ZugLoot.SRData = SRData
-ZugLoot.SRSecurity = { CanImport = function() return true end,
-  CanBroadcast = function() return false end }
-ZugLoot.SRView = { Refresh = function() end }
-ZugLoot.DropLog = { Add = function() end }
-ZugLoot.Print = function() end
-ZugLoot.DB = {}
-ZugLoot.Comm = {}
-dofile("SRImport.lua")
+-- 8. Real-world dispatch checks (SRImport loaded with shims in section 6).
 -- Synthesize a raidres-style base64 blob: {"softreserves":[...]} minimal.
 -- (Full export decode is covered by section 3; here we check dispatch.)
 local b64blob = "eyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2VydmF0aW9ucyI6W119"
@@ -172,13 +179,21 @@ ok(string.find(tostring(csvPreErr), "missing ';'", 1, true) == nil,
   "CSV error is not the line-format fallthrough")
 -- Failed raidres blobs report the REAL error, never the line-format
 -- fallthrough. (';' is not valid base64, so "missing ';'" is always
--- the wrong message for a RollFor copy.)
+-- the wrong message for a RollFor copy.) Non-base64 input (a truncated
+-- copy whose length is no longer a multiple of 4) is refused as "not a
+-- RollFor export"; a WELL-FORMED base64 copy whose JSON is cut off is
+-- refused as "truncated import data".
 local truncS, truncErr = ZugLoot.SRImport.ParseAnyImport("eyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInJlc2Vyd")
 ok(truncS == nil, "truncated RollFor refused")
-ok(string.find(tostring(truncErr), "truncated", 1, true) ~= nil,
-  "truncated RollFor names truncation: " .. tostring(truncErr))
+ok(string.find(tostring(truncErr), "RollFor export", 1, true) ~= nil,
+  "truncated RollFor names the RollFor export: " .. tostring(truncErr))
 ok(string.find(tostring(truncErr), "missing ';'", 1, true) == nil,
   "truncated RollFor error is not the line-format fallthrough")
+-- Well-formed base64, JSON cut off: truncation error (re-copy pointer).
+local cutS, cutErr = ZugLoot.SRImport.ParseAnyImport("eyJtZXRhZGF0YSI6eyJpZCI6IlIxIn0sInNvZnRyZXNlcnZlcyI6W3sibmFtZSI6IkFhYSI=")
+ok(cutS == nil, "cut RollFor refused")
+ok(string.find(tostring(cutErr), "truncated", 1, true) ~= nil,
+  "cut RollFor names truncation: " .. tostring(cutErr))
 local fragS, fragErr = ZugLoot.SRImport.ParseAnyImport("eyJtZXRhZGF0YSI6eyJ")
 ok(fragS == nil, "short RollFor fragment refused")
 ok(string.find(tostring(fragErr), "missing ';'", 1, true) == nil,
@@ -245,12 +260,13 @@ eq(ZugLoot.DB.sheet.meta.raidID, "R2", "raid switched")
 -- 10. Import guards: truncated payloads fail FAST with a message
 -- (regression: importing a truncated CustomData file hung the client —
 -- JsonDecode ran on a partial payload).
--- Truncated base64 (length not a multiple of 4 after whitespace strip).
+-- Non-base64 input is refused as "not a RollFor export" (strict
+-- Base64Decode never garbage-decodes).
 local trunc, truncErr2 = SRData.ParseRaidResExport("eyJtZXRhZGF0YSI6eyJ")
 ok(trunc == nil and truncErr2 ~= nil, "truncated base64 refused")
-ok(string.find(tostring(truncErr2), "truncated", 1, true) ~= nil, "truncated message")
--- Valid-length but JSON-cut payload also refuses cleanly.
-local cutJson = "eyJhIjox" -- base64("{") + junk -> decodes, tail isn't }/]
+ok(string.find(tostring(truncErr2), "RollFor export", 1, true) ~= nil, "not-an-export message")
+-- Well-formed base64 but JSON-cut payload also refuses cleanly.
+local cutJson = "eyJhIjox" -- base64('{"a":1' ...) -> decodes, tail isn't }/]
 local cut = SRData.ParseRaidResExport(cutJson)
 ok(cut == nil, "cut JSON refused (no hang, no sheet)")
 

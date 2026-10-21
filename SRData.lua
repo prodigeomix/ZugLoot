@@ -324,9 +324,11 @@ function M.ParseLineFormat(text)
 end
 
 -- A pasted blob may carry preamble lines above it (tool headers,
--- "copy below this line" notes). First JSON / long-base64 line wins;
--- everything above is dropped. Returns nil when no payload line is found
--- (caller keeps the original text so empty/garbage errors still fire).
+-- "copy below this line" notes). First base64-looking line wins;
+-- everything above is dropped. A stray line starting with "{" also starts
+-- the payload (strict Base64Decode refuses it later as not-a-RollFor-
+-- export). Returns nil when no payload line is found (caller keeps the
+-- original text so empty/garbage errors still fire).
 function M.IsBase64Line(t)
   local s = string.gsub(tostring(t or ""), "%s", "")
   if string.len(s) < 32 then return false end
@@ -526,37 +528,32 @@ function M.HasCSVHeader(text)
   return map ~= nil
 end
 
--- raidres.top / fly.dev / softres.it export: base64(json). Accepts raw json too.
+-- The RollFor export from raidres is base64-encoded JSON. Nothing else is
+-- accepted here: not raw JSON, not line format, not CSV (those dispatch
+-- elsewhere in ParseAnyImport). Strict Base64Decode refuses non-base64
+-- input, so a wrong-format paste reports "not a RollFor export" instead
+-- of a misleading JSON/truncation error.
 function M.ParseRaidResExport(encodedOrJson)
   local raw = tostring(encodedOrJson or "")
-  -- Preamble tolerance: lines above the blob are dropped (first JSON /
-  -- long-base64 line wins). No payload line: keep the text so the
+  -- Preamble tolerance: lines above the blob are dropped (first
+  -- base64-looking line wins). No payload line: keep the text so the
   -- empty/garbage errors below still fire.
   raw = M.ExtractPayload(raw) or raw
   raw = Util.Trim(raw)
   if raw == "" then return nil, "empty import data" end
-  local decoded = Util.Base64Decode(raw)
-  -- Truncated write? Base64 length not a multiple of 4, or decoded JSON
-  -- cut mid-string/object: fail CLEANLY (never let JsonDecode run on a
-  -- partial payload — on huge inputs that is the hang).
-  if decoded then
-    local stripped = string.gsub(raw, "%s", "")
-    local blen = string.len(stripped)
-    if blen - math.floor(blen / 4) * 4 ~= 0 then
-      return nil, "truncated import data (bad base64 length) — re-copy the export"
-    end
-    local tail = string.gsub(decoded, "%s+$", "")
+  local jsonText = Util.Base64Decode(raw)
+  if not jsonText then
+    return nil, "not a RollFor export — paste the base64 RollFor export "
+      .. "from raidres (the blob is one long base64 line)"
+  end
+  -- Truncated copy? Decoded JSON cut mid-string/object: fail CLEANLY
+  -- (never run JsonDecode on a partial payload — on huge inputs that
+  -- is the hang).
+  do
+    local tail = string.gsub(jsonText, "%s+$", "")
     local last = string.sub(tail, -1)
     if last ~= "}" and last ~= "]" then
       return nil, "truncated import data (JSON cut off) — re-copy the export"
-    end
-  end
-  local jsonText = decoded or raw
-  -- If base64 decoded to zlib garbage, fail cleanly.
-  if decoded and string.sub(decoded, 1, 1) ~= "{" then
-    -- Might be compressed (bcc path) — out of scope for skeleton, report it.
-    if not string.find(decoded, "\"reservations\"") and not string.find(decoded, "\"softreserves\"") then
-      return nil, "unsupported encoding (compressed exports need the full client)"
     end
   end
   local data, err = Util.JsonDecode(jsonText)
